@@ -5,6 +5,7 @@
  * 右：撤销重做 / 预览 / 保存 / 导出 / 主题切换 / 设置 / 头像。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import {
   NButton,
   NDropdown,
@@ -164,9 +165,14 @@ function onTemplateName(v: string): void {
   store.dirty = true
 }
 
+/** 返回上一页(无历史时回模板列表) */
+const router = useRouter()
+function goBack(): void {
+  if (window.history.length > 1) router.back()
+  else router.push('/templates')
+}
+
 const isDark = computed(() => uiStore.effectiveTheme !== 'light')
-/** SVIP 黑金主题激活态（版本号点击切换） */
-const isSvip = computed(() => uiStore.effectiveTheme === 'svip')
 
 const fileMenuOptions: DropdownOption[] = [
   { label: '新建空白模板', key: 'new' },
@@ -268,11 +274,6 @@ function onToggleTheme(): void {
   uiStore.toggleTheme()
 }
 
-/** 点击版本号：SVIP 黑金主题开关 */
-function onToggleSvip(): void {
-  uiStore.toggleSvip()
-}
-
 async function confirmSaveAs(): Promise<void> {
   const name = saveAsName.value.trim()
   if (!name) {
@@ -310,28 +311,16 @@ const IconChevronDown: Component = () =>
     class="toolbar-root flex h-56px items-center justify-between px-4"
     :class="isDark ? 'dark' : 'light'"
   >
-    <!-- 左：品牌 + 文件菜单 + 后端模式徽标 -->
+    <!-- 左：返回 + 文件菜单 + 后端模式徽标 -->
     <div class="flex items-center gap-3">
-      <div class="logo-circle">
-        <img src="@op/assets/logo.png" alt="OpenPrint" class="logo-img" />
-      </div>
-      <span class="product-name">OpenPrint</span>
       <NTooltip>
         <template #trigger>
-          <span
-            class="version-tag"
-            :class="{ 'is-svip': isSvip }"
-            role="button"
-            tabindex="0"
-            @click="onToggleSvip"
-            @keydown.enter="onToggleSvip"
-          >
-            {{ isSvip ? 'SVIP' : 'v2.0.0' }}
-          </span>
+          <NButton quaternary size="small" class="toolbar-icon-btn" @click="goBack">
+            <div class="i-carbon-arrow-left text-16px" />
+          </NButton>
         </template>
-        {{ isSvip ? 'SVIP 黑金主题 · 点击退出' : '点击切换 SVIP 黑金主题' }}
+        返回上一页
       </NTooltip>
-
       <NDropdown :options="fileMenuOptions" @select="onFileSelect">
         <span class="file-menu-trigger">
           <span>文件</span>
@@ -648,65 +637,6 @@ const IconChevronDown: Component = () =>
   background: var(--brand-nav-bg);
   color: var(--brand-nav-text);
   border-bottom: 1px solid var(--brand-border);
-}
-
-/* 品牌 logo —— 保持图片原格式（透明就透明），不加背景色 */
-.logo-circle {
-  height: 28px;
-  width: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-.logo-img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  display: block;
-}
-
-.product-name {
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--brand-nav-text-active);
-}
-
-.version-tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 18px;
-  padding: 0 8px;
-  font-size: 11px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  line-height: 1;
-  letter-spacing: 0.2px;
-  color: #fff;
-  background: linear-gradient(135deg, var(--brand-primary), color-mix(in srgb, var(--brand-primary) 70%, #0b1c3a));
-  border: none;
-  border-radius: 999px;
-  cursor: pointer;
-  user-select: none;
-  transition: filter 0.15s;
-}
-.version-tag:hover {
-  filter: brightness(1.15);
-}
-/* SVIP 黑金激活态：金色渐变文字（#FFB95A → #E4A93C → #B87100）+ 深炭底 + 金描边 */
-.version-tag.is-svip {
-  color: transparent;
-  background: #2b2e31;
-  background-image: linear-gradient(135deg, #ffb95a 0%, #e4a93c 55%, #b87100 100%);
-  background-clip: text;
-  -webkit-background-clip: text;
-  border: 1px solid rgba(228, 169, 60, 0.55);
-  box-shadow: 0 0 8px rgba(228, 169, 60, 0.25);
-  letter-spacing: 0.5px;
-}
-.version-tag.is-svip:hover {
-  filter: brightness(1.2);
 }
 
 /* 文件菜单触发器 */
