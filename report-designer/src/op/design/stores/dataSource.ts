@@ -78,7 +78,8 @@ export const useDataSourceStore = defineStore('dataSource', () => {
   const loading = ref(false)
 
   /** 预览/导出的明细行数（sample/ERP 模式合成用；数据库模式被真实行覆盖） */
-  const previewRowCount = ref(30)
+  // 预览明细行数(检验报告典型行数; 样例文本不变化, 数字随行递增)
+  const previewRowCount = ref(8)
 
   const activeSource = computed(() => sources.value.find((s) => s.id === activeSourceId.value) ?? null)
   const activeFields = computed(() => fieldCache.value.get(activeSourceId.value)?.fields ?? [])
