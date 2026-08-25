@@ -188,6 +188,58 @@ public static class Program
             return Results.NoContent();
         });
 
+        // ---- 数据源目录(OpenPrint《后端对接规范》§4.2, 只读) ----
+        // 检验报告数据源: Header 主表 + ReportItems 明细(与老系统数据契约一致)
+        // 注意: 前端 HttpClient.list() 解包 { items, total } 信封
+        app.MapGet("/api/print/data-sources", () =>
+        {
+            object[] items =
+            [
+                new
+                {
+                    id = "inspection-report",
+                    name = "检验报告",
+                    description = "原料/成品/半成品/包材检验报告(Header 主表 + ReportItems 明细)",
+                    tables = new object[]
+                    {
+                        new { id = "header", name = "报告头", relation = "main", pathPrefix = "Header." },
+                        new { id = "items", name = "检验明细", relation = "detail", pathPrefix = "ReportItems[].", isArray = true },
+                    },
+                },
+            ];
+            return Results.Ok(new { items, total = items.Length });
+        });
+
+        app.MapGet("/api/print/data-sources/inspection-report/fields", () =>
+        {
+            object[] items =
+            [
+
+            // Header 主表
+            new { path = "Header.ReportNo", label = "报告编号", type = "string", tableId = "header", group = "基本信息", sort = 1, sample = "RM-2026-00123" },
+            new { path = "Header.ReportDate", label = "报告日期", type = "date", tableId = "header", group = "基本信息", sort = 2, sample = "2026-08-12" },
+            new { path = "Header.Inspector", label = "检验员", type = "string", tableId = "header", group = "基本信息", sort = 3, sample = "张伟" },
+            new { path = "Header.Approver", label = "批准人", type = "string", tableId = "header", group = "基本信息", sort = 4, sample = "李明" },
+            new { path = "Header.SupplierName", label = "供应商", type = "string", tableId = "header", group = "物料信息", sort = 5, sample = "德之馨(上海)" },
+            new { path = "Header.SupplierCode", label = "供应商编码", type = "string", tableId = "header", group = "物料信息", sort = 6, sample = "SUP-2024-001" },
+            new { path = "Header.MaterialName", label = "物料名称", type = "string", tableId = "header", group = "物料信息", sort = 7, sample = "香叶醇(天然)" },
+            new { path = "Header.MaterialCode", label = "物料编码", type = "string", tableId = "header", group = "物料信息", sort = 8, sample = "MAT-RA-0021" },
+            new { path = "Header.BatchNo", label = "批次号", type = "string", tableId = "header", group = "物料信息", sort = 9, sample = "LOT-2026-08-001" },
+            new { path = "Header.Quantity", label = "数量", type = "number", tableId = "header", group = "物料信息", sort = 10, sample = 50 },
+            new { path = "Header.Unit", label = "单位", type = "string", tableId = "header", group = "物料信息", sort = 11, sample = "kg" },
+            new { path = "Header.ProductionDate", label = "生产日期", type = "date", tableId = "header", group = "物料信息", sort = 12, sample = "2026-07-15" },
+            new { path = "Header.ExpiryDate", label = "有效期至", type = "date", tableId = "header", group = "物料信息", sort = 13, sample = "2029-07-14" },
+            new { path = "Header.InspectionBasis", label = "检验依据", type = "string", tableId = "header", group = "检验信息", sort = 14, sample = "GB/T 15046-2015" },
+            new { path = "Header.Result", label = "检验结论", type = "string", tableId = "header", group = "检验信息", sort = 15, sample = "合格" },
+            // ReportItems 明细
+            new { path = "ReportItems[].AnaItem", label = "检验项目", type = "string", tableId = "items", group = "检验明细", sort = 1, sample = "外观" },
+            new { path = "ReportItems[].TestStandard", label = "标准要求", type = "string", tableId = "items", group = "检验明细", sort = 2, sample = "无色至淡黄色透明液体" },
+            new { path = "ReportItems[].FinalVal", label = "实测值", type = "string", tableId = "items", group = "检验明细", sort = 3, sample = "符合规定" },
+            new { path = "ReportItems[].InspectionResultName", label = "单项结论", type = "string", tableId = "items", group = "检验明细", sort = 4, sample = "合格" },
+            ];
+            return Results.Ok(new { items, total = items.Length });
+        });
+
         // 健康检查
         app.MapGet("/api/health", () => Results.Ok(new { status = "ok" }));
 
