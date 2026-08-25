@@ -7,6 +7,7 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useDesignerStore } from '@op/design/stores/designer'
 import { useUiStore } from '@op/design/stores/ui'
+import { useRoute } from 'vue-router'
 import { useDragAdd } from '@op/design/hooks/useDragAdd'
 import { useHotkey } from '@op/design/hooks/useHotkey'
 import { loadBuiltinFonts } from '@op/core/fonts/loader'
@@ -18,6 +19,7 @@ import { RULER_THICK } from '@op/utils/constants'
 
 const store = useDesignerStore()
 const uiStore = useUiStore()
+const route = useRoute()
 
 const stageRef = ref<HTMLElement | null>(null)
 const canvasHostRef = ref<HTMLElement | null>(null)
@@ -70,6 +72,8 @@ onMounted(() => {
     document.fonts?.ready.then(() => store.designer?.canvas.requestRenderAll()).catch(() => undefined)
   })
   // 启动恢复：本地存储有上次保存的模板则加载（无后端全链路可用）
+  // 路由带 ?id= 时由壳组件(OpenPrint shell)负责加载指定模板, 这里跳过避免覆盖
+  if (route.query.id) return
   void store.restoreLastTemplate()
   // dev 调试句柄
   if (import.meta.env.DEV) {
