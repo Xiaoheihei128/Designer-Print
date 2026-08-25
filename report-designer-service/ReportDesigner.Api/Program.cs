@@ -25,7 +25,8 @@ public sealed record TemplateRecord(
     string? UpdatedBy,
     string? UpdatedAt,
     string Content,
-    string? MatchRules);
+    string? MatchRules,
+    bool IsActive = true);
 
 /// <summary>创建/更新请求体</summary>
 public sealed class TemplateUpsertRequest
@@ -37,6 +38,8 @@ public sealed class TemplateUpsertRequest
     [JsonPropertyName("content")] public string? Content { get; set; }
     /// <summary>匹配规则 JSON 字符串(如 [{"field":"ReportType","operator":"Equals","value":"RawMaterial","priority":10}])</summary>
     [JsonPropertyName("matchRules")] public string? MatchRules { get; set; }
+    /// <summary>启停状态(默认启用)</summary>
+    [JsonPropertyName("isActive")] public bool? IsActive { get; set; }
 }
 
 public static class Program
@@ -72,6 +75,7 @@ public static class Program
         updatedAt = r.UpdatedAt,
         permissions = new { editable = true, deletable = true, copyable = true },
         matchRules = r.MatchRules,
+        isActive = r.IsActive,
     };
 
     private static object ToDetail(TemplateRecord r) => new
@@ -88,6 +92,7 @@ public static class Program
         permissions = new { editable = true, deletable = true, copyable = true },
         content = r.Content,
         matchRules = r.MatchRules,
+        isActive = r.IsActive,
     };
 
     public static void Main(string[] args)
@@ -138,7 +143,8 @@ public static class Program
                 UpdatedBy: "admin",
                 UpdatedAt: now,
                 Content: req.Content ?? "{}",
-                MatchRules: req.MatchRules);
+                MatchRules: req.MatchRules,
+                IsActive: req.IsActive ?? true);
 
             var list = LoadAll(indexFile);
             list.Add(record);
@@ -164,6 +170,7 @@ public static class Program
                 UpdatedAt = Now(),
                 Content = req.Content ?? old.Content,
                 MatchRules = req.MatchRules ?? old.MatchRules,
+                IsActive = req.IsActive ?? old.IsActive,
             };
             list[index] = updated;
             SaveAll(indexFile, list);
