@@ -1,5 +1,3 @@
-import type { AnyControl } from './control'
-
 // 纸张方向
 export type Orientation = 'portrait' | 'landscape'
 
@@ -57,7 +55,7 @@ export interface ReportTemplate {
   category: 'RawMaterial' | 'FinishedProduct' | 'SemiFinished' | 'Package' | 'Other'
   description: string
   paper: PaperConfig
-  controls: AnyControl[]
+  controls: any[]
   pages: Page[]
   isActive: boolean
   matchRules: MatchRule[]

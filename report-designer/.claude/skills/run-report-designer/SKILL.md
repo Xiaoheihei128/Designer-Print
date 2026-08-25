@@ -30,10 +30,9 @@ npm run dev:op     # node dev-server.mjs, 同样监听 5173(可 --port 指定)
 
 | 路径 | 页面 |
 |---|---|
-| `/templates` | 报表模板管理(列表 + 新建/编辑对话框) |
-| `/designer` | 旧版报表设计器(自研, bug 较多, 待替换) |
-| `/op-designer` | **OpenPrint 设计器**(src/op, Fabric.js 内核, 推荐使用) |
-| `/matcher` | 模板匹配引擎(输入 JSON 自动匹配模板) |
+| `/templates` | 模板管理(列表 + 规则配置, 接后端 CRUD) |
+| `/designer` | **OpenPrint 设计器**(src/op, Fabric.js 内核; `/op-designer` 已重定向至此) |
+| `/matcher` | 模板匹配引擎(接后端模板列表, 匹配结果跳转设计器) |
 
 ## 已知坑:node_modules 损坏(必读)
 
@@ -78,6 +77,10 @@ dotnet run --urls http://localhost:5000
 node scripts/convert-legacy-template.mjs <旧模板.json> [输出.json]
 ```
 旧 ReportTemplate 结构 → OpenPrint TemplateData + matchRules(Label/TextField/Image/Line/Rect/Barcode/QRCode/Table 可映射;StaticTable 简化为空白表格;PageBreak 跳过)。
+
+数据源(已接通): 后端 `GET /api/print/data-sources`(信封 `{items,total}`)提供检验报告字段目录
+(Header 主表 + ReportItems[] 明细)。设计器左侧「数据源」tab 自动显示字段树,
+文本控件绑定用属性面板「变量」模式填路径(如 `Header.ReportNo`);表格列字段下拉从字段树选明细字段。
 
 模板匹配入口(已接通):
 - `/matcher`:从后端拉取模板列表(含 matchRules)进行匹配;后端不可用时回退模拟数据
