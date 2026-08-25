@@ -88,16 +88,17 @@ const themeOverrides = computed(() => {
 
 <template>
   <div class="openprint-shell">
-    <NConfigProvider :theme="naiveTheme" :theme-overrides="themeOverrides" :locale="zhCN" :date-locale="dateZhCN">
+    <!-- class="h-full": NConfigProvider 渲染的中间层 div 需要高度约束, 否则 100% 高度链断裂 -->
+    <NConfigProvider class="h-full" :theme="naiveTheme" :theme-overrides="themeOverrides" :locale="zhCN" :date-locale="dateZhCN">
       <NGlobalStyle />
       <NMessageProvider>
         <NDialogProvider>
-          <div class="flex h-full flex-col">
+          <div class="flex h-full min-h-0 flex-col">
             <TopToolbar />
 
             <div class="flex min-h-0 flex-1">
               <!-- 左侧组件库面板(组件/数据源/图层 三 tab) -->
-              <aside class="w-250px flex-shrink-0 overflow-y-auto border-r border-brand-border bg-brand-surface">
+              <aside class="w-250px flex-shrink-0 min-h-0 overflow-y-auto border-r border-brand-border bg-brand-surface">
                 <LeftPanel />
               </aside>
 
@@ -109,7 +110,7 @@ const themeOverrides = computed(() => {
               <!-- 右侧属性面板 -->
               <aside
                 v-if="uiStore.rightPanelVisible"
-                class="w-300px flex-shrink-0 border-l border-brand-border bg-brand-surface"
+                class="w-300px flex-shrink-0 min-h-0 overflow-y-auto border-l border-brand-border bg-brand-surface"
               >
                 <RightPanel />
               </aside>
