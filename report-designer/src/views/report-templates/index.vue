@@ -133,7 +133,8 @@ const OPERATORS = [
   { label: '小于', value: 'LessThan' },
 ]
 
-const API_BASE = 'http://localhost:5000/api/print/templates'
+// 相对路径, 由 Vite dev proxy 转发到后端(局域网可访问)
+const API_BASE = '/api/print/templates'
 
 // 列表
 const templates = ref<any[]>([])

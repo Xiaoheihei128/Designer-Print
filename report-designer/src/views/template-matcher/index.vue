@@ -180,7 +180,7 @@ function mapBackendTemplate(item: any): ReportTemplate {
 
 onMounted(async () => {
   try {
-    const res = await fetch('http://localhost:5000/api/print/templates')
+    const res = await fetch('/api/print/templates')
     const data = await res.json()
     if (Array.isArray(data.items) && data.items.length > 0) {
       templates.value = data.items.map(mapBackendTemplate)

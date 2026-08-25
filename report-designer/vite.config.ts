@@ -25,7 +25,15 @@ export default defineConfig({
   },
   server: {
     port: 5173,
-    host: true
+    host: true,
+    // 局域网访问: 浏览器同源请求 /api → 转发到 .NET 后端(5000)
+    // 前端各页面统一用相对路径 '/api/...', 局域网用户无需知道后端地址
+    proxy: {
+      '/api': {
+        target: 'http://localhost:5000',
+        changeOrigin: true
+      }
+    }
   },
   optimizeDeps: {
     // 预打包, 避免设计器内动态 import 触发二次优化导致 dev server 重启

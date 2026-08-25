@@ -32,6 +32,18 @@ npm run dev:op     # node dev-server.mjs, 同样监听 5173(可 --port 指定)
 
 `npm run dev` 仍可用于旧页面(模板列表 / 旧设计器 / 匹配器),但打开 `/op-designer` 会 500。
 
+## 局域网访问
+
+- 前端 `dev:op` 已监听 `0.0.0.0`,局域网地址 = 本机 IP:5173(如 `http://192.168.0.5:5173`)
+- API 走 **Vite 代理**:浏览器同源请求 `/api/*` → vite.config.ts proxy → `http://localhost:5000`
+  (前端各页 + OpenPrint http-repo 均用相对路径,局域网用户无需知道后端地址、无跨域)
+- 后端 `.NET` 保持 `localhost:5000` 即可(代理在服务器端转发)
+- **Windows 防火墙**:需以管理员放行 5173 端口入站,否则局域网访问被拦:
+  ```powershell
+  # 管理员 PowerShell
+  netsh advfirewall firewall add rule name="ReportDesigner 5173" dir=in action=allow protocol=TCP localport=5173
+  ```
+
 ## 路由
 
 | 路径 | 页面 |
