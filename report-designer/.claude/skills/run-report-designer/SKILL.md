@@ -14,6 +14,12 @@ npm run dev        # 监听 http://localhost:5173
 服务器就绪标志:终端出现 `VITE v8.2.x ready in xxx ms` 和 `Local: http://localhost:5173/`。
 验证:浏览器打开 http://localhost:5173 (根路径重定向到 `/templates` 模板列表页)。
 
+### ⚠️ 图标修复(unocss presetIcons 失效)
+
+unocss 66.8.1 的 presetIcons 在本机无法自动加载 @iconify-json/carbon(OpenPrint 原项目同样问题)。
+图标由静态 CSS 提供:`node scripts/build-icons.mjs` 扫描 src/op 生成 `public/icons.css`,
+已由 index.html 全局引入。新增 `i-carbon-*` 图标后需重新运行该脚本。
+
 ### ⚠️ OpenPrint 设计器需要 `npm run dev:op`(重要)
 
 本机 vite CLI(`npm run dev`)加载配置时 **unocss 插件失效**(`virtual:uno.css` 解析 404,

@@ -1,4 +1,6 @@
 import { defineConfig, presetWind4, presetIcons } from 'unocss'
+// 注: unocss 66.8.1 presetIcons 在本环境无法加载图标(自动 loader 失效),
+// 图标由 scripts/build-icons.mjs 生成静态 CSS(public/icons.css, index.html 全局引入)
 
 /**
  * unocss 品牌色 —— 取 main.css 中的 CSS 变量（随亮暗主题自动切换）
