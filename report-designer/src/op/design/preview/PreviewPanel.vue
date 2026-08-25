@@ -84,6 +84,9 @@ async function doRender(): Promise<void> {
   rendering.value = true
   errorText.value = ''
   try {
+    // 确保数据源字段已加载(未打开过「数据源」tab 时 fieldCache 为空 → 预览数据为空)
+    // init 幂等: fetchFields 有 10 分钟缓存, 重复调用开销可忽略
+    await dsStore.init()
     const template = store.buildTemplate()
     const data = dsStore.previewData
 
