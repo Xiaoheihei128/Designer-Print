@@ -1,0 +1,51 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git clone *)",
+      "Bash(npm --version)",
+      "Bash(npm run *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5173/)",
+      "Bash(node node_modules/vite/bin/vite.js)",
+      "Bash(rm -rf node_modules)",
+      "Bash(npm install *)",
+      "Bash(mkdir -p /tmp/rd-driver)",
+      "Read(//tmp/**)",
+      "Bash(npm init *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:5173/)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" --max-time 3 http://localhost:5173/)",
+      "Read(//c/Users/Lenovo/AppData/Local/Temp/claude/rd-driver/**)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" --max-time 5 http://localhost:5173/)",
+      "Bash(node drive.mjs)",
+      "Bash(cp \"C:/Users/Lenovo/AppData/Local/Temp/claude/rd-driver/drive.mjs\" /tmp/rd-driver/drive.mjs)",
+      "Read(//c/Users/Lenovo/AppData/Local/Temp/claude/rd-driver/shots/**)",
+      "Bash(cp \"C:/Users/Lenovo/AppData/Local/Temp/claude/rd-driver/verify.mjs\" /tmp/rd-driver/verify.mjs)",
+      "Bash(node verify.mjs)",
+      "Bash(node -e ' *)",
+      "Bash(cp \"C:/Users/Lenovo/AppData/Local/Temp/claude/rd-driver/regression.mjs\" /tmp/rd-driver/regression.mjs)",
+      "Bash(node regression.mjs)",
+      "Bash(npx vue-tsc *)",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(grep -E 'PropertiesPanel|ControlRenderer|DataBindingPanel|report-templates|report-designer/index|pdfExporter|generator/index' /tmp/tsc_errors.txt | sed 's/^src\\\\/views\\\\/report-designer\\\\///' | sed 's/^src\\\\///' | sort | uniq -c | sort -rn | head -5; echo \"======\"; grep 'PropertiesPanel' /tmp/tsc_errors.txt | head -25)",
+      "Bash(npm i *)",
+      "Bash(node scripts/smoke.mjs)",
+      "WebSearch",
+      "Read(//d/OpenPrint/openprint/**)",
+      "Bash(find \"D:/OpenPrint/openprint/src/design\" -type f 2>/dev/null | head -80)",
+      "Read(//d/OpenPrint/openprint/src/design/**)",
+      "Read(//d/OpenPrint/openprint/src/**)",
+      "Read(//d/OpenPrint/openprint/src/design/stores/**)",
+      "Bash(cat \"D:/OpenPrint/openprint/src/repository/types.ts\" 2>/dev/null | head -60; echo \"===TEMPLATE-TYPES===\"; ls \"D:/OpenPrint/openprint/src/types\" 2>/dev/null; echo \"===BINDING===\"; grep -rn \"mustache\\\\|Mustache\\\\|binding\\\\|binding:\" \"D:/OpenPrint/openprint/src/design/stores/designer.ts\" | head -8)",
+      "Read(//d/OpenPrint/openprint/src/repository/**)",
+      "Read(//d/OpenPrint/openprint/src/types/**)",
+      "Bash(grep -n \"export interface TemplateData\" -A 25 \"D:/OpenPrint/openprint/src/types/template.ts\" | head -35; echo \"===CONTROL===\"; grep -n \"export type ControlType\\\\|export type AnyControl\\\\|export type ControlCategory\" -A 12 \"D:/OpenPrint/openprint/src/types/control.ts\" | head -45)",
+      "Bash(node -e \"const p=require\\('D:/OpenPrint/openprint/package.json'\\); console.log\\('deps:', JSON.stringify\\(Object.keys\\(p.dependencies\\),null,1\\)\\); console.log\\('devDeps:', Object.keys\\(p.devDependencies\\).join\\(', '\\)\\); console.log\\('scripts:', JSON.stringify\\(p.scripts,null,1\\)\\)\")",
+      "Bash(grep -rn \"import\\('@/\\\\|url\\(@/\\\\|'@/assets\\\\|@/public\" src/op)",
+      "Bash(cp \"D:/OpenPrint/openprint/uno.config.ts\" \"d:/工作目录/260817/report-designer/uno.config.ts\" && echo \"uno.config 复制完成\" && wc -l \"d:/工作目录/260817/report-designer/uno.config.ts\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" --max-time 3 http://localhost:5173/)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\Lenovo\\AppData\\Local\\Temp\\claude\\rd-driver",
+      "D:\\OpenPrint\\openprint"
+    ]
+  }
+}

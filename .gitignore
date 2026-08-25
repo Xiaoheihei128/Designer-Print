@@ -1,0 +1,19 @@
+# 依赖与构建产物
+node_modules/
+dist/
+.vite/
+*.log
+
+# .NET 构建产物
+bin/
+obj/
+
+# 外部参考仓库(有自己的 git)
+XiHan.BasicApp/
+
+# 本地环境覆盖
+.env.local
+
+# 临时文件
+tmp/
+*.tmp
