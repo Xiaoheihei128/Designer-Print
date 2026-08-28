@@ -1,0 +1,212 @@
+/* =============================================
+   Designer Print – stylesheet
+   ============================================= */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #f0f2f5;
+  --panel-bg:  #ffffff;
+  --border:    #d9d9d9;
+  --primary:   #1677ff;
+  --danger:    #ff4d4f;
+  --text:      #1a1a1a;
+  --shadow:    0 2px 8px rgba(0,0,0,.12);
+  --radius:    6px;
+  --topbar-h:  52px;
+  --panel-w:   200px;
+}
+
+body {
+  font-family: "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ---- Top bar ---- */
+.topbar {
+  height: var(--topbar-h);
+  background: var(--panel-bg);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  gap: 12px;
+  flex-shrink: 0;
+  box-shadow: var(--shadow);
+  z-index: 10;
+}
+.brand { font-size: 18px; font-weight: 700; flex: 1; }
+.topbar-actions { display: flex; gap: 8px; }
+
+/* ---- Buttons ---- */
+button {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #fff;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background .15s, border-color .15s;
+}
+button:hover { background: #f5f5f5; border-color: #bbb; }
+button.primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+button.primary:hover { background: #0958d9; border-color: #0958d9; }
+button.danger  { background: var(--danger); border-color: var(--danger); color: #fff; width: 100%; margin-top: 12px; }
+button.danger:hover { background: #d9363e; }
+
+/* ---- Workspace (panels + canvas) ---- */
+.workspace {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ---- Panels ---- */
+aside {
+  width: var(--panel-w);
+  background: var(--panel-bg);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  flex-shrink: 0;
+  padding: 12px 10px;
+}
+.props-panel { border-right: none; border-left: 1px solid var(--border); }
+
+aside h3 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: #888;
+  margin: 12px 0 6px;
+}
+aside h3:first-child { margin-top: 0; }
+
+.tool-btn {
+  display: block;
+  width: 100%;
+  margin-bottom: 5px;
+  text-align: left;
+  border-radius: var(--radius);
+}
+.tool-btn:hover { background: #e6f0ff; border-color: var(--primary); color: var(--primary); }
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: #555;
+}
+label input[type="text"],
+label input[type="number"],
+label textarea,
+label select {
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  width: 100%;
+}
+label input[type="checkbox"] { width: auto; }
+label input[type="color"]    { height: 32px; padding: 2px; cursor: pointer; }
+
+/* ---- Canvas area ---- */
+.canvas-area {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 32px;
+  background: repeating-linear-gradient(
+    45deg,
+    #e8eaed 0px, #e8eaed 1px,
+    transparent 1px, transparent 10px
+  );
+}
+
+#canvas-wrapper {
+  position: relative;
+  box-shadow: 0 4px 24px rgba(0,0,0,.18);
+}
+
+#canvas {
+  position: relative;
+  background: #fff;
+  /* default A4 portrait at 96dpi: 210mm × 297mm ≈ 794 × 1123px */
+  width:  794px;
+  height: 1123px;
+  outline: none;
+  user-select: none;
+  overflow: hidden;
+}
+
+/* ---- Design elements ---- */
+.design-el {
+  position: absolute;
+  cursor: move;
+  box-sizing: border-box;
+}
+.design-el.selected {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+.design-el .text-content {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  word-wrap: break-word;
+}
+.design-el .shape-rect {
+  width: 100%;
+  height: 100%;
+}
+.design-el .shape-ellipse {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+}
+.design-el .shape-line {
+  width: 100%;
+  height: 100%;
+}
+
+/* ---- Selection overlay handles ---- */
+#selection-overlay {
+  position: absolute;
+  pointer-events: none;
+  z-index: 999;
+}
+.handle {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  background: #fff;
+  border: 2px solid var(--primary);
+  border-radius: 2px;
+  pointer-events: all;
+  cursor: nwse-resize;
+}
+.handle.tl { top: -5px; left: -5px; cursor: nw-resize; }
+.handle.tr { top: -5px; right: -5px; cursor: ne-resize; }
+.handle.bl { bottom: -5px; left: -5px; cursor: sw-resize; }
+.handle.br { bottom: -5px; right: -5px; cursor: se-resize; }
+
+/* ---- Print ---- */
+@media print {
+  body * { visibility: hidden; }
+  #canvas, #canvas * { visibility: visible; }
+  #canvas { position: fixed; top: 0; left: 0; box-shadow: none; outline: none; }
+  .design-el { outline: none !important; }
+}

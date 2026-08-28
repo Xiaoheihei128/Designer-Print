@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Designer Print – 打印设计器</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- Top bar -->
+  <header class="topbar">
+    <div class="brand">🖨️ Designer Print</div>
+    <div class="topbar-actions">
+      <button id="btn-undo" title="撤销 (Ctrl+Z)">↩ 撤销</button>
+      <button id="btn-redo" title="重做 (Ctrl+Y)">↪ 重做</button>
+      <button id="btn-clear" title="清空画布">🗑 清空</button>
+      <button id="btn-print" class="primary" title="打印">🖨️ 打印</button>
+    </div>
+  </header>
+
+  <div class="workspace">
+    <!-- Left panel: element toolbox -->
+    <aside class="toolbox">
+      <h3>元素</h3>
+      <button class="tool-btn" data-tool="text">T 文本</button>
+      <button class="tool-btn" data-tool="rect">▭ 矩形</button>
+      <button class="tool-btn" data-tool="ellipse">◯ 椭圆</button>
+      <button class="tool-btn" data-tool="line">╱ 线条</button>
+      <button class="tool-btn" data-tool="image">🖼 图片</button>
+      <input type="file" id="img-upload" accept="image/*" style="display:none" />
+
+      <h3>页面</h3>
+      <label>尺寸
+        <select id="page-size">
+          <option value="A4">A4</option>
+          <option value="A3">A3</option>
+          <option value="Letter">Letter</option>
+          <option value="custom">自定义</option>
+        </select>
+      </label>
+      <label>方向
+        <select id="page-orient">
+          <option value="portrait">纵向</option>
+          <option value="landscape">横向</option>
+        </select>
+      </label>
+      <div id="custom-size" style="display:none">
+        <label>宽(mm) <input type="number" id="custom-w" value="210" min="1" /></label>
+        <label>高(mm) <input type="number" id="custom-h" value="297" min="1" /></label>
+      </div>
+
+      <h3>模板</h3>
+      <button class="tool-btn" data-tpl="blank">空白</button>
+      <button class="tool-btn" data-tpl="invoice">发票</button>
+      <button class="tool-btn" data-tpl="label">标签</button>
+      <button class="tool-btn" data-tpl="certificate">证书</button>
+    </aside>
+
+    <!-- Centre: canvas -->
+    <main class="canvas-area">
+      <div id="canvas-wrapper">
+        <div id="canvas" tabindex="0">
+          <!-- elements rendered here by JS -->
+        </div>
+        <!-- selection handles overlay -->
+        <div id="selection-overlay" style="display:none">
+          <div class="handle tl"></div>
+          <div class="handle tr"></div>
+          <div class="handle bl"></div>
+          <div class="handle br"></div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Right panel: properties -->
+    <aside class="props-panel" id="props-panel">
+      <h3>属性</h3>
+      <div id="no-selection">请选择一个元素</div>
+      <div id="element-props" style="display:none">
+        <label>X (mm) <input type="number" id="prop-x" /></label>
+        <label>Y (mm) <input type="number" id="prop-y" /></label>
+        <label>宽 (mm) <input type="number" id="prop-w" /></label>
+        <label>高 (mm) <input type="number" id="prop-h" /></label>
+
+        <!-- text-specific -->
+        <div id="text-props">
+          <label>内容 <textarea id="prop-text" rows="3"></textarea></label>
+          <label>字号 <input type="number" id="prop-fontsize" value="14" min="6" max="200" /></label>
+          <label>颜色 <input type="color" id="prop-color" value="#000000" /></label>
+          <label>对齐
+            <select id="prop-align">
+              <option value="left">左</option>
+              <option value="center">中</option>
+              <option value="right">右</option>
+            </select>
+          </label>
+          <label>粗体 <input type="checkbox" id="prop-bold" /></label>
+          <label>斜体 <input type="checkbox" id="prop-italic" /></label>
+        </div>
+
+        <!-- shape-specific -->
+        <div id="shape-props">
+          <label>填充色 <input type="color" id="prop-fill" value="#ffffff" /></label>
+          <label>描边色 <input type="color" id="prop-stroke" value="#000000" /></label>
+          <label>描边宽 <input type="number" id="prop-strokew" value="1" min="0" max="20" /></label>
+        </div>
+
+        <button id="btn-delete" class="danger">🗑 删除元素</button>
+      </div>
+    </aside>
+  </div>
+
+  <!-- hidden print frame -->
+  <iframe id="print-frame" style="display:none"></iframe>
+
+  <script src="designer.js"></script>
+</body>
+</html>
