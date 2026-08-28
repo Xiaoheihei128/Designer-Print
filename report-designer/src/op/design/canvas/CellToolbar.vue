@@ -8,7 +8,7 @@
  * 本组件**不直接改 store**：所有动作算出「新的表格控件」后 emit('apply')，
  * 由 TableViewLayer 统一写回并刷新 overlay —— 保持单一写入口，撤销栈干净。
  */
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import {
   NButton,
   NButtonGroup,
@@ -21,7 +21,7 @@ import {
   NTooltip,
 } from 'naive-ui'
 import type { SelectOption, SelectGroupOption } from 'naive-ui'
-import type { TableCell, TableCellStyle, TableControl, CellFormat, CellFormatKind } from '@op/types/control'
+import type { TableCell, TableCellStyle, TableControl, CellFormat, CellFormatKind, Segment as SegmentT } from '@op/types/control'
 import {
   buildDesignGrid,
   insertTableColumn,
@@ -37,9 +37,10 @@ import {
 } from '@op/core/layout-engine/table-cells'
 import { FONT_CATALOG } from '@op/core/fonts/catalog'
 import { useSystemFonts } from '@op/core/fonts/system'
-import { useDataSourceStore } from '@op/design/stores/dataSource'
+import { useFieldCatalogStore } from '@op/design/stores/fieldCatalog'
 import ContentValueEditor from '@op/design/panels/props/ContentValueEditor.vue'
 import type { ContentMode } from '@op/design/panels/props/ContentValueEditor.vue'
+import { ensureSegments } from '@op/design/segments-migration'
 import {
   formatKindOptions,
   datePatternOptions,
@@ -63,10 +64,15 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'apply', next: TableControl): void
+  /**
+   * lazy migration emit —— 仅添加 segments 字段、不动用户内容
+   * TableViewLayer 收到后走 updateControlSilent（不进 undo 栈、不标 dirty）
+   */
+  (e: 'migrate', next: TableControl): void
   (e: 'close'): void
 }>()
 
-const ds = useDataSourceStore()
+const ds = useFieldCatalogStore()
 
 const grid = computed(() => buildDesignGrid(props.control))
 const cell = computed<TableCell>(() => grid.value.cells[props.row]?.[props.col] ?? {})
@@ -106,17 +112,25 @@ const detailFields = computed(() => {
 
 /** 变量模式默认路径：取该行语义下的第一个字段（数据行=明细字段，其余=标量字段） */
 const bindingDefault = computed(
-  () => detailFields.value[0]?.path ?? (props.rowKind === 'data' ? 'items[].name' : 'order.orderNo'),
+  () => detailFields.value[0]?.path ?? (props.rowKind === 'data' ? 'ReportItems[].AnalysisItem' : 'order.orderNo'),
 )
 
-/** 表达式模式默认值（数据行按行迭代，其余按主表上下文） */
+/** 表达式模式默认值
+ * - 数据行保留 {{rowIndex + 1}}（序号列的双击便利）
+ * - 静态行不再硬塞 {{order.total}}：用户切到「表达式」模式时往往是想要聚合 token（#pageSum/#totalCap 等），
+ *   自动注入 {{order.total}} 会让画布立刻显示一行无意义字面，掩盖用户真正意图（Bug4 修复）。
+ *   留空让用户主动从「函数 / 聚合」按钮插入 snippet。
+ */
 const expressionDefault = computed(() =>
-  props.rowKind === 'data' ? '{{rowIndex + 1}}' : '{{order.total}}',
+  props.rowKind === 'data' ? '{{rowIndex + 1}}' : '',
 )
 
-/** 单元格内容三态：固定值 / 变量（字段绑定） / 表达式（显式 contentType，老模板启发式回退） */
-const cellMode = computed<ContentMode>(() => {
+/** 单元格内容三态：固定值 / 变量（字段绑定） / 表达式（显式 contentType，老模板启发式回退）
+ *  v2: 已有 segments 时返回 undefined，让 ContentValueEditor 切到 segments 模式
+ */
+const cellMode = computed<ContentMode | undefined>(() => {
   const c = cell.value
+  if (c?.segments && c.segments.length) return undefined
   if (c?.contentType) return c.contentType
   return c?.expression ? 'expression' : c?.field ? 'variable' : 'fixed'
 })
@@ -163,6 +177,24 @@ function onCellExpression(v: string): void {
     }),
   )
 }
+
+/** v2: segments 模式 textarea 内容变更时回写 */
+function onCellSegments(s: SegmentT[]): void {
+  emit('apply', patchCell(props.control, props.row, props.col, { segments: s }))
+}
+
+/** 工具栏打开/控件变化时调 ensureSegments —— 老 schema 一次性 lazy 迁移（emit migrate → silent） */
+watch(
+  () => cell.value,
+  (c) => {
+    if (!c) return
+    const next = ensureSegments(c)
+    if (next !== c) {
+      emit('migrate', patchCell(props.control, props.row, props.col, { segments: next.segments }))
+    }
+  },
+  { immediate: true },
+)
 
 /** 仅绑定了字段/表达式（或显式 variable/expression 模式）的单元格才需要格式（纯静态文字格式无意义） */
 const canFormat = computed(
@@ -288,6 +320,8 @@ function deleteCol(): void {
           :value="cell.text ?? ''"
           :binding="cell.field ?? ''"
           :expression="cell.expression ?? ''"
+          :segments="cell.segments"
+          :format="cell.format"
           placeholder="单元格内容"
           :binding-default="bindingDefault"
           :expression-default="expressionDefault"
@@ -295,6 +329,7 @@ function deleteCol(): void {
           @update:value="onCellValue"
           @update:binding="onCellBinding"
           @update:expression="onCellExpression"
+          @update:segments="onCellSegments"
         />
       </div>
 

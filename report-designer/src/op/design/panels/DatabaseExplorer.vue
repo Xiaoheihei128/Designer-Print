@@ -21,27 +21,27 @@ import {
   NTree,
   type TreeOption,
 } from 'naive-ui'
-import { useDataSourceStore } from '@op/design/stores/dataSource'
+import { useClientDbStore } from '@op/design/stores/clientDb'
 import { usePrinterProbe } from '@op/design/composables/usePrinterProbe'
 import { ROWS_DEFAULT_LIMIT } from '@op/core/print-client'
 
-const store = useDataSourceStore()
+const clientDb = useClientDbStore()
 const probe = usePrinterProbe()
 
 // 进入数据库面板时若尚未探测到客户端，主动探活一次（仅 /health 连接检查，不取数据），
 // 以便「手动开启」开关在客户端实际在线时自动可用。
 onMounted(() => {
-  if (!store.dbAvailable) void probe.probeIfStale()
+  if (!clientDb.dbAvailable) void probe.probeIfStale()
 })
 
 const dbOptions = computed(() =>
-  store.dbDatabases.map((d) => ({ label: d.label || d.name, value: d.name })),
+  clientDb.databases.map((d) => ({ label: d.label || d.name, value: d.name })),
 )
 
 /* 树数据：仅一层「表」，展开表 → 列（字段） */
 const tableTree = ref<TreeOption[]>([])
 watch(
-  () => store.dbTables,
+  () => clientDb.tables,
   (tables) => {
     tableTree.value = tables.map((t) => ({
       key: `tbl::${t.name}`,
@@ -55,8 +55,8 @@ watch(
 /** 展开某表 → 拉列并绑定为当前表 */
 async function onLoadTable(node: TreeOption): Promise<void> {
   const tableName = String(node.key).replace('tbl::', '')
-  await store.selectTable(tableName)
-  node.children = store.dbColumns.map((c) => ({
+  await clientDb.selectTable(tableName)
+  node.children = clientDb.columns.map((c) => ({
     key: `col::${tableName}::${c.name}`,
     // key 标记原文：PRI=主键、UNI=唯一键；兼容旧版 primary:true
     label:
@@ -95,7 +95,7 @@ function renderSelectLabel(option: { label?: string | number }): VNodeChild {
 <template>
   <div class="flex flex-col gap-2 p-3">
     <!-- 未连接客户端：提示 + 开关禁用 -->
-    <NAlert v-if="!store.dbAvailable" type="warning" :show-icon="false">
+    <NAlert v-if="!clientDb.dbAvailable" type="warning" :show-icon="false">
       <div class="text-12px leading-relaxed">
         未连接本地打印客户端，无法启用数据库数据源。<br />
         请在「设置 → 本地打印」连接本机/局域网客户端。
@@ -108,21 +108,21 @@ function renderSelectLabel(option: { label?: string | number }): VNodeChild {
         启用数据库数据源<small class="op-60">（需手动开启）</small>
       </div>
       <NSwitch
-        :value="store.dbEnabled"
-        :disabled="!store.dbAvailable"
-        @update:value="(v: boolean) => store.setDbEnabled(v)"
+        :value="clientDb.dbEnabled"
+        :disabled="!clientDb.dbAvailable"
+        @update:value="(v: boolean) => clientDb.setDbEnabled(v)"
       />
     </div>
 
-    <template v-if="store.dbAvailable && store.dbEnabled">
-      <NSpin :show="store.dbLoading && !store.dbDatabases.length">
+    <template v-if="clientDb.dbAvailable && clientDb.dbEnabled">
+      <NSpin :show="clientDb.loading && !clientDb.databases.length">
         <NEmpty
-          v-if="!store.dbDatabases.length && !store.dbError"
+          v-if="!clientDb.databases.length && !clientDb.error"
           size="small"
           description="暂无数据库"
         />
-        <NAlert v-else-if="store.dbError" type="error" :show-icon="false">
-          <div class="text-12px">{{ store.dbError }}</div>
+        <NAlert v-else-if="clientDb.error" type="error" :show-icon="false">
+          <div class="text-12px">{{ clientDb.error }}</div>
         </NAlert>
 
         <template v-else>
@@ -133,25 +133,25 @@ function renderSelectLabel(option: { label?: string | number }): VNodeChild {
               <span>选择数据库</span>
             </div>
             <NSelect
-              :value="store.dbSelection.database"
+              :value="clientDb.selection.database"
               :options="dbOptions"
               :render-label="renderSelectLabel"
               placeholder="选择数据库"
               size="small"
-              :disabled="!store.dbDatabases.length"
-              @update:value="(v: string) => store.selectDatabase(v)"
+              :disabled="!clientDb.databases.length"
+              @update:value="(v: string) => clientDb.selectDatabase(v)"
             />
           </div>
 
           <!-- Step2：表 → 展开列 -->
-          <div v-if="store.dbSelection.database" class="explorer-field">
+          <div v-if="clientDb.selection.database" class="explorer-field">
             <div class="field-label">
               <div class="i-carbon-data-table text-13px" />
               <span>数据表（点击表展开字段）</span>
             </div>
-            <NSpin :show="store.dbLoading && !!store.dbDatabases.length">
+            <NSpin :show="clientDb.loading && !!clientDb.databases.length">
               <NEmpty
-                v-if="!store.dbTables.length"
+                v-if="!clientDb.tables.length"
                 size="small"
                 description="该库暂无数据表"
               />
@@ -171,22 +171,22 @@ function renderSelectLabel(option: { label?: string | number }): VNodeChild {
 
       <!-- 已绑定表的信息与操作 -->
       <div
-        v-if="store.dbSelection.database && store.dbSelection.table"
+        v-if="clientDb.selection.database && clientDb.selection.table"
         class="rounded bg-brand-bg p-2"
       >
         <div class="text-12px op-70">
-          {{ store.dbColumns.length }} 个字段 · 已载入 {{ store.dbRows.length }} 行（预览取前
+          {{ clientDb.columns.length }} 个字段 · 已载入 {{ clientDb.rows.length }} 行（预览取前
           {{ ROWS_DEFAULT_LIMIT }} 行）
         </div>
         <div class="mt-1 flex items-center gap-2">
-          <NButton size="small" tertiary @click="store.reloadRows()">
+          <NButton size="small" tertiary @click="clientDb.reloadRows()">
             <div class="i-carbon-renew mr-1 text-12px" />
             重新取数
           </NButton>
           <span class="text-11px op-60">字段可在下方字段树拖拽绑定</span>
         </div>
         <div class="mt-1 text-11px op-60">
-          表格用 <code>items[].字段名</code> 绑定。
+          表格用 <code>ReportItems[].字段名</code> 绑定。
         </div>
       </div>
     </template>

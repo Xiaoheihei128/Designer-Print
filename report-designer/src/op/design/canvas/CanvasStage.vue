@@ -30,6 +30,8 @@ const stageHeight = ref(0)
 const canvasReady = ref(false)
 
 useDragAdd(canvasHostRef)
+// 字段绑定走"左键待绑态 + 点击左栏字段"路径（DataSourceTree.onFieldClick），
+// 不再需要 binding drag detector。
 useHotkey()
 
 // 页边距参考线显隐随 ui 开关联动（画布挂载后才生效）
@@ -54,6 +56,19 @@ watch(
 
 let resizeObserver: ResizeObserver | null = null
 
+/**
+ * 画布内统一屏蔽浏览器原生右键菜单（表情符号 / 拼写检查 / 书写方向 等）。
+ * 仅对画布区域 preventDefault，不影响左侧面板/顶栏的右键操作。
+ * 之前仅在 Fabric upperCanvasEl 上挂，导致命中 contenteditable td 时仍弹出。
+ */
+function onCanvasContextMenu(e: MouseEvent): void {
+  const stage = stageRef.value
+  if (!stage) return
+  const target = e.target as Node | null
+  if (!target || !stage.contains(target)) return
+  e.preventDefault()
+}
+
 onMounted(() => {
   if (!canvasElRef.value || !canvasHostRef.value || !stageRef.value) return
   const host = canvasHostRef.value
@@ -61,6 +76,8 @@ onMounted(() => {
   stageHeight.value = host.clientHeight
   store.attachCanvas(canvasElRef.value, host)
   canvasReady.value = true
+  // 画布区右键屏蔽（document 级捕获，避免 contenteditable td 内右键泄漏）
+  document.addEventListener('contextmenu', onCanvasContextMenu, true)
   // 初始同步页边距参考线显隐开关
   store.designer?.setMarginGuidesVisible(uiStore.showMarginGuides)
   // 初始同步网格（视觉 + 间距 + 颜色；网格不吸附元素）
@@ -71,10 +88,11 @@ onMounted(() => {
   void loadBuiltinFonts().then(() => {
     document.fonts?.ready.then(() => store.designer?.canvas.requestRenderAll()).catch(() => undefined)
   })
-  // 启动恢复：本地存储有上次保存的模板则加载（无后端全链路可用）
-  // 路由带 ?id= 时由壳组件(OpenPrint shell)负责加载指定模板, 这里跳过避免覆盖
+  // 启动初始化：每次进入设计器都从一张「空白 3×4 表格」开始，
+  // 不再自动恢复上次保存的模板（避免误打开历史模板）。
+  // 路由带 ?id= 时由壳组件(OpenPrint shell)负责加载指定模板, 这里跳过避免覆盖。
   if (route.query.id) return
-  void store.restoreLastTemplate()
+  store.newBlankWith3x4Table()
   // dev 调试句柄
   if (import.meta.env.DEV) {
     ;(window as unknown as { __op: unknown }).__op = store
@@ -89,6 +107,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   resizeObserver?.disconnect()
+  document.removeEventListener('contextmenu', onCanvasContextMenu, true)
   store.detachCanvas()
 })
 </script>

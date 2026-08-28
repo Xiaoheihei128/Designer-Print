@@ -2,13 +2,15 @@
 /**
  * CodeProps —— 条码 / 二维码控件属性（§5.7）
  * 内容三态与文本一致：固定值（直接输入编码）/ 变量（弹窗选字段）/ 表达式（弹窗插函数）。
+ * v2 segments：已有 segments 时切到 textarea 模式（与 TextProps 一致）。
  */
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import { NSelect, NSwitch } from 'naive-ui'
-import type { BarcodeControl, QrcodeControl } from '@op/types/control'
+import type { BarcodeControl, QrcodeControl, Segment as SegmentT } from '@op/types/control'
 import { useDesignerStore } from '@op/design/stores/designer'
 import ContentValueEditor from './ContentValueEditor.vue'
 import type { ContentMode } from './ContentValueEditor.vue'
+import { ensureSegments } from '@op/design/segments-migration'
 
 const store = useDesignerStore()
 const control = computed(() => store.selectedControl as BarcodeControl | QrcodeControl | null)
@@ -18,10 +20,14 @@ function patch(p: Record<string, unknown>): void {
   if (control.value) store.updateControl(control.value.id, p)
 }
 
-const contentMode = computed<ContentMode>(() => {
+const contentMode = computed<ContentMode | undefined>(() => {
   const c = control.value
-  if (c?.contentType) return c.contentType
-  return c?.binding ? 'variable' : 'fixed'
+  if (!c) return undefined
+  // v2: 已有 segments → 返回 undefined 让 ContentValueEditor 切到 segments 模式
+  if (c.segments && c.segments.length) return undefined
+  if (c.contentType) return c.contentType
+  // barcode/qrcode 三态不对称：不识别 expression 字段（与 legacyToSegments 对齐）
+  return c.binding ? 'variable' : 'fixed'
 })
 
 /** 模式切换：写 contentType + 清空其它两个字段（默认值由 ContentValueEditor 注入） */
@@ -31,6 +37,24 @@ function onModeChange(m: ContentMode): void {
   else if (m === 'variable') patch({ contentType: 'variable', expression: undefined })
   else patch({ contentType: 'expression', binding: undefined })
 }
+
+/** v2: segments 回写 */
+function onSegmentsChange(s: SegmentT[]): void {
+  patch({ segments: s })
+}
+
+/** Properties Panel 打开/控件变化时调 ensureSegments —— 老 schema lazy 迁移（不进 undo 栈） */
+watch(
+  () => control.value,
+  (c) => {
+    if (!c) return
+    const next = ensureSegments(c)
+    if (next !== c) {
+      store.updateControlSilent(c.id, next as unknown as Record<string, unknown>)
+    }
+  },
+  { immediate: true },
+)
 
 const barcodeFormats = [
   { label: 'CODE128', value: 'CODE128' },
@@ -51,6 +75,7 @@ const barcodeFormats = [
       :value="control.value ?? ''"
       :binding="control.binding ?? ''"
       :expression="(control as BarcodeControl | QrcodeControl).expression ?? ''"
+      :segments="control.segments"
       placeholder="编码内容"
       single-line
       binding-default="order.orderNo"
@@ -59,6 +84,7 @@ const barcodeFormats = [
       @update:value="patch({ value: $event || undefined })"
       @update:binding="patch({ binding: $event })"
       @update:expression="patch({ expression: $event || undefined })"
+      @update:segments="onSegmentsChange"
     />
 
     <template v-if="isBarcode">

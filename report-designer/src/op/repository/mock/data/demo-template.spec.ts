@@ -14,12 +14,13 @@ describe('createDemoTemplate —— 示例模板结构校验', () => {
     expect(t.document.page.unit).toBe('mm')
   })
 
-  it('正文含明细表，绑定数据源 items', () => {
+  it('正文含明细表，绑定数据源 items（外部 data 传入或内置 data 兜底）', () => {
     const body = t.document.sections.find((s) => s.type === 'body')
     expect(body).toBeDefined()
     const table = (body!.components as unknown as Array<Record<string, unknown>>).find((c) => c.type === 'table')
     expect(table).toBeDefined()
     expect(table!.dataSource).toBe('items')
+    expect(Array.isArray(table!.data)).toBe(true)
   })
 
   it('明细表含合计行', () => {

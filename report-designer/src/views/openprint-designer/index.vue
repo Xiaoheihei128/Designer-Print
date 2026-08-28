@@ -30,10 +30,12 @@ import { darkThemeOverrides, lightThemeOverrides, svipThemeOverrides } from '@op
 import { getBackendConfig } from '@op/config/backend'
 import { createHttpRepository } from '@op/repository/http-repo'
 import { useDesignerStore } from '@op/design/stores/designer'
+import { useBusinessDataStore } from '@op/design/stores/businessData'
 
 const route = useRoute()
 const uiStore = useUiStore()
 const designerStore = useDesignerStore()
+const businessDataStore = useBusinessDataStore()
 
 // 后端衔接: 仅当配置了 VITE_OPENPRINT_API_BASE 才切云端模板仓库
 const backend = getBackendConfig()
@@ -58,6 +60,20 @@ function waitDesignerReady(timeoutMs = 8000): Promise<void> {
 // 支持 ?id=xxx: 从模板仓库加载指定模板(来自匹配页等入口)
 onMounted(async () => {
   const id = route.query.id
+  // 兜底：matcher 正常流程已用 Pinia 直传（setFromMatcher），这里仅在 Pinia 数据缺失时
+  // 从 sessionStorage 恢复（如 SPA 重置、刷新整页）。
+  if (!businessDataStore.data) {
+    try {
+      const raw = sessionStorage.getItem('op:matcher:lastData')
+      if (raw) {
+        const data = JSON.parse(raw) as Record<string, unknown>
+        businessDataStore.setFromMatcher(data)
+        sessionStorage.removeItem('op:matcher:lastData')
+      }
+    } catch (e) {
+      console.warn('读取匹配数据失败：', e)
+    }
+  }
   if (!id) return
   await waitDesignerReady()
   try {

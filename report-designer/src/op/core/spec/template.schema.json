@@ -117,6 +117,7 @@
             "type": "object",
             "required": ["title", "width"],
             "properties": {
+              "id": { "type": "string" },
               "title": { "type": "string" },
               "field": { "type": "string" },
               "expression": { "type": "string" },
@@ -140,10 +141,27 @@
             "rowHeight": { "type": "number", "exclusiveMinimum": 0 },
             "keepTogether": { "type": "boolean" },
             "skipEmptyRows": { "type": "boolean" },
+            "fixBottomRows": {
+              "anyOf": [
+                { "const": "off" },
+                { "const": "fill" },
+                { "type": "object", "properties": { "min": { "type": "number", "minimum": 1 } }, "required": ["min"], "additionalProperties": false }
+              ]
+            },
+            "fixBottomMargin": { "type": "number", "minimum": 0 },
             "mergeSheets": { "type": "boolean" },
             "striped": { "type": "boolean" },
             "verticalAlign": { "enum": ["top", "middle", "bottom"] },
-            "borders": { "enum": ["all", "none", "horizontal", "outline"] }
+            "borders": { "enum": ["all", "none", "horizontal", "outline"] },
+            "vMerge": {
+              "type": "object",
+              "properties": {
+                "columns": { "type": "array", "items": { "type": "string" } },
+                "breakOnGroup": { "type": "boolean" },
+                "breakOnPage": { "type": "boolean" }
+              },
+              "additionalProperties": false
+            }
           },
           "additionalProperties": true
         },
@@ -180,7 +198,17 @@
             "additionalProperties": true
           }
         },
-        "options": { "type": "object", "additionalProperties": true }
+        "options": { "type": "object", "additionalProperties": true },
+        "segments": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              { "type": "object", "required": ["kind", "value"], "properties": { "kind": { "const": "text" }, "value": { "type": "string" } }, "additionalProperties": false },
+              { "type": "object", "required": ["kind", "path"], "properties": { "kind": { "const": "field" }, "path": { "type": "string" }, "format": { "type": "object", "additionalProperties": true } }, "additionalProperties": false },
+              { "type": "object", "required": ["kind", "src"], "properties": { "kind": { "const": "expr" }, "src": { "type": "string" } }, "additionalProperties": false }
+            ]
+          }
+        }
       },
       "additionalProperties": true
     }

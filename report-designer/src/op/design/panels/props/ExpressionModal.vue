@@ -8,7 +8,8 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { NButton, NEmpty, NInput, NModal, NScrollbar, NTabPane, NTabs, NTag } from 'naive-ui'
 import { interpolate } from '@op/core/layout-engine/expression'
 import type { EvalContext } from '@op/core/layout-engine/types'
-import { useDataSourceStore } from '@op/design/stores/dataSource'
+import { useFieldCatalogStore } from '@op/design/stores/fieldCatalog'
+import { usePreviewDataStore } from '@op/design/stores/previewData'
 import { EXPRESSION_CATALOG } from '@op/design/expression-catalog'
 
 const props = defineProps<{
@@ -22,7 +23,8 @@ const emit = defineEmits<{
   confirm: [value: string]
 }>()
 
-const ds = useDataSourceStore()
+const catalog = useFieldCatalogStore()
+const previewDataStore = usePreviewDataStore()
 const innerExpr = ref(props.expression ?? '')
 const search = ref('')
 const activeTab = ref<'func' | 'field'>('func')
@@ -30,9 +32,11 @@ const taRef = ref<HTMLTextAreaElement | null>(null)
 
 /* ----------------------------- 样例上下文（实时预览） ----------------------------- */
 const sampleCtx = computed<EvalContext>(() => {
-  const data = (ds.previewData ?? {}) as Record<string, unknown>
-  const items = Array.isArray(data['items']) ? (data['items'] as unknown[]) : []
-  const row = items.length ? (items[0] as Record<string, unknown>) : undefined
+  const data = (previewDataStore.data ?? {}) as Record<string, unknown>
+  // 从字段目录里找出第一个数组字段的路径，作为示例行来源
+  const arrayPath = catalog.flatFields.find((f) => f.path.includes('[]'))?.path.split('[]')[0] ?? ''
+  const arr = arrayPath && Array.isArray(data[arrayPath]) ? (data[arrayPath] as unknown[]) : []
+  const row = arr.length ? (arr[0] as Record<string, unknown>) : undefined
   return { data, row, rowIndex: 0, page: 1, pages: 3 }
 })
 
@@ -160,7 +164,7 @@ function bindLiteral(path: string): string {
           <!-- 字段列表 -->
           <template v-else>
             <button
-              v-for="f in ds.flatFields"
+              v-for="f in catalog.flatFields"
               :key="f.path"
               type="button"
               class="expr-fn"
@@ -172,7 +176,7 @@ function bindLiteral(path: string): string {
               </div>
               <div class="expr-fn-desc">点击插入字段绑定：{{ bindLiteral(f.path) }}</div>
             </button>
-            <NEmpty v-if="ds.flatFields.length === 0" description="暂无数据源字段" class="expr-empty" />
+            <NEmpty v-if="catalog.flatFields.length === 0" description="暂无数据源字段" class="expr-empty" />
           </template>
         </NScrollbar>
       </div>
@@ -185,7 +189,7 @@ function bindLiteral(path: string): string {
           v-model="innerExpr"
           class="expr-input"
           spellcheck="false"
-          placeholder="例如 {{order.total | currency:'CNY'}} 或 {{sum('items[].amount')}}"
+          placeholder="例如 {{order.total | currency:'CNY'}} 或 {{sum('ReportItems[].amount')}}"
         />
 
         <div class="expr-right-label">实时预览</div>
@@ -198,7 +202,7 @@ function bindLiteral(path: string): string {
         </div>
         <div class="expr-tip">
           提示：用双花括号包裹变量，如 <code>{{ sampleExpr }}</code>；函数可点击左侧插入；聚合路径需加引号，如
-          <code>'items[].amount'</code>。
+          <code>'ReportItems[].amount'</code>。
         </div>
       </div>
     </div>

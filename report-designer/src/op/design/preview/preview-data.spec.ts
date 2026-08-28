@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
 import type { FieldDef } from '@op/types/datasource'
-import { buildPreviewData } from '@op/design/preview/preview-data'
+import {
+  buildBusinessDataFromCatalog,
+  mapDbRowsToBusinessData,
+} from '@op/design/preview/preview-data'
 
 const FIELDS: FieldDef[] = [
   { path: 'order.orderNo', label: '单号', type: 'string', sample: 'SO-001' },
@@ -13,15 +16,15 @@ const FIELDS: FieldDef[] = [
   { path: 'items[].amount', label: '金额', type: 'number', sample: 50 },
 ]
 
-describe('buildPreviewData —— 预览数据合成', () => {
+describe('buildBusinessDataFromCatalog —— 预览数据合成', () => {
   it('按 rows 展开明细数组', () => {
-    const data = buildPreviewData(FIELDS, { rows: 3 })
+    const data = buildBusinessDataFromCatalog(FIELDS, 3)
     expect(Array.isArray(data.items)).toBe(true)
     expect((data.items as unknown[]).length).toBe(3)
   })
 
   it('金额自洽：amount = qty × price', () => {
-    const data = buildPreviewData(FIELDS, { rows: 5 })
+    const data = buildBusinessDataFromCatalog(FIELDS, 5)
     const items = data.items as Array<Record<string, number>>
     for (const row of items) {
       expect(Number(row.amount)).toBeCloseTo(Number(row.qty) * Number(row.price), 2)
@@ -29,7 +32,7 @@ describe('buildPreviewData —— 预览数据合成', () => {
   })
 
   it('编码类字段按行号变化，肉眼可辨分页边界', () => {
-    const data = buildPreviewData(FIELDS, { rows: 3 })
+    const data = buildBusinessDataFromCatalog(FIELDS, 3)
     const items = data.items as Array<Record<string, string>>
     expect(items[0]!.productCode).toContain('001')
     expect(items[1]!.productCode).toContain('002')
@@ -37,21 +40,23 @@ describe('buildPreviewData —— 预览数据合成', () => {
   })
 
   it('顶层字段按 path 嵌套写入', () => {
-    const data = buildPreviewData(FIELDS, { rows: 1 })
+    const data = buildBusinessDataFromCatalog(FIELDS, 1)
     expect((data.order as Record<string, unknown>).orderNo).toBe('SO-001')
     expect((data.customer as Record<string, unknown>).name).toBe('客户甲')
   })
 
   it('字段为空返回 {}', () => {
-    expect(buildPreviewData([], { rows: 3 })).toEqual({})
+    expect(buildBusinessDataFromCatalog([], 3)).toEqual({})
   })
+})
 
+describe('mapDbRowsToBusinessData —— db 真实行映射', () => {
   it('dataRows 优先：用真实行映射进数组路径，跳过 sample 合成', () => {
     const real = [
       { productCode: 'P-A', productName: '甲', qty: 3, price: 10, amount: 30 },
       { productCode: 'P-B', productName: '乙', qty: 1, price: 20, amount: 20 },
     ]
-    const data = buildPreviewData(FIELDS, { dataRows: real })
+    const data = mapDbRowsToBusinessData(FIELDS, real)
     expect(Array.isArray(data.items)).toBe(true)
     const items = data.items as Array<Record<string, unknown>>
     expect(items).toHaveLength(2)
@@ -62,7 +67,7 @@ describe('buildPreviewData —— 预览数据合成', () => {
   })
 
   it('dataRows 缺失字段补零/空串', () => {
-    const data = buildPreviewData(FIELDS, { dataRows: [{ productCode: 'X' }] })
+    const data = mapDbRowsToBusinessData(FIELDS, [{ productCode: 'X' }])
     const items = data.items as Array<Record<string, unknown>>
     expect(items[0]!.qty).toBe(0)
     expect(items[0]!.productName).toBe('')

@@ -3,46 +3,48 @@
     <div class="page-header">
       <h2>模板匹配引擎</h2>
     </div>
-    
+
     <div class="matcher-content">
       <!-- 左侧：数据输入 -->
       <div class="data-input-section">
         <h3>输入数据</h3>
-        <p class="hint">输入或粘贴 JSON 格式的报表数据，系统将自动匹配最佳模板</p>
-        
-        <el-input
-          v-model="dataJson"
-          type="textarea"
-          :rows="15"
-          placeholder='{"Header": {"ReportType": "RawMaterial", ...}}'
-          class="data-textarea"
-        />
-        
-        <div class="data-actions">
-          <el-button type="primary" @click="handleMatch">匹配模板</el-button>
-          <el-button @click="loadSampleData">加载示例</el-button>
-        </div>
-        
-        <!-- 快速设置 -->
-        <div class="quick-set">
-          <h4>快速设置</h4>
-          <el-radio-group v-model="quickType" size="small" @change="handleQuickChange">
-            <el-radio-button value="rawMaterial">原料检验</el-radio-button>
-            <el-radio-button value="finishedProduct">成品检验</el-radio-button>
-            <el-radio-button value="semiFinished">半成品检验</el-radio-button>
-            <el-radio-button value="package">包材检验</el-radio-button>
-          </el-radio-group>
+        <div class="data-input-scroll">
+          <p class="hint">输入或粘贴 JSON 格式的报表数据，系统将自动匹配最佳模板</p>
+
+          <el-input
+            v-model="dataJson"
+            type="textarea"
+            :rows="12"
+            placeholder='{"Header": {"ReportType": "RawMaterial", ...}}'
+            class="data-textarea"
+          />
+
+          <div class="data-actions">
+            <el-button type="primary" @click="handleMatch">匹配模板</el-button>
+            <el-button @click="loadSampleData">加载示例</el-button>
+          </div>
+
+          <!-- 快速设置 -->
+          <div class="quick-set">
+            <h4>快速设置</h4>
+            <el-radio-group v-model="quickType" size="small" @change="handleQuickChange">
+              <el-radio-button value="rawMaterial">原料检验</el-radio-button>
+              <el-radio-button value="finishedProduct">成品检验</el-radio-button>
+              <el-radio-button value="semiFinished">半成品检验</el-radio-button>
+              <el-radio-button value="package">包材检验</el-radio-button>
+            </el-radio-group>
+          </div>
         </div>
       </div>
-      
+
       <!-- 右侧：匹配结果 -->
       <div class="result-section">
         <h3>匹配结果</h3>
-        
+        <div class="result-scroll">
         <div v-if="!matchResult" class="no-result">
           <p>暂无匹配结果</p>
         </div>
-        
+
         <div v-else class="match-result">
           <div class="result-card" :class="{ 'best-match': true }">
             <div class="card-header">
@@ -61,7 +63,7 @@
               <el-button type="primary" size="small" @click="handleUseTemplate">使用此模板</el-button>
             </div>
           </div>
-          
+
           <!-- 匹配详情 -->
           <div class="match-details" v-if="matchResult.matchedRules.length > 0">
             <h4>匹配规则详情</h4>
@@ -79,18 +81,36 @@
               </el-table-column>
             </el-table>
           </div>
-          
+
           <!-- 其他候选模板 -->
           <div class="other-candidates" v-if="otherCandidates.length > 0">
-            <h4>其他候选模板</h4>
-            <div v-for="(candidate, index) in otherCandidates" :key="candidate.template.id" class="candidate-card">
-              <div class="candidate-header">
-                <span class="rank">#{{ index + 2 }}</span>
-                <span class="name">{{ candidate.template.name }}</span>
-                <span class="score">{{ candidate.score }} 分</span>
+            <h4>
+              其他候选模板
+              <el-tag v-if="matchResult && matchResult.score === 0" size="small" type="info" style="margin-left: 8px">
+                无匹配 · 请从下方手动选用
+              </el-tag>
+            </h4>
+            <div class="other-candidates-scroll">
+              <div v-for="(candidate, index) in otherCandidates" :key="candidate.template.id" class="candidate-card">
+                <div class="candidate-header">
+                  <span class="rank">#{{ index + 2 }}</span>
+                  <span class="name">{{ candidate.template.name }}</span>
+                  <span class="score">{{ candidate.score }} 分</span>
+                </div>
+                <div class="candidate-actions">
+                  <el-button
+                    size="small"
+                    type="primary"
+                    plain
+                    @click="handleUseTemplate(candidate.template)"
+                  >
+                    使用此模板
+                  </el-button>
+                </div>
               </div>
             </div>
           </div>
+        </div>
         </div>
       </div>
     </div>
@@ -134,6 +154,7 @@ import { ElMessage } from 'element-plus'
 import { getAllMatchResults, getMatchDiagnosis, type MatchResult } from '@/services/templateMatcher'
 import { getMockData } from '@/services/mockData'
 import { TEMPLATE_CATEGORIES, type ReportTemplate } from '@/types/template'
+import { useBusinessDataStore } from '@op/design/stores/businessData'
 
 const router = useRouter()
 
@@ -302,25 +323,30 @@ function handleMatch() {
   
   // 获取所有匹配结果
   const allResults = getAllMatchResults(templates.value, data)
-  
+
   if (allResults.length === 0) {
-    // 没有匹配，使用默认模板
-    const defaultTemplate = templates.value.find(t => t.isActive !== false)
+    // 没有匹配 —— 用默认模板兜底，但其他候选展示全部 active 模板，
+    // 让用户能从滚动列表里手动挑一个，而不是被锁死。
+    const activeTemplates = templates.value.filter(t => t.isActive !== false)
+    const defaultTemplate = activeTemplates[0]
     if (defaultTemplate) {
       matchResult.value = {
         template: defaultTemplate,
-        score: 1,
-        matchedRules: []
+        score: 0,
+        matchedRules: [],
       }
-      otherCandidates.value = []
+      // 兜底候选：除最佳匹配外的全部 active 模板，标记 isFallback 让 UI 区分
+      otherCandidates.value = activeTemplates
+        .filter((t) => t.id !== defaultTemplate.id)
+        .map((t) => ({ template: t, score: 0, matchedRules: [] }))
     }
-    ElMessage.warning('没有精确匹配的模板，使用默认模板')
-    return
+    ElMessage.warning('没有精确匹配的模板，请从下方列表手动选用')
+    // 继续走诊断分支，不要提前 return
+  } else {
+    // 最佳匹配
+    matchResult.value = allResults[0]!
+    otherCandidates.value = allResults.slice(1)
   }
-  
-  // 最佳匹配
-  matchResult.value = allResults[0]
-  otherCandidates.value = allResults.slice(1)
   
   // 诊断信息
   showDiagnosis.value = true
@@ -329,14 +355,35 @@ function handleMatch() {
     .map(t => getMatchDiagnosis(t, data))
     .filter(d => d.rules.length > 0) // 只显示有规则的模板
   
-  ElMessage.success(`匹配到: ${matchResult.value.template.name}`)
+  ElMessage.success(`匹配到: ${matchResult.value!.template.name}`)
 }
 
 // 使用模板：跳转到 OpenPrint 设计器并加载该模板
-function handleUseTemplate() {
-  if (!matchResult.value) return
-  const id = matchResult.value.template.id
-  ElMessage.success(`已选择模板: ${matchResult.value.template.name}, 正在打开设计器...`)
+// 业务数据走 Pinia 直传：useBusinessDataStore.setFromMatcher()，
+// 设计器页 onMounted 时通过 usePreviewDataStore.data 拿到同一份。
+// sessionStorage 仅作兜底（SPA 重置/刷新整页时恢复）。
+function handleUseTemplate(template?: ReportTemplate) {
+  const target = template ?? matchResult.value?.template
+  if (!target) return
+  const id = target.id
+  let parsed: unknown = null
+  if (dataJson.value.trim()) {
+    try {
+      parsed = JSON.parse(dataJson.value)
+    } catch {
+      ElMessage.warning('JSON 解析失败，跳转后将使用默认示例数据')
+    }
+  }
+  if (parsed && typeof parsed === 'object') {
+    const bizStore = useBusinessDataStore()
+    bizStore.setFromMatcher(parsed as Record<string, unknown>)
+    try {
+      sessionStorage.setItem('op:matcher:lastData', JSON.stringify(parsed))
+    } catch (e) {
+      console.warn('sessionStorage 写入失败：', e)
+    }
+  }
+  ElMessage.success(`已选择模板: ${target.name}, 正在打开设计器...`)
   router.push({ path: '/op-designer', query: { id: String(id) } })
 }
 
@@ -345,14 +392,24 @@ loadSampleData()
 </script>
 
 <style scoped>
+/* Bug：之前 min-height: 100vh 让页面随内容自由增高，正常窗口下要滚整页才能看完。
+   用户被迫手动缩放或拖滚动条，体验差。改为 height: 100vh 锁视口，
+   三个区（数据输入 / 匹配结果 / 诊断）各自 max-height + overflow-y 内部滚动。 */
 .matcher-page {
   padding: 20px;
   background: #f0f2f5;
-  min-height: 100vh;
+  height: 100vh;
+  /* 100dvh 在移动浏览器里能避开地址栏的视觉跳动，桌面端回落 100vh */
+  height: 100dvh;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .page-header {
-  margin-bottom: 20px;
+  margin-bottom: 16px;
+  flex-shrink: 0;
 }
 
 .page-header h2 {
@@ -363,6 +420,9 @@ loadSampleData()
 
 .matcher-content {
   display: flex;
+  flex: 1;
+  min-height: 0; /* 关键：允许 flex 子项收缩到内容之下，否则内部 overflow 不生效 */
+  gap: 20px;
   gap: 20px;
 }
 
@@ -371,6 +431,19 @@ loadSampleData()
   background: #fff;
   border-radius: 4px;
   padding: 20px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* 滚动容器：包住 JSON textarea / 快速设置区，超出 viewport 时内部滚动
+   （避免整个数据输入卡片被裁切或撑破 100vh 限制） */
+.data-input-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .data-input-section h3 {
@@ -410,6 +483,18 @@ loadSampleData()
   background: #fff;
   border-radius: 4px;
   padding: 20px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* 滚动容器：包住匹配结果卡片 / 候选列表 / 诊断区 */
+.result-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .result-section h3 {
@@ -496,6 +581,17 @@ loadSampleData()
   margin: 0 0 12px 0;
   font-size: 13px;
   color: #606266;
+  display: flex;
+  align-items: center;
+}
+
+/* 候选列表滚动容器 —— Bug：之前没有 max-height，模板多时整页被顶得很长
+   用户无法用滚轮只看候选区。固定高度 + overflow-y 让候选区内部滚动，
+   左侧数据输入面板保持在视野里不被顶下去。 */
+.other-candidates-scroll {
+  max-height: 360px;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .candidate-card {
@@ -526,16 +622,44 @@ loadSampleData()
   font-size: 12px;
 }
 
+.candidate-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
 .diagnosis-section {
-  margin-top: 20px;
+  margin-top: 16px;
   background: #fff;
   border-radius: 4px;
   padding: 20px;
+  flex-shrink: 0;
+  /* 固定高度，不让诊断面板把页面顶破 100vh；
+     内容超出时诊断面板内部 el-tabs__content 自己滚动。 */
+  max-height: 40vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .diagnosis-section h3 {
   margin: 0 0 16px 0;
   font-size: 15px;
+  flex-shrink: 0;
+}
+
+/* 诊断面板滚动 —— 模板很多时 el-tabs 内容会很长 */
+.diagnosis-section :deep(.el-tabs) {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.diagnosis-section :deep(.el-tabs__content) {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .diagnosis-footer {

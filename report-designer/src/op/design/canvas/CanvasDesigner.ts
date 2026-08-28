@@ -37,6 +37,11 @@ export interface CanvasDesignerEvents {
   /** 双击表格单元格进入编辑：返回物化了 cells 的控件与命中行列 */
   onCellEdit?: (info: { controlId: string; control: AnyControl; row: number; col: number }) => void
   /**
+   * 左键单击表格单元格进入"待绑态"：返回物化了 cells 的控件与命中行列。
+   * 视觉虚线框 + 顶部提示气泡，等用户点击左栏字段完成绑定。
+   */
+  onCellPendingBind?: (info: { controlId: string; control: AnyControl; row: number; col: number }) => void
+  /**
    * 画布变换心跳：对象拖拽/缩放/旋转或视口变化时触发。
    * 表格 HTML overlay 靠它重算定位（不走 store 直连，避免 store ↔ 画布循环依赖）。
    */
@@ -989,8 +994,11 @@ export class CanvasDesigner {
     c.on('object:added', bump)
     c.on('object:removed', bump)
 
-    // 双击单元格：进入原生 contenteditable 编辑（方案 A）
-    c.on('mouse:dblclick', (opt) => {
+    // 表格单元格交互（替代原 mouse:dblclick）：
+    //   - 左键(button=0)：进入"待绑态"（虚线框 + 提示气泡，等用户点字段）
+    //   - 右键(button=2)：进入属性编辑（CellToolbar 浮层）
+    // 注意：上面已有 mouse:down 用于记录 __prevPos；这里是新增独立的 mouse:down 处理器，Fabric 按注册顺序触发，互不冲突。
+    const cellMouseDownHandler = (opt: TPointerEventInfo) => {
       const target = opt.target
       if (!(target instanceof PrintTable)) return
       // 必须用 readControl（相对坐标），直接 toControl() 会把绝对坐标写进 store 导致漂移
@@ -1008,8 +1016,29 @@ export class CanvasDesigner {
         localY / Math.max(1e-6, target.getScaledHeight()),
       )
       if (!hit) return
-      this.events.onCellEdit?.({ controlId: target.controlId, control: ensured, row: hit.row, col: hit.col })
+      // opt.e 在 TouchEvent 上无 button；仅当是 MouseEvent 时读取 button 字段（触屏默认走左键=0）
+      const button = opt.e && 'button' in opt.e ? opt.e.button : 0
+      const info = { controlId: target.controlId, control: ensured, row: hit.row, col: hit.col }
+      if (button === 2) {
+        // 右键 → CellToolbar
+        this.events.onCellEdit?.(info)
+      } else if (button === 0) {
+        // 左键 → 待绑态
+        this.events.onCellPendingBind?.(info)
+      }
+    }
+    c.on('mouse:down', cellMouseDownHandler)
+    // Fabric 默认会拦截右键弹出系统菜单；这里禁用画布的 contextmenu 以便 button=2 路由到 onCellEdit
+    c.on('mouse:down', (opt) => {
+      if (opt.e && 'button' in opt.e && opt.e.button === 2) {
+        // 在画布容器层 preventDefault，避免系统菜单；具体落点逻辑由 cellMouseDownHandler 处理
+      }
     })
+    // 画布元素层屏蔽右键系统菜单（Fabric 不直接提供此事件，挂在 canvas upperCanvasEl）
+    const upper = (c as unknown as { upperCanvasEl?: HTMLCanvasElement }).upperCanvasEl
+    if (upper) {
+      upper.addEventListener('contextmenu', (e) => e.preventDefault())
+    }
 
     c.on('object:modified', (e) => {
       const obj = e.target

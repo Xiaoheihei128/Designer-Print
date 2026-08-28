@@ -52,8 +52,9 @@ export interface PlacedControl extends Box {
 /**
  * 表格行类型：决定样式（加粗/底色）与分页时能否被切开。
  * `static` = 设计期填写的静态行（布局网格正文行、数据表静态尾行如备注/签字栏）。
+ * `blank`  = P0-2 按纸张补空行：内容为空、无边框、不参与聚合。
  */
-export type RenderRowKind = 'header' | 'data' | 'group' | 'subtotal' | 'summary' | 'static'
+export type RenderRowKind = 'header' | 'data' | 'group' | 'subtotal' | 'summary' | 'static' | 'blank'
 
 export interface RenderCell {
   text: string
@@ -62,6 +63,12 @@ export interface RenderCell {
   colSpan?: number
   /** 跨行（表头 / 静态 / 布局网格单元格合并用） */
   rowSpan?: number
+  /**
+   * vMerge 占用标记：true 时渲染器不输出 <td>（上方锚行的 rowspan 已"吞掉"此格位）。
+   * 同行其他列照常输出 td —— 这是 vMerge 同列纵向合并的视觉机制：
+   * 让相邻行的"非 vMerge 列"仍按自己的数据渲染。
+   */
+  consumed?: true
   background?: string
   bold?: boolean
   /** 字号（pt） */
@@ -174,6 +181,7 @@ export type WarningCode =
   | 'EXPRESSION_ERROR' // 表达式求值失败
   | 'DATASOURCE_NOT_ARRAY' // 表格 dataSource 不是数组
   | 'DATASOURCE_EMPTY' // 表格数据为空
+  | 'DATASOURCE_MISSING' // 表格未设置 dataSource
   | 'CONTENT_OVERFLOW' // 内容超出可用高度被截断
   | 'IMAGE_UNRESOLVED' // 图片无法解析
   | 'BARCODE_FAILED' // 条码/二维码生成失败
@@ -182,6 +190,7 @@ export type WarningCode =
   | 'SIGNATURE_EMPTY' // 签名为空（未手写）
   | 'PAGE_LIMIT_REACHED' // 触发最大页数保护
   | 'ROW_TOO_TALL' // 单行高于整页可用高度
+  | 'PAGE_ROWS_CONFLICT' // fixBottomRows 与 pageRows 同时设置（pageRows 优先）
   | 'LABEL_GRID_DATA_MISSING' // 标签网格 dataSource 不存在或不是数组（回退纯布局平铺）
   | 'LABEL_GRID_DATA_EMPTY' // 标签网格 dataSource 为空数组（回退纯布局平铺）
 

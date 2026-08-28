@@ -246,3 +246,149 @@ describe('layout —— 表格拖到底部 + 下方控件（强转非末页回�
     expect(textOf(1, 'capital', 1, result)).toBe('伍拾元整')
   })
 })
+
+/* ============= P0-2 按纸张补空行（fixBottomRows） ============= */
+
+describe('layout —— fixBottomRows 按纸张补空行（跨页 + 末页不补）', () => {
+  const measurer = createCjkMeasurer()
+
+  /** 100 行数据、A4 纵向、无上下边距 → 必跨多页 */
+  function fixBottomTemplate(opts: { fixBottomRows: 'fill' | { min: number }; fixBottomMargin?: number }): TemplateData<AnyControl> {
+    const table = {
+      id: 'fb',
+      type: 'table',
+      left: 10,
+      top: 0,
+      width: 190,
+      height: 40,
+      dataSource: 'items',
+      columns: [
+        { title: '名称', field: 'items[].name', width: 140, headerAlign: 'center' },
+        { title: '金额', field: 'items[].amount', width: 50, headerAlign: 'center' },
+      ],
+      data: Array.from({ length: 100 }, (_, i) => ({ name: `n${i}`, amount: i + 1 })),
+      options: {
+        repeatHeader: true,
+        repeatFooter: false,
+        borders: 'all',
+        ...opts,
+      },
+    } as unknown as TableControl
+    return {
+      version: '1',
+      document: {
+        type: 'report',
+        page: {
+          width: 210,
+          height: 297,
+          unit: 'mm',
+          orientation: 'portrait',
+          margin: { top: 0, right: 10, bottom: 0, left: 10 },
+        },
+        sections: [{ type: 'body', components: [table] }],
+      },
+    }
+  }
+
+  const blankCountOf = (pageNo: number, result: LayoutResult): number =>
+    result.pages[pageNo]!.body.filter((n): n is PlacedTable => n.kind === 'table')
+      .reduce((sum, t) => sum + t.rows.filter((r) => r.kind === 'blank').length, 0)
+  const dataCountOf = (pageNo: number, result: LayoutResult): number =>
+    result.pages[pageNo]!.body.filter((n): n is PlacedTable => n.kind === 'table')
+      .reduce((sum, t) => sum + t.rows.filter((r) => r.kind === 'data').length, 0)
+
+  it('fill 模式：跨页每片都按剩余空间补 blank 行（中间页 + 末页同样适用）', async () => {
+    const result = await layout(fixBottomTemplate({ fixBottomRows: 'fill' }), {}, { measurer })
+    expect(result.pages.length, '应当跨多页').toBeGreaterThanOrEqual(2)
+
+    // 每页都应有 blank 行（fill 模式覆盖中间页 + 末页）
+    for (let p = 0; p < result.pages.length; p++) {
+      expect(blankCountOf(p, result), `第 ${p + 1} 页应有补空行`).toBeGreaterThan(0)
+      expect(dataCountOf(p, result), `第 ${p + 1} 页应保留数据行`).toBeGreaterThan(0)
+    }
+  })
+
+  it('fill 模式 + 单页凭证：只有一页时仍按可用空间补空', async () => {
+    // 数据极少 + 大可用 → 单页凭证场景
+    const tpl: TemplateData<AnyControl> = {
+      version: '1',
+      document: {
+        type: 'report',
+        page: {
+          width: 210,
+          height: 297,
+          unit: 'mm',
+          orientation: 'portrait',
+          margin: { top: 0, right: 10, bottom: 0, left: 10 },
+        },
+        sections: [
+          {
+            type: 'body',
+            components: [
+              {
+                id: 'cert',
+                type: 'table',
+                left: 10,
+                top: 0,
+                width: 190,
+                height: 40,
+                dataSource: 'items',
+                columns: [
+                  { title: '名称', field: 'items[].name', width: 140, headerAlign: 'center' },
+                  { title: '金额', field: 'items[].amount', width: 50, headerAlign: 'center' },
+                ],
+                data: [
+                  { name: 'A', amount: 20 },
+                  { name: 'B', amount: 30 },
+                ],
+                options: {
+                  repeatHeader: true,
+                  repeatFooter: false,
+                  borders: 'all',
+                  fixBottomRows: 'fill',
+                },
+              } as unknown as TableControl,
+            ],
+          },
+        ],
+      },
+    }
+    const result = await layout(tpl, {}, { measurer })
+    // fill 模式填满可用区域；不论跨页与否，第 1 页都应有 blank 行
+    expect(blankCountOf(0, result), '第 1 页应有补空行').toBeGreaterThan(0)
+  })
+
+  it('{ min: N } 模式：中间页数据行 ≥ N；不足时补 blank 行到 N（末页自然结束）', async () => {
+    const result = await layout(fixBottomTemplate({ fixBottomRows: { min: 30 } }), {}, { measurer })
+    const last = result.pages.length - 1
+    for (let p = 0; p < result.pages.length; p++) {
+      const data = dataCountOf(p, result)
+      if (p < last) {
+        // 中间页：必须 ≥ N（min 模式保证）
+        expect(data, `第 ${p + 1} 页数据行数`).toBeGreaterThanOrEqual(30)
+      } else {
+        // 末页：剩余数据行自然结束即可（可能 < min）
+        expect(data, `末页数据行数`).toBeGreaterThan(0)
+      }
+    }
+  })
+
+  it('fixBottomMargin：留白预留减少 blank 行数', async () => {
+    const tplNo = fixBottomTemplate({ fixBottomRows: 'fill' })
+    const tplWith = fixBottomTemplate({ fixBottomRows: 'fill', fixBottomMargin: 20 })
+    const rNo = await layout(tplNo, {}, { measurer })
+    const rWith = await layout(tplWith, {}, { measurer })
+    // 第 1 页 blank 数：带 margin 应更少
+    expect(blankCountOf(0, rWith)).toBeLessThanOrEqual(blankCountOf(0, rNo))
+  })
+
+  it('fixBottomRows=off：跨页无 blank 行（与开启时对比）', async () => {
+    const tplOn = fixBottomTemplate({ fixBottomRows: 'fill' })
+    const tplOff = fixBottomTemplate({ fixBottomRows: 'off' })
+    const rOn = await layout(tplOn, {}, { measurer })
+    const rOff = await layout(tplOff, {}, { measurer })
+    // 开启的页 1 应有 blank，关闭的页 1 应无 blank
+    expect(blankCountOf(0, rOn)).toBeGreaterThan(0)
+    expect(blankCountOf(0, rOff)).toBe(0)
+  })
+})

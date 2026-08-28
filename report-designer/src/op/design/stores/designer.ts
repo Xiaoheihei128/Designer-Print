@@ -13,6 +13,7 @@ import type {
   ControlType,
   LabelGridControl,
   RectControl,
+  TableCell,
   TableColumn,
   TableControl,
   ZoneControl,
@@ -25,7 +26,7 @@ import { assertTemplate } from '@op/core/spec/validator'
 import { genId } from '@op/utils/id'
 import { useHistoryStore } from './history'
 import { type ImportColumn } from '@op/design/utils/data-import'
-import { seedSummaryTail, syncDataTableHeight } from '@op/core/layout-engine/table-cells'
+import { seedSummaryTail, syncTableHeight, patchCell } from '@op/core/layout-engine/table-cells'
 
 /** 水印默认配置（开启后居中单个、45°、浅灰） */
 export const DEFAULT_WATERMARK: WatermarkConfig = {
@@ -92,6 +93,12 @@ export const useDesignerStore = defineStore('designer', () => {
    * 为 null 时表示无编辑。
    */
   const editingCell = ref<{ controlId: string; row: number; col: number } | null>(null)
+  /**
+   * 当前等待绑定字段的单元格（左键单击进入"待绑态"）。
+   * 与 editingCell 互斥：高亮虚线框，点击左栏字段即写入；
+   * 右键 / Esc / 失焦会自动清空。
+   */
+  const pendingBindCell = ref<{ controlId: string; row: number; col: number } | null>(null)
   /** 画布变换版本号：Fabric 对象移动/缩放/旋转或视口变化时自增，驱动 overlay 重算定位 */
   const canvasTick = ref(0)
 
@@ -102,9 +109,50 @@ export const useDesignerStore = defineStore('designer', () => {
 
   function openCellEditor(controlId: string, row: number, col: number): void {
     editingCell.value = { controlId, row, col }
+    // 进入属性编辑 → 退出待绑态（互斥）
+    if (pendingBindCell.value) pendingBindCell.value = null
   }
   function closeCellEditor(): void {
     editingCell.value = null
+  }
+
+  /** 进入待绑态：左键单击单元格 / 字段拖拽落到 canvas 时调用 */
+  function setPendingBind(controlId: string, row: number, col: number): void {
+    pendingBindCell.value = { controlId, row, col }
+    // 进入待绑态 → 退出属性编辑（互斥）
+    if (editingCell.value) closeCellEditor()
+  }
+  /** 退出待绑态：Esc / 点击别处 / 字段已绑 / 主动取消 */
+  function closePendingBind(): void {
+    pendingBindCell.value = null
+  }
+  /**
+   * 把字段路径绑到指定单元格：contentType=variable，写 field，清 text/expression。
+   * 用于拖拽绑定 + 待绑态点击绑定两个入口。
+   *
+   * 校验：
+   * - 控件存在且是表格
+   * - 不在 grid 边界外（patchCell 内部不会越界，但 row/col 越界则不写）
+   * - 明细单元格绑了主表字段（标量）不阻断，但写一条 warning 提示用户（语义可能错）
+   */
+  function bindFieldToCell(controlId: string, row: number, col: number, path: string): void {
+    const current = findControl(controlId)
+    if (!current || current.type !== 'table') return
+    const table = current as TableControl
+    const grid = (table as unknown as { cells?: TableCell[][] }).cells
+    if (!Array.isArray(grid) || row < 0 || col < 0 || row >= grid.length || col >= (grid[0]?.length ?? 0)) return
+    // v2: 拖字段绑到单元格同时写 segments 镜像（与老 field 字段并存，渲染层优先 segments）
+    const next = patchCell(table, row, col, {
+      contentType: 'variable',
+      field: path,
+      text: undefined,
+      expression: undefined,
+      segments: [{ kind: 'field', path }],
+    } as Partial<TableCell>)
+    // 走 updateControl：自带 history.push + 画布同步
+    updateControl(controlId, next)
+    // 绑完即退出待绑态
+    pendingBindCell.value = null
   }
   function bumpCanvasTick(): void {
     canvasTick.value++
@@ -193,6 +241,8 @@ export const useDesignerStore = defineStore('designer', () => {
         selectedIds.value = ids
         // 选中切走 → 退出单元格编辑，避免 overlay 抢走画布指针
         if (editingCell.value && !ids.includes(editingCell.value.controlId)) closeCellEditor()
+        // 选中切走 → 退出待绑态（避免虚线框挂在不可见表上）
+        if (pendingBindCell.value && !ids.includes(pendingBindCell.value.controlId)) closePendingBind()
       },
       onObjectModified: (newControl) => {
         const old = findControl(newControl.id)
@@ -230,6 +280,11 @@ export const useDesignerStore = defineStore('designer', () => {
         updateControlSilent(info.controlId, info.control as AnyControl)
         openCellEditor(info.controlId, info.row, info.col)
       },
+      onCellPendingBind: (info) => {
+        // 物化 cells 网格（同 onCellEdit 注释）
+        updateControlSilent(info.controlId, info.control as AnyControl)
+        setPendingBind(info.controlId, info.row, info.col)
+      },
     })
     d.setPage(pageSetup.value)
     designer.value = d
@@ -265,9 +320,10 @@ export const useDesignerStore = defineStore('designer', () => {
         r.height = size
       }
     }
-    // 数据表：控件高度 = 行高之和（所见即所得），覆盖默认 60mm 或拖入时 init.height
+    // 表格：控件高度 = 行高之和（所见即所得）。覆盖默认 60mm 或拖入时 init.height；
+    // 布局网格同样适用 —— 用户设 designRows=0 后画布框必须收紧到自然占位高度，否则下方空 50mm 假正文
     if (control.type === 'table') {
-      const synced = syncDataTableHeight(control as TableControl)
+      const synced = syncTableHeight(control as TableControl)
       if (synced !== control) control = synced as unknown as AnyControl
     }
     if (control.type === 'zone') {
@@ -338,8 +394,10 @@ export const useDesignerStore = defineStore('designer', () => {
     const id = genId()
     const columns: TableColumn[] = payload.columns.map((c) => ({
       title: c.title || c.key,
-      // 内嵌数据行经 resolveRows 落入 ctx.row，列 field 用 items[]. 前缀即可逐行取值
-      field: `items[].${c.key}`,
+      // 导入数据：列 field 直接用 ReportItems[].key，
+      // 引擎在 resolveRows 阶段把嵌入行（dataSource="__embedded__"）放入 ctx.row，模板里 {{row.xxx}} 可直接用。
+      // 注意：这里仍保留 ReportItems[]. 前缀以便和老数据源场景共存；嵌入数据的 key 与列名一一对应。
+      field: c.key,
       width: colWidth,
       headerAlign: 'center',
     }))
@@ -353,6 +411,8 @@ export const useDesignerStore = defineStore('designer', () => {
       printable: true,
       columns,
       headerRows: 1,
+      // 导入数据场景：显式声明走内嵌数据（不再由 dataSource 解析业务数据）
+      dataSource: '__embedded__',
       data: payload.records,
       options: {
         repeatHeader: true,
@@ -593,9 +653,9 @@ export const useDesignerStore = defineStore('designer', () => {
         r.height = size
       }
     }
-    // 数据表：高度跟随行高之和（所见即所得）
+    // 表格：高度跟随行高之和（所见即所得）；布局网格 designRows=0 时画布框也要收紧
     if (child.type === 'table') {
-      const synced = syncDataTableHeight(child as TableControl)
+      const synced = syncTableHeight(child as TableControl)
       if (synced !== child) child = synced as unknown as AnyControl
     }
     const prev = cur.children ?? []
@@ -646,9 +706,9 @@ export const useDesignerStore = defineStore('designer', () => {
     if (!current) return
     const old = JSON.parse(JSON.stringify(current)) as AnyControl // 深拷贝旧状态
     let merged = { ...current, ...patch, id: current.id, type: current.type } as AnyControl
-    // 数据表：控件高度跟随行高之和，保证画布包围盒 = 渲染尺寸（所见即所得）
+    // 表格：控件高度跟随行高之和（画布包围盒 = 渲染尺寸，所见即所得）；布局网格 designRows=0 时也要收紧
     if (merged.type === 'table') {
-      const synced = syncDataTableHeight(merged as TableControl)
+      const synced = syncTableHeight(merged as TableControl)
       if (synced !== merged) merged = synced as unknown as AnyControl
     }
     replaceControl(merged)
@@ -680,9 +740,9 @@ export const useDesignerStore = defineStore('designer', () => {
     const current = findControl(id)
     if (!current) return
     let merged = { ...current, ...patch, id: current.id, type: current.type } as AnyControl
-    // 数据表：控件高度跟随行高之和，保证画布包围盒 = 渲染尺寸（所见即所得）
+    // 表格：控件高度跟随行高之和（画布包围盒 = 渲染尺寸，所见即所得）；布局网格 designRows=0 时也要收紧
     if (merged.type === 'table') {
-      const synced = syncDataTableHeight(merged as TableControl)
+      const synced = syncTableHeight(merged as TableControl)
       if (synced !== merged) merged = synced as unknown as AnyControl
     }
     replaceControl(merged)
@@ -920,6 +980,28 @@ export const useDesignerStore = defineStore('designer', () => {
     lastSavedAt.value = null
   }
 
+  /**
+   * 全新空白画布 + 一张 3 列 4 行空白表格（1 表头 + 3 正文行）。
+   * 替换默认启动行为：每次进入设计器都从这一张「空白 3×4 报表」开始，
+   * 不再自动恢复上次保存的模板（避免误打开「销售出库单示例」之类历史模板）。
+   * 历史栈清空、dirty=false —— 用户首次编辑才进入 undo 路径。
+   *
+   * 实现：直接复用 createDefaultControl('table') 的默认配置（保证拖表格组件、初始画布
+   * 三处一致），不走 addControlOfType（它会推 undo 栈，初始空白不应有这一步历史）。
+   */
+  function newBlankWith3x4Table(): void {
+    newBlankTemplate()
+    const d = designer.value
+    if (!d) return
+    const table = createDefaultControl('table', { leftMm: 15, topMm: 20 }) as TableControl | null
+    if (!table) return
+    const synced = syncTableHeight(table)
+    controls.value.push(synced)
+    d.addControl(synced, { select: false })
+    useHistoryStore().clear()
+    dirty.value = false
+  }
+
   /** 另存为：以新名称创建一份新模板（不清空当前画布，仅复制持久化） */
   async function saveTemplateAs(name: string): Promise<{ ok: boolean; error?: string }> {
     templateName.value = name
@@ -1006,12 +1088,12 @@ export const useDesignerStore = defineStore('designer', () => {
         d.addControl(zone, { select: false })
       }
     }
-    // 载入时归一化：数据表控件高度 = 行高之和（画布包围盒 = 渲染尺寸，所见即所得）；
-    // 布局网格高度即真理，syncDataTableHeight 会原样返回，不影响。
+    // 载入时归一化：表格控件高度 = 行高之和（画布包围盒 = 渲染尺寸，所见即所得）；
+    // 数据表与布局网格都走同一逻辑（designRows=0 时画布框也收紧到自然占位高度）。
     const loadNormalize = (c: AnyControl): AnyControl => {
       const base = { ...c, id: c.id || genId() }
       if (base.type === 'table') {
-        return syncDataTableHeight(base as TableControl) as unknown as AnyControl
+        return syncTableHeight(base as TableControl) as unknown as AnyControl
       }
       return base
     }
@@ -1081,6 +1163,7 @@ export const useDesignerStore = defineStore('designer', () => {
     backendMode,
     gridConfig,
     editingCell,
+    pendingBindCell,
     canvasTick,
     minPages,
     pageCount,
@@ -1091,6 +1174,9 @@ export const useDesignerStore = defineStore('designer', () => {
     goToPage,
     openCellEditor,
     closeCellEditor,
+    setPendingBind,
+    closePendingBind,
+    bindFieldToCell,
     bumpCanvasTick,
   signatureModalOpen,
   pendingSignatureDrop,
@@ -1121,6 +1207,7 @@ export const useDesignerStore = defineStore('designer', () => {
     currentTemplateId,
     setRepository,
     newBlankTemplate,
+    newBlankWith3x4Table,
     saveTemplateAs,
     saveTemplate,
     loadTemplate,
@@ -1167,38 +1254,32 @@ function createDefaultControl(
     case 'image':
       return { ...base, type, width: 40, height: 25, value: { mode: 'inline', content: '' }, fit: 'contain' }
     case 'table':
-      return seedSummaryTail(
-        {
-          ...base,
-          type,
-          width: 180,
-          height: 60,
-          columns: [
-            { title: '序号', expression: '{{rowIndex + 1}}', width: 15, align: 'center', headerAlign: 'center' },
-            { title: '名称', field: 'items[].name', width: 60 },
-            { title: '数量', field: 'items[].qty', width: 25, headerAlign: 'center' },
-            { title: '单价', field: 'items[].price', width: 30, headerAlign: 'center' },
-            { title: '金额', field: 'items[].amount', width: 30, headerAlign: 'center' },
-          ],
-          // 自带示例数据：预览 / 打印即可看到填充内容与自动计算的小计
-          data: [
-            { name: '示例商品 A', qty: 2, price: 12.5, amount: 25 },
-            { name: '示例商品 B', qty: 1, price: 36, amount: 36 },
-            { name: '示例商品 C', qty: 5, price: 8, amount: 40 },
-          ],
-          // 默认单元格居中（defaultCellStyle 兜底，列/单元格显式对齐仍可覆盖）
-          options: {
-            repeatHeader: true,
-            repeatFooter: true,
-            pageRows: 'auto',
-            borders: 'all',
-            verticalAlign: 'middle',
-            defaultCellStyle: { align: 'center' },
-          },
+      // 默认 3 列 × 4 行的空白布局网格：1 行表头 + 3 行正文，无数据源 / 无示例数据。
+      // 用户可手动加列、绑字段、设对齐 —— 与「新建空白报表」的初始体感一致，
+      // 避免拖出表格就被「序号/名称/数量/单价/金额」+ 嵌入示例数据 + 本页合计占满画布。
+      // 历史说明：早期版本默认带 5 列示例商品表 + 三行尾结构，方便预览/打印看效果；
+      // 但用户反馈「拉表格都是销售报表」体验不佳，改为空白网格起点（2026-08-27）。
+      return {
+        ...base,
+        type,
+        width: 180,
+        height: 30,
+        columns: [
+          { id: genId('col'), title: '列 1', width: 60, align: 'center', headerAlign: 'center' },
+          { id: genId('col'), title: '列 2', width: 60, align: 'center', headerAlign: 'center' },
+          { id: genId('col'), title: '列 3', width: 60, align: 'center', headerAlign: 'center' },
+        ],
+        headerRows: 1,
+        designRows: 3,
+        options: {
+          repeatHeader: true,
+          repeatFooter: false,
+          pageRows: 'auto',
+          borders: 'all',
+          verticalAlign: 'middle',
+          defaultCellStyle: { align: 'center' },
         },
-        // 默认植入完整「本页合计 + 总计 + 大写金额」三行尾结构
-        { numericColumns: [2, 3, 4], moneyColumn: 4, capital: true },
-      )
+      }
     case 'barcode':
       // 高度 30mm ≈ 113px：足够容纳 bwip-js 条码条（约 21mm）+ 文字行 + 上下留白，
       // 避免默认 15mm 时文字行被 scaleY 压扁到看不见。

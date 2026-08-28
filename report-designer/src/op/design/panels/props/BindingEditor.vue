@@ -5,7 +5,7 @@
  */
 import { computed } from 'vue'
 import { NSelect } from 'naive-ui'
-import { useDataSourceStore } from '@op/design/stores/dataSource'
+import { useFieldCatalogStore } from '@op/design/stores/fieldCatalog'
 
 const props = defineProps<{
   value?: string
@@ -16,10 +16,10 @@ const emit = defineEmits<{
   'update:value': [value: string | undefined]
 }>()
 
-const dsStore = useDataSourceStore()
+const catalog = useFieldCatalogStore()
 
 const options = computed(() => {
-  return dsStore.flatFields.map((f) => ({
+  return catalog.flatFields.map((f) => ({
     label: `${f.label}（${f.path}）`,
     value: f.path,
   }))
@@ -40,6 +40,6 @@ const innerValue = computed({
     tag
     clearable
     :placeholder="placeholder ?? '选择或输入绑定字段'"
-    :loading="dsStore.loading"
+    :loading="catalog.loading"
   />
 </template>

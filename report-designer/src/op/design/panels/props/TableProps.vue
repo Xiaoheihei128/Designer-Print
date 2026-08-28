@@ -18,10 +18,11 @@ import {
   NColorPicker,
   NCollapse,
   NCollapseItem,
+  NTooltip,
 } from 'naive-ui'
 import type { TableColumn, TableControl, TableOptions, TableCellStyle, CellFormat, CellFormatKind, TableStylePreset } from '@op/types/control'
 import { useDesignerStore } from '@op/design/stores/designer'
-import { useDataSourceStore } from '@op/design/stores/dataSource'
+import { useFieldCatalogStore } from '@op/design/stores/fieldCatalog'
 import {
   addTableColumn,
   moveTableColumn,
@@ -67,7 +68,7 @@ function patchColumn(index: number, p: Partial<TableColumn>): void {
 
 /**
  * 列字段下拉选项：与左侧数据源联动。
- * 数据表的列字段应是「数组（明细）字段」——路径含 `items[].`，运行期按行迭代取值。
+ * 数据表的列字段应是「数组（明细）字段」——路径含 `ReportItems[].`，运行期按行迭代取值。
  * 自由文本仍允许（用户可手填任意路径），故用 NAutoComplete 而非 NSelect。
  */
 const columnFieldOptions = computed(() => {
@@ -84,6 +85,30 @@ const columnFieldOptions = computed(() => {
 /** 列是否参与尾行合计（本页合计 / 总计） */
 function setColumnAggregate(index: number, on: boolean): void {
   patchColumn(index, { aggregate: on ? true : false })
+}
+
+/* --------------------- M3 P0-1 vMerge（同值纵向合并）--------------------- */
+/**
+ * 列是否启用 vMerge：勾选 → 把列 id 加入 options.vMerge.columns；取消 → 移出。
+ * 列 id 由 buildTableModel 入口的 ensureColumnIds 兜底生成（详见 table-cells.ts），
+ * UI 上读 col.id 即可；老模板列若没 id，此处返回 undefined 也不会崩（兜底后必有值）。
+ */
+function isVMergeCol(index: number): boolean {
+  const c = control.value?.columns?.[index]
+  if (!c?.id) return false
+  const vm = control.value?.options?.vMerge?.columns
+  return Array.isArray(vm) && vm.includes(c.id)
+}
+
+function setVMergeCol(index: number, on: boolean): void {
+  const c = control.value?.columns?.[index]
+  if (!c?.id) return // 列无 id 时不响应（ensureColumnIds 兜底，但保险起见）
+  const opts = control.value?.options
+  const current: string[] = opts?.vMerge?.columns ?? []
+  const next = on
+    ? current.includes(c.id) ? current : [...current, c.id]
+    : current.filter((id) => id !== c.id)
+  patchOptions({ vMerge: { ...opts?.vMerge, columns: next } })
 }
 
 /** 应用一个返回"新控件"的网格纯函数（保持类型/ID 不变） */
@@ -194,12 +219,41 @@ function isPresetDatePattern(p?: string): boolean {
 }
 
 /* --------------------------- 数据源 store（合计/分组字段枚举） --------------------------- */
-const ds = useDataSourceStore()
+const ds = useFieldCatalogStore()
 
 /* ------------------------------ 合计行（总计） ------------------------------ */
 
 const summary = computed(() => control.value?.options?.summaryRow ?? null)
 const hasSummary = computed(() => summary.value !== null)
+
+/* --------------- P0-2 按纸张补空行（fixBottomRows） --------------- */
+// 把 fixBottomRows 的三态（off / fill / { min }）映射到 NSelect 的下拉：
+// - 'off'  → "关闭"
+// - 'fill' → "填满至页底"
+// - 其它   → "最少 N 行"（附带 NInputNumber 改 min）
+const fixBottomModeOptions: Array<{ label: string; value: 'off' | 'fill' | 'min' }> = [
+  { label: '关闭', value: 'off' },
+  { label: '填满至页底', value: 'fill' },
+  { label: '最少 N 行', value: 'min' },
+]
+const fixBottomMode = computed(() => {
+  const v = control.value?.options?.fixBottomRows
+  if (v === undefined || v === 'off') return 'off'
+  if (v === 'fill') return 'fill'
+  return 'min'
+})
+const fixBottomMin = computed(() => {
+  const v = control.value?.options?.fixBottomRows
+  return typeof v === 'object' ? v.min : 10
+})
+function onFixBottomModeChange(mode: 'off' | 'fill' | 'min'): void {
+  if (mode === 'off') patchOptions({ fixBottomRows: 'off' })
+  else if (mode === 'fill') patchOptions({ fixBottomRows: 'fill' })
+  else patchOptions({ fixBottomRows: { min: fixBottomMin.value || 10 } })
+}
+function onFixBottomMinChange(n: number | null): void {
+  patchOptions({ fixBottomRows: { min: Math.max(1, n ?? 10) } })
+}
 
 /** 开关合计行：开启时给一个兜底配置，关闭时清空 summaryRow 与遗留的 summary[]（单真相源） */
 function toggleSummary(on: boolean): void {
@@ -311,6 +365,34 @@ function patchGroupBy(v: string | null): void {
         placeholder="auto"
         clearable
         @update:value="patchOptions({ pageRows: $event ?? 'auto' })"
+      />
+    </div>
+    <div class="props-row">
+      <span class="props-label" style="min-width: 88px">按纸张补空</span>
+      <NSelect
+        size="small"
+        :value="fixBottomMode"
+        :options="fixBottomModeOptions"
+        style="min-width: 140px"
+        @update:value="onFixBottomModeChange"
+      />
+      <NInputNumber
+        v-if="fixBottomMode === 'min'"
+        size="small"
+        :value="fixBottomMin"
+        :min="1"
+        placeholder="N"
+        style="width: 80px"
+        @update:value="onFixBottomMinChange"
+      />
+      <NInputNumber
+        v-if="fixBottomMode === 'fill'"
+        size="small"
+        :value="control.options?.fixBottomMargin ?? 0"
+        :min="0"
+        placeholder="mm"
+        style="width: 80px"
+        @update:value="patchOptions({ fixBottomMargin: $event ?? 0 })"
       />
     </div>
   </div>
@@ -453,6 +535,9 @@ function patchGroupBy(v: string | null): void {
 
   <div v-if="control" class="props-section">
     <div class="props-title">网格结构</div>
+    <!-- 三种行数始终展示：表头行数永远可调；正文行数（布局网格可调、数据表置灰由数据源决定）；
+         固定尾行（数据表可调用于备注 / 签字栏、布局网格置灰无此概念）。保持 UI 一致，
+         同时让用户直观看到模型里这三个字段各自的适用场景。 -->
     <div class="props-row">
       <span class="props-label" style="min-width: 88px">表头行数</span>
       <NInputNumber
@@ -464,34 +549,47 @@ function patchGroupBy(v: string | null): void {
         @update:value="setHeaderRows($event)"
       />
     </div>
-    <template v-if="!isData">
-      <div class="props-row">
-        <span class="props-label" style="min-width: 88px">正文行数</span>
-        <NInputNumber
-          size="small"
-          button-placement="both"
-          :value="control.designRows ?? 0"
-          :min="0"
-          :max="100"
-          @update:value="setDesignRows($event)"
-        />
-      </div>
-      <div class="props-tip">布局网格：双击单元格可填写静态内容（表头 / 正文）。</div>
-    </template>
-    <template v-else>
-      <div class="props-row">
-        <span class="props-label" style="min-width: 88px">固定尾行</span>
-        <NInputNumber
-          size="small"
-          button-placement="both"
-          :value="control.staticRows ?? 0"
-          :min="0"
-          :max="20"
-          @update:value="setStaticRows($event)"
-        />
-      </div>
-      <div class="props-tip">数据表：固定尾行用于备注 / 签字栏等；合计行由「高级选项」配置。</div>
-    </template>
+    <div class="props-row">
+      <span class="props-label" style="min-width: 88px">正文行数</span>
+      <NTooltip :disabled="!isData">
+        <template #trigger>
+          <NInputNumber
+            size="small"
+            button-placement="both"
+            :value="control.designRows ?? 0"
+            :min="0"
+            :max="100"
+            :disabled="isData"
+            @update:value="setDesignRows($event)"
+          />
+        </template>
+        数据表行数由数据源决定（每条数据自动生成一行）；正文行数仅对布局网格生效。
+      </NTooltip>
+    </div>
+    <div class="props-row">
+      <span class="props-label" style="min-width: 88px">固定尾行</span>
+      <NTooltip :disabled="isData">
+        <template #trigger>
+          <NInputNumber
+            size="small"
+            button-placement="both"
+            :value="control.staticRows ?? 0"
+            :min="0"
+            :max="20"
+            :disabled="!isData"
+            @update:value="setStaticRows($event)"
+          />
+        </template>
+        布局网格无「固定尾行」概念（行数全部由表头/正文控制）；仅数据表可配置备注 / 签字栏。
+      </NTooltip>
+    </div>
+    <div class="props-tip">
+      {{
+        isData
+          ? '数据表：固定尾行用于备注 / 签字栏等；合计行由「高级选项」配置。'
+          : '布局网格：双击单元格可填写静态内容（表头 / 正文）。'
+      }}
+    </div>
   </div>
 
   <div v-if="control" class="props-section">
@@ -551,7 +649,7 @@ function patchGroupBy(v: string | null): void {
           class="flex-1"
           :value="col.field ?? ''"
           :options="columnFieldOptions"
-          placeholder="选择或输入字段，如 items[].qty"
+          placeholder="选择或输入字段，如 ReportItems[].qty"
           @update:value="patchColumn(i, { field: $event || undefined })"
         />
         <NButton size="tiny" title="从数据源选择字段" @click="openColVar(i)">
@@ -565,6 +663,17 @@ function patchGroupBy(v: string | null): void {
           :value="col.aggregate === true || col.aggregate === 'sum' || col.aggregate === 'avg' || col.aggregate === 'count'"
           @update:value="(v: boolean) => setColumnAggregate(i, v)"
         />
+      </div>
+      <div class="props-row" v-if="isData">
+        <span class="props-label">同值合并</span>
+        <NSwitch
+          size="small"
+          :value="isVMergeCol(i)"
+          @update:value="(v: boolean) => setVMergeCol(i, v)"
+        />
+      </div>
+      <div class="props-tip" v-else>
+        同值合并仅适用于<b>数据表</b>（已绑定明细数组数据源）。静态表的跨行合并请在设计画布上直接合并单元格。
       </div>
       <div class="grid grid-cols-2 gap-2">
         <div class="props-row">
@@ -816,6 +925,28 @@ function patchGroupBy(v: string | null): void {
             ]"
             @update:value="patchOptions({ borders: $event })"
           />
+        </div>
+        <!-- M3 P0-1 vMerge 高级：组头边界断开（v1 默认开）；跨页合并 v1 锁定 -->
+        <div class="props-row" v-if="isData && (control.options?.vMerge?.columns?.length ?? 0) > 0">
+          <span class="props-label" style="min-width: 88px">组头边界断开</span>
+          <NSwitch
+            size="small"
+            :value="control.options?.vMerge?.breakOnGroup ?? true"
+            @update:value="patchOptions({ vMerge: { ...control.options?.vMerge, breakOnGroup: $event } })"
+          />
+        </div>
+        <div class="props-row" v-if="isData && (control.options?.vMerge?.columns?.length ?? 0) > 0">
+          <span class="props-label" style="min-width: 88px">跨页合并</span>
+          <NTooltip>
+            <template #trigger>
+              <NSwitch
+                size="small"
+                :value="false"
+                disabled
+              />
+            </template>
+            v1 限定：vMerge 组必须完整落在同一页（避免 rowspan 跨页被 PDF 打印截断）
+          </NTooltip>
         </div>
       </NCollapseItem>
     </NCollapse>

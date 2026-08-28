@@ -343,6 +343,55 @@ describe('rowRoleLabel', () => {
     expect(rowRoleLabel(grid, 3)).toBe('总计行')
     expect(rowRoleLabel(grid, 4)).toBe('大写金额行')
   })
+
+  /**
+   * 修复 Bug8：固定尾行（无聚合 token 的 static 行）之前被错误地叫"数据行"，
+   * 与真正的"数据样例行"混淆，导致用户误以为"绑了字段没用"。现统一为"静态行"。
+   * 覆盖 3 个场景：数据表固定尾行 / 数据表手写静态文本行 / 布局网格正文行。
+   */
+  it('固定尾行（无聚合 token）显示为"静态行"，不与数据样例行混淆', () => {
+    // 场景 1：数据表 1 表头 + 1 数据样例 + 2 固定尾行（无 token）
+    const t1 = buildDesignGrid({
+      id: 't',
+      type: 'table',
+      left: 0, top: 0, width: 160, height: 60,
+      columns: [
+        { title: '名称', field: 'items[].name', width: 80 },
+        { title: '金额', field: 'items[].amount', width: 80 },
+      ],
+      headerRows: 1,
+      data: [{ name: 'a', amount: 1 }],
+      staticRows: 2,
+      options: { pageRows: 'auto' },
+    })
+    expect(rowRoleLabel(t1, 0)).toBe('标题行')
+    expect(rowRoleLabel(t1, 1)).toBe('数据行')      // 数据样例行
+    expect(rowRoleLabel(t1, 2)).toBe('静态行')      // 固定尾行 1
+    expect(rowRoleLabel(t1, 3)).toBe('静态行')      // 固定尾行 2
+
+    // 场景 2：固定尾行里有普通文本（如"备注：xxxx"），仍属"静态行"
+    t1.cells![2]![0] = { text: '备注：' }
+    t1.cells![3]![0] = { text: '签字：' }
+    expect(rowRoleLabel(t1, 2)).toBe('静态行')
+    expect(rowRoleLabel(t1, 3)).toBe('静态行')
+
+    // 场景 3：布局网格（无 dataSource）非表头行也应为"静态行"
+    const t2 = buildDesignGrid({
+      id: 'g',
+      type: 'table',
+      left: 0, top: 0, width: 160, height: 60,
+      columns: [
+        { title: 'A', width: 80 },
+        { title: 'B', width: 80 },
+      ],
+      headerRows: 1,
+      designRows: 3,
+    })
+    expect(rowRoleLabel(t2, 0)).toBe('标题行')
+    expect(rowRoleLabel(t2, 1)).toBe('静态行')
+    expect(rowRoleLabel(t2, 2)).toBe('静态行')
+    expect(rowRoleLabel(t2, 3)).toBe('静态行')
+  })
 })
 
 describe('insertTableRow / insertTableColumn', () => {

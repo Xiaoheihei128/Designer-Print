@@ -14,6 +14,7 @@ import {
   designRowHeights,
   designRowInfo,
   ensureCells,
+  ensureColumnIds,
   moveTableColumn,
   normalizeCellRows,
   patchCell,
@@ -27,6 +28,7 @@ import {
   setGridRows,
   seedSummaryTail,
   syncDataTableHeight,
+  syncTableHeight,
 } from './table-cells'
 
 function baseTable(over: Partial<TableControl> = {}): TableControl {
@@ -232,6 +234,56 @@ describe('patchCell 不可变更新', () => {
     expect(next.cells![0]![0]!.text).toBe('改')
     expect(t.cells).toBeUndefined()
   })
+
+  it('P0-3 字段绑定写回：contentType=variable + field 路径 + 清 text/expression', () => {
+    const t = baseTable({ dataSource: 'items' })
+    // 目标格原本是 fixed 文本 → 模拟设计期默认填充
+    const next = patchCell(t, 1, 1, {
+      contentType: 'variable',
+      field: 'items[].qty',
+      text: undefined,
+      expression: undefined,
+    })
+    const cell = next.cells![1]![1]!
+    expect(cell.contentType).toBe('variable')
+    expect(cell.field).toBe('items[].qty')
+    expect(cell.text).toBeUndefined()
+    expect(cell.expression).toBeUndefined()
+    // 不可变：原控件未受影响
+    expect(t.cells).toBeUndefined()
+  })
+
+  it('P0-3 覆盖 expression 单元格：旧 expression 清空，新 field 生效', () => {
+    const t = baseTable({ dataSource: 'items' })
+    // 旧表达式
+    const withExpr = patchCell(t, 1, 1, { contentType: 'expression', expression: '{{row.qty*2}}' })
+    expect(withExpr.cells![1]![1]!.expression).toBe('{{row.qty*2}}')
+    // 改绑字段
+    const next = patchCell(withExpr, 1, 1, {
+      contentType: 'variable',
+      field: 'items[].qty',
+      text: undefined,
+      expression: undefined,
+    })
+    const cell = next.cells![1]![1]!
+    expect(cell.contentType).toBe('variable')
+    expect(cell.field).toBe('items[].qty')
+    expect(cell.expression).toBeUndefined()
+  })
+
+  it('P0-3 写回仅改目标格，其他单元格保留原值', () => {
+    const t = baseTable({ dataSource: 'items' })
+    const next = patchCell(t, 1, 1, {
+      contentType: 'variable',
+      field: 'items[].qty',
+      text: undefined,
+      expression: undefined,
+    })
+    // 第 0 列（序号）不应受影响
+    expect(next.cells![1]![0]!.expression).toBe('{{rowIndex + 1}}')
+    // 表头不受影响
+    expect(next.cells![0]![1]!.text).toBe('名称')
+  })
 })
 
 describe('网格结构变更（#100）', () => {
@@ -280,6 +332,12 @@ describe('网格结构变更（#100）', () => {
     expect(next.cells![0]![3]!.text).toBe('新列') // 表头新列取标题
   })
 
+  it('addTableColumn：新列自动生成稳定 id（vMerge / 列配置靠 id 引用）', () => {
+    const t = ensureCells(baseTable({ designRows: 1 }))
+    const next = addTableColumn(t, { title: '新列', width: 20 })
+    expect(next.columns[next.columns.length - 1]!.id).toMatch(/^col_/)
+  })
+
   it('removeTableColumn：删除指定列（含对应单元格），至少留 1 列', () => {
     const t = ensureCells(baseTable({ designRows: 2 }))
     t.cells![0]![1] = { text: 'B-col1' }
@@ -289,6 +347,19 @@ describe('网格结构变更（#100）', () => {
     expect(next.columns[0]!.title).toBe('序号')
     expect(next.columns[1]!.title).toBe('数量') // 原第 2 列（数量）左移
     expect(next.cells![0]![1]!.text).toBe('数量') // 单元格同步左移
+  })
+
+  it('removeTableColumn：被删列若在 vMerge.columns 里 → 自动剔除（不留 stale id）', () => {
+    const t = ensureCells(baseTable({ designRows: 1 }))
+    // 显式给两列加 id + 启用 vMerge
+    t.columns![0]!.id = 'col_a'
+    t.columns![1]!.id = 'col_b'
+    t.options = { ...t.options, vMerge: { columns: ['col_a', 'col_b'] } }
+    // 删第 1 列（col_b）→ vMerge 应只保留 col_a
+    const next = removeTableColumn(t, 1)
+    expect(next.options?.vMerge?.columns).toEqual(['col_a'])
+    // 不存在的列不在 vMerge 里
+    expect(next.options?.vMerge?.columns).not.toContain('col_b')
   })
 
   it('removeTableColumn：最后一列不可删', () => {
@@ -322,7 +393,10 @@ describe('网格结构变更（#100）', () => {
   })
 
   it('removeTableRow：单行表格不可删', () => {
-    const t = ensureCells(baseTable({ height: 8, headerRows: 0, designRows: 0, columns: [{ title: '', width: 10 }] }))
+    // 单行表格：1 行布局网格正文。删该行后只剩表头（headerRows=1）/或空（headerRows=0），
+    // removeTableRow 应不动。Bug12 后 layoutBodyRows 不再强制 ≥1（designRows 显式 0 可生效），
+    // 故用 designRows=1 显式构造单行场景。
+    const t = ensureCells(baseTable({ height: 8, headerRows: 0, designRows: 1, columns: [{ title: '', width: 10 }] }))
     expect(buildDesignGrid(t).rowCount).toBe(1)
     const next = removeTableRow(t, 0)
     expect(next).toBe(t)
@@ -334,6 +408,100 @@ describe('网格结构变更（#100）', () => {
     expect(next.columns[2]!.title).toBe('序号')
     expect(next.cells![0]![2]!.text).toBe('序号') // 单元格同列位置搬动
     expect(next.cells![0]![0]!.text).toBe('名称')
+  })
+
+  /* ============= Bug12 修复：布局网格 designRows 显式设为 0 时实际渲染 0 行正文 ============= */
+  it('Bug12：布局网格 designRows=0 → 画布无正文行（修复前因 Math.max(1,...) 多出 1 行空白）', () => {
+    // 1) 起手：1 表头 + 6 正文的布局网格（用户已填大量内容）
+    const t = ensureCells(baseTable({ designRows: 6 }))
+    t.cells![0]![0] = { text: 'H0' }
+    t.cells![1]![0] = { text: 'B0' }
+    t.cells![2]![0] = { text: 'B1' }
+    expect(t.cells!.length).toBe(7) // 1 表头 + 6 正文
+
+    // 2) 用户把 designRows 显式设为 0
+    const next = setGridRows(t, { designRows: 0 })
+    expect(next.designRows).toBe(0)
+    expect(next.cells!.length).toBe(1) // 仅保留表头
+
+    // 3) 渲染层 buildDesignGrid 应承认 designRows=0，不再回填空行
+    const grid = buildDesignGrid(next)
+    expect(grid.designRows).toBe(0)
+    expect(grid.rowCount).toBe(grid.headerRows + 0 + grid.staticRows)
+    // 用户填的表头内容仍在；正文 6 行全部消失
+    expect(grid.cells[0]![0]!.text).toBe('H0')
+    expect(grid.cells.length).toBe(grid.headerRows)
+  })
+
+  it('Bug12 回归保护：designRows 显式为正数时仍按显式值（不走 cells 推断）', () => {
+    // cells 已物化为 7 行，但 designRows 显式设为 2 → 应保留 2 正文行（截断第 3-6 行）
+    const t = ensureCells(baseTable({ designRows: 6 }))
+    const next = setGridRows(t, { designRows: 2 })
+    expect(next.designRows).toBe(2)
+    const grid = buildDesignGrid(next)
+    expect(grid.designRows).toBe(2)
+    expect(grid.rowCount).toBe(grid.headerRows + 2 + grid.staticRows)
+  })
+
+  it('Bug12 回归保护：designRows 未定义时，cells 行数仍是真理源', () => {
+    // 模拟老模板：cells 已物化 5 行（1 表头 + 4 正文），但 designRows 未显式设置
+    const t = ensureCells(baseTable({ designRows: 4 }))
+    // 显式置 undefined（模拟从来没设过）
+    const next: TableControl = { ...t, designRows: undefined as unknown as number }
+    const grid = buildDesignGrid(next)
+    // 旧行为：cells.length - headerRows = 4
+    expect(grid.designRows).toBe(4)
+  })
+
+  /* ============= Bug12 修复（canvas 高度同步）：designRows=0 时画布框也要收紧到自然行高 ============= */
+  it('Bug12 follow-up：designRows=0 → designRowHeights 返回自然行高而非把整段 control.height 硬塞给表头', () => {
+    // 修复前：bodyCount=0 时把整段 60mm 塞给表头 → 画布下方空出 50mm 假正文
+    // 修复后：按 naturalRowH（默认 8mm）输出 → syncTableHeight 可把 control.height 收紧到真实占位
+    const t = ensureCells(baseTable({ designRows: 6, height: 60 }))
+    const next = setGridRows(t, { designRows: 0 })
+    const heights = designRowHeights(next)
+    expect(heights).toHaveLength(1) // 仅表头
+    // 表头按自然行高（8mm）输出，不再等于 control.height 60
+    expect(heights[0]).toBeLessThan(60)
+    expect(heights[0]).toBeGreaterThan(0)
+  })
+
+  it('Bug12 follow-up：syncTableHeight 在 designRows=0 时把 control.height 收紧到自然占位高度', () => {
+    // 修复前：control.height 永远 = 原值 → 画布框 = 60mm 但表格只占 8mm，画布/预览位置错位
+    // 修复后：control.height 收紧到 = Σ heights，让画布框 = 真实渲染尺寸（WYSIWYG）
+    const t = ensureCells(baseTable({ designRows: 6, height: 60 }))
+    const next = setGridRows(t, { designRows: 0 })
+    expect(next.height).toBe(60) // setGridRows 自身不动 height
+    const synced = syncTableHeight(next)
+    expect(synced.height).toBeLessThan(60) // 收紧到自然占位
+    expect(synced.height).toBeGreaterThan(0)
+    expect(synced.designRows).toBe(0) // 关键：designRows 仍是 0，没被改回去
+    // 再次 sync 是 no-op（已对齐）
+    const synced2 = syncTableHeight(synced)
+    expect(synced2).toBe(synced) // 同一引用，避免 reactivity 抖动
+  })
+
+  it('Bug12 follow-up：syncTableHeight 在 designRows 保持正数时是 no-op（不破坏用户拖出的高度）', () => {
+    // 回归保护：用户拖表格改高度时不能被 syncTableHeight 反向覆盖
+    const t = ensureCells(baseTable({ designRows: 6, height: 60 }))
+    // 模拟用户拖到 80mm
+    const resized: TableControl = { ...t, height: 80 }
+    const synced = syncTableHeight(resized)
+    // 1 表头 + 6 正文的布局网格，自然行高之和 ≈ control.height（均分）→ no-op
+    expect(synced.height).toBe(80)
+    expect(synced).toBe(resized)
+  })
+
+  it('Bug12 follow-up：syncTableHeight 在 designRows 从 6 改到 0 后画布/预览一致', () => {
+    // 端到端：设 0 后画布应只占 ~8mm，与实际渲染 1 行表头一致
+    const t = ensureCells(baseTable({ designRows: 6, height: 60 }))
+    const after = syncTableHeight(setGridRows(t, { designRows: 0 }))
+    // buildDesignGrid 与 designRowHeights 一致 → sum(heights) === control.height
+    const heights = designRowHeights(after)
+    expect(after.height).toBeCloseTo(heights.reduce((s, h) => s + h, 0), 6)
+    // 渲染层也承认只有 1 行
+    const grid = buildDesignGrid(after)
+    expect(grid.rowCount).toBe(1)
   })
 })
 
@@ -484,5 +652,29 @@ describe('setCellRowSpan 纵向合并', () => {
     const next = setCellRowSpan(t, 0, 0, 99)
     expect(next.cells![0]![0]!.rowSpan).toBe(3) // 从第 0 行到底边共 3 行
     expect(next.cells![2]![0]!.rowSpan).toBeUndefined()
+  })
+})
+
+describe('ensureColumnIds —— 老模板兼容（M3 P0-1）', () => {
+  it('列无 id 时一次性补齐', () => {
+    const t = baseTable({ columns: [{ title: 'A', width: 10 }, { title: 'B', width: 20 }] })
+    const next = ensureColumnIds(t)
+    expect(next.columns![0]!.id).toMatch(/^col_/)
+    expect(next.columns![1]!.id).toMatch(/^col_/)
+    expect(next.columns![0]!.id).not.toBe(next.columns![1]!.id)
+  })
+
+  it('列已有 id 时不动（保证幂等）', () => {
+    const t = baseTable({ columns: [{ id: 'cust', title: 'A', width: 10 }, { id: 'amt', title: 'B', width: 20 }] })
+    const next = ensureColumnIds(t)
+    expect(next.columns![0]!.id).toBe('cust')
+    expect(next.columns![1]!.id).toBe('amt')
+  })
+
+  it('vMerge.columns 命中不存在的 id 时静默剔除（脏配置清理）', () => {
+    const t = baseTable({ columns: [{ id: 'cust', title: 'A', width: 10 }] })
+    t.options = { ...t.options, vMerge: { columns: ['cust', 'ghost_id'] } }
+    const next = ensureColumnIds(t)
+    expect(next.options?.vMerge?.columns).toEqual(['cust'])
   })
 })

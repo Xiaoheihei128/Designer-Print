@@ -30,14 +30,16 @@ import type { RenderWarning } from '@op/core/layout-engine/types'
 import { mmToPx } from '@op/core/units'
 import { builtinFontFaceCss } from '@op/core/fonts/loader'
 import { useSystemFonts } from '@op/core/fonts/system'
-import { useDataSourceStore } from '@op/design/stores/dataSource'
+import { useFieldCatalogStore } from '@op/design/stores/fieldCatalog'
+import { usePreviewDataStore } from '@op/design/stores/previewData'
 import { useDesignerStore } from '@op/design/stores/designer'
 
 const props = defineProps<{ show: boolean }>()
 const emit = defineEmits<{ (e: 'update:show', value: boolean): void }>()
 
 const store = useDesignerStore()
-const dsStore = useDataSourceStore()
+const catalog = useFieldCatalogStore()
+const previewDataStore = usePreviewDataStore()
 const message = useMessage()
 
 const iframeRef = ref<HTMLIFrameElement | null>(null)
@@ -66,6 +68,7 @@ const WARNING_LABEL: Record<RenderWarning['code'], string> = {
   EXPRESSION_ERROR: '表达式错误',
   DATASOURCE_NOT_ARRAY: '数据源非数组',
   DATASOURCE_EMPTY: '数据为空',
+  DATASOURCE_MISSING: '数据源未设置',
   CONTENT_OVERFLOW: '内容溢出',
   IMAGE_UNRESOLVED: '图片未解析',
   BARCODE_FAILED: '条码失败',
@@ -74,6 +77,7 @@ const WARNING_LABEL: Record<RenderWarning['code'], string> = {
   SIGNATURE_EMPTY: '签名为空',
   PAGE_LIMIT_REACHED: '触达页数上限',
   ROW_TOO_TALL: '行高超页',
+  PAGE_ROWS_CONFLICT: '按纸张补空与固定行数冲突',
   LABEL_GRID_DATA_MISSING: '标签数据源缺失',
   LABEL_GRID_DATA_EMPTY: '标签数据为空',
 }
@@ -84,11 +88,11 @@ async function doRender(): Promise<void> {
   rendering.value = true
   errorText.value = ''
   try {
-    // 确保数据源字段已加载(未打开过「数据源」tab 时 fieldCache 为空 → 预览数据为空)
-    // init 幂等: fetchFields 有 10 分钟缓存, 重复调用开销可忽略
-    await dsStore.init()
+    // 确保字段目录已加载(未打开过「数据源」tab 时 cache 为空 → 预览数据为空)
+    // init 幂等: loadFields 有 10 分钟缓存, 重复调用开销可忽略
+    await catalog.init()
     const template = store.buildTemplate()
-    const data = dsStore.previewData
+    const data = previewDataStore.data
 
     const res = await render({
       template,

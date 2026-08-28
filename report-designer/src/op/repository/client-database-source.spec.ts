@@ -20,7 +20,8 @@ describe('createClientDatabaseSource', () => {
     expect(sources[0]!.name).toBe('shop.db / orders')
     const table = sources[0]!.tables![0]!
     expect(table.isArray).toBe(true)
-    expect(table.pathPrefix).toBe(DB_ARRAY_PREFIX)
+    // pathPrefix 沿用 catalog 约定：数组路径带 `[]` 后缀（与 sales-order 一致）
+    expect(table.pathPrefix).toBe(`${DB_ARRAY_PREFIX}[]`)
   })
 
   it('字段 path 统一走 items[].col 前缀', async () => {

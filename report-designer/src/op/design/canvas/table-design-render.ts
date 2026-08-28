@@ -15,11 +15,29 @@ import {
   resolveCellStyleFor,
   type DesignRowKind,
 } from '@op/core/layout-engine/table-cells'
-import { isAggToken, parseAggToken } from '@op/core/layout-engine/aggregate'
+import { isAggToken, parseAggToken, type AggKind } from '@op/core/layout-engine/aggregate'
+import { hasSummaryRow, summaryLabel } from '@op/core/layout-engine/group-engine'
 import { normalizeColumnWidths } from '@op/core/layout-engine/table-engine'
 import { diagonalBackground } from '@op/core/renderer-html/css-generator'
 
 const PLACEHOLDER = '#9aa0a6'
+
+/**
+ * Bug:设计画布只读 cell.text,丢失 v2 模型下写在 cell.segments 里的聚合 token(用户点击
+ * ContentValueEditor「聚合」chip 走的就是 segments 单 text 段路径),导致数据样本行回退
+ * 到 col.field 占位符(如 {{item.Header.ReportNo}}),而非显示 {{#totalCount}}。
+ * 与运行期 table-engine.parseAggTokenFromCell 对齐:先 text、再 segments(单 text 段)。
+ */
+function cellAggToken(cell: TableCell): AggKind | null {
+  return parseAggToken(cell.text) ?? parseAggTokenFromSegments(cell.segments)
+}
+
+function parseAggTokenFromSegments(segments: TableCell['segments']): AggKind | null {
+  if (!segments || segments.length !== 1) return null
+  const seg = segments[0]!
+  if (seg.kind !== 'text') return null
+  return parseAggToken(seg.value)
+}
 
 /**
  * 各可视行的行高（mm），与渲染、命中测试共用。
@@ -87,6 +105,10 @@ function fieldPlaceholder(field: string): string {
 }
 
 function placeholderOf(cell: TableCell, col: TableColumn | undefined): string {
+  // 聚合 token 优先于 col.field 兜底：即便 cell.text 写了 {{#totalCount}} 也会被数据行
+  // isBoundCell=true 拉到这里,如果不先识别就回退到 col.field,显示成 {{item.Header.ReportNo}}
+  const tk = cellAggToken(cell)
+  if (tk) return `{{#${tk}}}`
   const mode = cell.contentType
   if (mode === 'expression') return cell.expression ?? ''
   if (mode === 'variable') return cell.field ? fieldPlaceholder(cell.field) : ''
@@ -178,15 +200,25 @@ export function renderTableGridHtml(control: TableControl): string {
       const col = control.columns[c]
       const span = spanRow[c]!.colSpan
       const rspan = spanRow[c]!.rowSpan
-      const isAgg = isAggToken(cell.text)
+      // ★ 同时识别 cell.text 老路径与 cell.segments 单 text 段 v2 路径，
+      //   否则 v2 模型下聚合 token 会被数据行 isBoundCell=true 拉到 col.field 兜底
+      const tk = cellAggToken(cell)
+      const isAgg = tk !== null
       const bound = isBoundCell(cell, col, isDataRow)
       // 聚合 token（{{#totalSum}} 等）按占位符着色显示，提示用户这是动态计算单元格
       const placeholder = bound || isAgg
-      const text = bound ? placeholderOf(cell, col) : (cell.text ?? '')
+      // 聚合 token 永远按字面 token 显示占位符，避免被 col.field 兜底吞掉
+      const text = tk
+        ? `{{#${tk}}}`
+        : bound
+          ? placeholderOf(cell, col)
+          : (cell.text ?? '')
       const style = cellStyle(control, cell, col, placeholder, kind)
       const spanAttr = span > 1 ? ` colspan="${span}"` : ''
       const rspanAttr = rspan > 1 ? ` rowspan="${rspan}"` : ''
-      const tdClass = isAgg ? ' is-agg' : ''
+      // M3 P0-1：启用 vMerge 的列加 is-vmerge-col 类，画布上提示用户该列运行期会去重合并
+      const vMergeOn = Boolean(col?.id && opts.vMerge?.columns?.includes(col.id))
+      const tdClass = `${isAgg ? 'is-agg ' : ''}${vMergeOn ? 'is-vmerge-col' : ''}`.trim()
       const styleAttr = style ? ` style="${style}"` : ''
       cells.push(
         `<td data-row="${r}" data-col="${c}"${spanAttr}${rspanAttr}${tdClass ? ` class="${tdClass}"` : ''}${styleAttr}>${esc(text) || '<br>'}</td>`,
@@ -197,11 +229,35 @@ export function renderTableGridHtml(control: TableControl): string {
     let cls = isDataRow ? 'is-data is-template' : isHeaderRow ? 'is-header' : 'is-static'
     // 聚合尾行（本页合计/总计/大写金额）对齐运行期 is-subtotal/is-summary 类，保证样式预设两端一致
     if (!isHeaderRow && !isDataRow) {
-      const tokens = (grid.cells[r] ?? []).map((c) => parseAggToken(c.text))
+      const tokens = (grid.cells[r] ?? []).map((c) => cellAggToken(c))
       if (tokens.some((t) => t === 'pageSum' || t === 'pageAvg' || t === 'pageCount')) cls = 'is-subtotal'
       else if (tokens.some((t) => t === 'totalSum' || t === 'totalAvg' || t === 'totalCount' || t === 'pageCap' || t === 'totalCap')) cls = 'is-summary'
     }
     rows.push(`<tr class="${cls}" style="height:${rh}mm">${cells.join('')}</tr>`)
+  }
+
+  // 合计行（options.summaryRow）：不在 control.cells 里，渲染期单独追加虚拟行
+  // 修复"右栏合计标签改了画布不体现"——之前设计画布只读 cells，summaryRow 不进 cells 所以空白
+  // 真实合计值由运行期 buildSummaryPlan 算出，此处只展示行存在 + 标签 + 占位符
+  if (hasSummaryRow(control)) {
+    const label = summaryLabel(control)
+    const sr = control.options?.summaryRow
+    // 行高 = 当前数据行高（auto 模式下 grid.rowCount = header+1，无数据行可参考；用 MIN_ROW_HEIGHT 兜底）
+    const dataRowH = rowHs[grid.headerRows] ?? rowHs[rowHs.length - 1] ?? 8
+    const fields = sr?.fields ?? []
+    const cols = control.columns ?? []
+    const placeholderCell = (col: TableColumn | undefined): string => {
+      const f = col?.field
+      const key = f && f.includes('[].') ? f.slice(f.indexOf('[].') + 3) : f
+      const inAgg = key !== undefined && fields.includes(key)
+      const text = inAgg ? '字段聚合' : '' // 占位提示，提示用户该列将参与合计
+      const align = col?.align ?? 'right'
+      const style = `font-weight:bold;text-align:${align};color:${PLACEHOLDER};white-space:nowrap;overflow:hidden;text-overflow:ellipsis`
+      return `<td class="is-agg" style="${style}">${esc(text) || '<br>'}</td>`
+    }
+    const labelCell = `<td style="font-weight:bold;text-align:left">${esc(label)}</td>`
+    const summaryCells = cols.map((c, i) => (i === 0 ? labelCell : placeholderCell(c)))
+    rows.push(`<tr class="is-summary" style="height:${dataRowH}mm">${summaryCells.join('')}</tr>`)
   }
 
   const tableStyle = opts.tableStyle ?? 'none'

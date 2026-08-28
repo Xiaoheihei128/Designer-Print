@@ -22,13 +22,13 @@ import {
 } from 'naive-ui'
 import { exportDocument, downloadBlob, type ExportFormat } from '@op/core/export-engine'
 import { useDesignerStore } from '@op/design/stores/designer'
-import { useDataSourceStore } from '@op/design/stores/dataSource'
+import { usePreviewDataStore } from '@op/design/stores/previewData'
 
 const props = defineProps<{ show: boolean }>()
 const emit = defineEmits<{ (e: 'update:show', value: boolean): void }>()
 
 const store = useDesignerStore()
-const dsStore = useDataSourceStore()
+const previewDataStore = usePreviewDataStore()
 const message = useMessage()
 
 const format = ref<ExportFormat>('pdf')
@@ -51,9 +51,9 @@ async function onExport(): Promise<void> {
   exporting.value = true
   try {
     const template = store.buildTemplate()
-    // 与预览共用同一份数据：数据库模式用真实行，sample/ERP 用明细行数合成
-    dsStore.setPreviewRowCount(rowCount.value)
-    const data = dsStore.previewData
+    // 与预览共用同一份数据：matcher/db 真实行优先，否则按 rowCount sample 合成
+    previewDataStore.setPreviewRowCount(rowCount.value)
+    const data = previewDataStore.data
     const res = await exportDocument(
       {
         template,

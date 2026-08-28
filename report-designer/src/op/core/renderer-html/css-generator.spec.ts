@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { generateCss, mmv } from '@op/core/renderer-html/css-generator'
+import { generateCss, mmv, tableCss } from '@op/core/renderer-html/css-generator'
 import { renderDocument } from '@op/core/sdk'
 import { createDemoTemplate } from '@op/repository/mock/data/demo-template'
 import { createCjkMeasurer } from '@op/core/__tests__/cjk-measurer'
@@ -57,5 +57,15 @@ describe('generateCss —— 动态样式生成', () => {
     expect(out).not.toContain('.op-barcode-svg')
     // 通用规则仍在：条码/二维码 SVG 均填满控件框
     expect(out).toContain('.op-code > svg { display: block; width: 100%; height: 100%; }')
+  })
+
+  it('Bug11 修复：vMerge 锚点（rowspan）有下边框 —— b-all + b-horizontal 各有专属规则', () => {
+    const out = tableCss()
+    // 锚点视觉下沿落在末行底边；tr:last-child td 不会命中锚点（锚点不在末行），
+    // 必须有 td[rowspan] 专属规则补上下边框
+    expect(out).toMatch(/\.op-table\.b-all\s+td\[rowspan\]\s*\{\s*border-bottom:[\s\S]*?;?\s*\}/)
+    expect(out).toMatch(/\.op-table\.b-horizontal\s+td\[rowspan\]\s*\{\s*border-bottom:[\s\S]*?;?\s*\}/)
+    // 回归保护：b-none 不能被新规则覆盖（仍是 border:0）
+    expect(out).toContain('.op-table.b-none td { border: 0')
   })
 })

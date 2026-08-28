@@ -31,8 +31,7 @@ import {
   useMessage,
 } from 'naive-ui'
 import { useDesignerStore } from '@op/design/stores/designer'
-import { useDataSourceStore } from '@op/design/stores/dataSource'
-import { buildPreviewData } from '@op/design/preview/preview-data'
+import { usePreviewDataStore } from '@op/design/stores/previewData'
 import { usePrinterProbe } from '@op/design/composables/usePrinterProbe'
 import {
   buildPrintPayload,
@@ -50,7 +49,7 @@ const props = defineProps<{ show: boolean }>()
 const emit = defineEmits<{ (e: 'update:show', v: boolean): void }>()
 
 const store = useDesignerStore()
-const dsStore = useDataSourceStore()
+const previewDataStore = usePreviewDataStore()
 const message = useMessage()
 
 /* ------------------------------ 打印模式 ------------------------------ */
@@ -324,7 +323,7 @@ async function doPrint(): Promise<void> {
   progressStage.value = '正在排版渲染…'
   try {
     const template = store.buildTemplate()
-    const data = buildPreviewData(dsStore.activeFields)
+    const data = previewDataStore.data
     const payload = await buildPrintPayload(
       {
         template,

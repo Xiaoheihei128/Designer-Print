@@ -75,6 +75,12 @@ export interface TextStyle {
 export interface TextControl extends ControlBase {
   type: 'text'
   /**
+   * 内容片段数组（v2 模型）。配置后优先于 value/binding/expression 渲染，
+   * 缺失时渲染端按 contentType/legacy 字段启发式回退。
+   * 与 value/binding/expression 可共存（互为镜像），持久化层在用户编辑时 lazy 迁移。
+   */
+  segments?: Segment[]
+  /**
    * 内容类型判别（显式三态）：
    * - 'fixed'      固定值（value 文本，可含手敲 {{}}）
    * - 'variable'   字段绑定（binding 路径）
@@ -164,7 +170,30 @@ export interface CellFormat {
   thousands?: boolean
 }
 
+/**
+ * 内容片段（segments）—— 把"3 选 1 互斥字段（value/binding/expression + contentType）"
+ * 升级为"有序的多片段数组"。任意文本/字段/表达式可自由组合，
+ * 例如：[{kind:'text', value:'外观：'}, {kind:'field', path:'items[].name'}, {kind:'text', value:' kg'}]。
+ *
+ * 渲染层（core/layout-engine/segments.ts）按片段逐个独立求值，单片段失败不影响其它。
+ * 老模板（无 segments 字段）走 legacyToSegments() 兼容回退，行为完全不变。
+ *
+ * 当前支持 4 类三态控件：TextControl / TableCell / BarcodeControl / QrcodeControl。
+ * ImageControl / RichTextControl / MathControl / SignatureControl 等不属于三态模式，不引入 segments。
+ */
+export type Segment =
+  | { kind: 'text'; value: string }
+  | { kind: 'field'; path: string; format?: CellFormat }
+  | { kind: 'expr'; src: string }
+
 export interface TableColumn {
+  /**
+   * 列稳定 id（不依赖数组下标，列增删后配置不丢）。
+   * 老模板（升级前保存的）可能没有 id，由 ensureColumnIds() 在 buildTableModel
+   * 入口运行时补齐（不写回持久化）。新模板在 addTableColumn 时自动生成。
+   * vMerge 等按列引用功能依赖此字段。
+   */
+  id?: string
   title: string
   /** 数据字段名（与 expression 二选一） */
   field?: string
@@ -200,6 +229,12 @@ export interface TableColumn {
  * 布局网格（无 dataSource）：全部 designRows 行均为静态内容。
  */
 export interface TableCell {
+  /**
+   * 内容片段数组（v2 模型）。配置后优先于 text/field/expression 渲染，
+   * 缺失时渲染端按 contentType/legacy 字段启发式回退。
+   * 与 text/field/expression 可共存（互为镜像）。
+   */
+  segments?: Segment[]
   /**
    * 内容类型判别（显式三态，与文本控件一致）：
    * - 'fixed'      固定文字（text）
@@ -258,6 +293,16 @@ export interface TableOptions {
   keepTogether?: boolean
   /** 数据行全空时跳过不打印（默认 false） */
   skipEmptyRows?: boolean
+  /**
+   * 按纸张大小默认填充空白行（仅中间页，末页不补）：
+   * - 'off'            不补（默认）
+   * - 'fill'           每页填满至内容区底部
+   * - { min: number }  每页至少 N 行（不含表头/表尾）
+   * 与 pageRows 互斥；同时设置时 pageRows 优先，warning 'PAGE_ROWS_CONFLICT'。
+   */
+  fixBottomRows?: 'off' | 'fill' | { min: number }
+  /** 离页底留白（mm，仅 fixBottomRows='fill' 生效；默认 0；银行回单建议 5-10） */
+  fixBottomMargin?: number
   /** 多单合并打印（默认 false，§9.2.1a） */
   mergeSheets?: boolean
   /** 斑马纹（默认 false） */
@@ -288,6 +333,20 @@ export interface TableOptions {
     subtotalLabel?: string
     /** 分组小计行样式（覆盖默认加粗 + 浅灰底；被单元格样式再覆盖） */
     subtotalStyle?: TableCellStyle
+  }
+  /**
+   * 同字段纵向合并（vMerge）：相邻同值数据行只在该组首行显示该列文字，
+   * 下方同值行由 rowspan 折叠隐藏（运行期按数据动态合并，跨页不可拆）。
+   *
+   * - columns：启用 vMerge 的列 id 集合（不是下标！）
+   * - breakOnGroup：默认 true。组头 / 小计边界强制断开 vMerge
+   * - breakOnPage：默认 true。vMerge 组必须完整落在同一页（v1 限定；跨页合并
+   *   在 PDF 打印时会被截断，与现有 rowSpan 行为一致）
+   */
+  vMerge?: {
+    columns?: string[]
+    breakOnGroup?: boolean
+    breakOnPage?: boolean
   }
 }
 
@@ -325,6 +384,11 @@ export interface TableControl extends ControlBase {
 export interface BarcodeControl extends ControlBase {
   type: 'barcode'
   /**
+   * 内容片段数组（v2 模型）。配置后优先于 value/binding/expression 渲染，
+   * 缺失时按 contentType/legacy 字段启发式回退（binding > value，三态不对称）。
+   */
+  segments?: Segment[]
+  /**
    * 内容类型判别（显式三态，与文本一致）：fixed=value / variable=binding / expression=expression。
    * 老模板无此字段时按 binding > value 启发式回退（见 data-binder.resolveCodeText）。
    */
@@ -343,6 +407,11 @@ export interface BarcodeControl extends ControlBase {
 
 export interface QrcodeControl extends ControlBase {
   type: 'qrcode'
+  /**
+   * 内容片段数组（v2 模型）。配置后优先于 value/binding/expression 渲染，
+   * 缺失时按 contentType/legacy 字段启发式回退（binding > value，三态不对称）。
+   */
+  segments?: Segment[]
   /**
    * 内容类型判别（显式三态，与文本一致）：fixed=value / variable=binding / expression=expression。
    * 老模板无此字段时按 binding > value 启发式回退（见 data-binder.resolveCodeText）。

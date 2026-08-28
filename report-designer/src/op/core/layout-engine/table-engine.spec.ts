@@ -634,3 +634,536 @@ describe('sliceTable —— 分页聚合（本页合计 / 总计 / 大写金额�
     expect(num(subtotal!.cells[amountCol]!.text)).toBe(190)
   })
 })
+
+/* ============= P0-2 fixBottomRows 按纸张补空行 ============= */
+
+describe('sliceTable —— P0-2 fixBottomRows 按纸张补空行', () => {
+  // 100mm avail + 30mm 表头 = 70mm 给数据/补空
+  // 数据行高 8mm → fill 模式应填 ~8 行
+  // 补空行高 = max(6, avgDataRowHeight(实际数据行))
+  function baseControl(opts: Partial<TableControl['options']> = {}): TableControl {
+    return {
+      id: 'tbl-fb',
+      type: 'table',
+      left: 0,
+      top: 0,
+      width: 100,
+      height: 50,
+      columns: [
+        { title: '序号', expression: '{{rowIndex + 1}}', width: 20 },
+        { title: '金额', field: 'amount', width: 40 },
+        { title: '名称', field: 'name', width: 40 },
+      ],
+      options: { borders: 'all', repeatHeader: true, repeatFooter: false, ...opts },
+      dataSource: 'items',
+    } as unknown as TableControl
+  }
+
+  it('fill 模式：中间页数据行 + 补空行填满至 avail', () => {
+    const control = baseControl({ fixBottomRows: 'fill' })
+    const items = Array.from({ length: 20 }, (_, i) => ({ amount: 10 + i, name: `n${i}` }))
+    const ctx: EvalContext = {
+      rows: items,
+      data: { items },
+      pageIndex: 1,
+      pageCount: 3,
+    }
+    const model = buildTableModel({ control, ctx, measurer: createCjkMeasurer() })
+    // avail 设很小 30mm：循环只放下 0-1 数据行，剩余预算大 → 触发补空
+    const slice = sliceTable(model, { avail: 30, start: 0 })
+    const dataCount = slice.rows.filter((r) => r.kind === 'data').length
+    const blankCount = slice.rows.filter((r) => r.kind === 'blank').length
+    expect(dataCount).toBeGreaterThanOrEqual(0)
+    expect(slice.isLast).toBe(false)
+    expect(blankCount).toBeGreaterThan(0)
+  })
+
+  it('末页也补空：单页凭证场景下 fill 模式按可用空间补空', () => {
+    const control = baseControl({ fixBottomRows: 'fill' })
+    const items = Array.from({ length: 3 }, (_, i) => ({ amount: i, name: `n${i}` }))
+    const ctx: EvalContext = {
+      rows: items,
+      data: { items },
+      pageIndex: 1,
+      pageCount: 1,
+      measure: { width: 80, text: () => ({ width: 0, height: 8 }) },
+    }
+    const model = buildTableModel({ control, ctx, measurer: createCjkMeasurer() })
+    // avail 远大于数据+合计高 → 触发补空（凭证场景：把表格块延展至页面底部，供手写留白）
+    const slice = sliceTable(model, { avail: 200, start: 0 })
+    expect(slice.isLast).toBe(true)
+    expect(slice.rows.filter((r) => r.kind === 'blank').length).toBeGreaterThan(0)
+  })
+
+  it('{ min: 5 }：每页至少 N 个数据行；不足时补空到 N', () => {
+    const control = baseControl({ fixBottomRows: { min: 5 } })
+    const items = Array.from({ length: 20 }, (_, i) => ({ amount: i, name: `n${i}` }))
+    const ctx: EvalContext = {
+      rows: items,
+      data: { items },
+      pageIndex: 1,
+      pageCount: 3,
+      measure: { width: 80, text: () => ({ width: 0, height: 8 }) },
+    }
+    const model = buildTableModel({ control, ctx, measurer: createCjkMeasurer() })
+    const slice = sliceTable(model, { avail: 100, start: 0 })
+    const dataCount = slice.rows.filter((r) => r.kind === 'data').length
+    expect(dataCount).toBeGreaterThanOrEqual(5)
+  })
+
+  it('fixBottomMargin：减量补空（mm 留白预留）', () => {
+    const control = baseControl({ fixBottomRows: 'fill', fixBottomMargin: 10 })
+    const items = Array.from({ length: 20 }, (_, i) => ({ amount: i, name: `n${i}` }))
+    const ctx: EvalContext = {
+      rows: items,
+      data: { items },
+      pageIndex: 1,
+      pageCount: 3,
+      measure: { width: 80, text: () => ({ width: 0, height: 8 }) },
+    }
+    const model = buildTableModel({ control, ctx, measurer: createCjkMeasurer() })
+    const sliceFull = sliceTable(
+      buildTableModel({ control: baseControl({ fixBottomRows: 'fill' }), ctx, measurer: createCjkMeasurer() }),
+      { avail: 100, start: 0 },
+    )
+    const sliceMargin = sliceTable(model, { avail: 100, start: 0 })
+    // 有 margin 的 blank 行更少
+    expect(sliceMargin.rows.filter((r) => r.kind === 'blank').length).toBeLessThanOrEqual(
+      sliceFull.rows.filter((r) => r.kind === 'blank').length,
+    )
+  })
+
+  it('与 pageRows 数字互斥：pageRows 优先，warning PAGE_ROWS_CONFLICT', () => {
+    const control = baseControl({ fixBottomRows: 'fill', pageRows: 5 })
+    const items = Array.from({ length: 20 }, (_, i) => ({ amount: i, name: `n${i}` }))
+    const ctx: EvalContext = {
+      rows: items,
+      data: { items },
+      pageIndex: 1,
+      pageCount: 3,
+      measure: { width: 80, text: () => ({ width: 0, height: 8 }) },
+    }
+    const model = buildTableModel({ control, ctx, measurer: createCjkMeasurer() })
+    const slice = sliceTable(model, { avail: 200, start: 0 })
+    expect(slice.warnings.some((w) => w.code === 'PAGE_ROWS_CONFLICT')).toBe(true)
+    // pageRows 决定 5 行；fixBottomRows 被忽略
+    expect(slice.rows.length).toBe(5)
+    expect(slice.rows.filter((r) => r.kind === 'blank').length).toBe(0)
+  })
+
+  it('fixBottomRows=off：完全无补空', () => {
+    const control = baseControl({ fixBottomRows: 'off' })
+    const items = Array.from({ length: 20 }, (_, i) => ({ amount: i, name: `n${i}` }))
+    const ctx: EvalContext = {
+      rows: items,
+      data: { items },
+      pageIndex: 1,
+      pageCount: 3,
+      measure: { width: 80, text: () => ({ width: 0, height: 8 }) },
+    }
+    const model = buildTableModel({ control, ctx, measurer: createCjkMeasurer() })
+    const slice = sliceTable(model, { avail: 100, start: 0 })
+    expect(slice.rows.filter((r) => r.kind === 'blank').length).toBe(0)
+  })
+})
+
+describe('buildBlankPlans —— 补空行生成', () => {
+  it('count=0 返回空数组', async () => {
+    const { buildBlankPlans } = await import('./group-engine')
+    expect(buildBlankPlans(0, 8, [30, 30, 40])).toEqual([])
+  })
+
+  it('生成 N 行，每行 cells 数 = 列数（与 colWidths 对齐）', async () => {
+    const { buildBlankPlans } = await import('./group-engine')
+    const rows = buildBlankPlans(3, 8, [30, 30, 40])
+    expect(rows).toHaveLength(3)
+    expect(rows[0]!.kind).toBe('blank')
+    expect(rows[0]!.height).toBe(8)
+    expect(rows[0]!.cells).toHaveLength(3)
+    expect(rows[0]!.cells.every((c) => c.text === '')).toBe(true)
+  })
+})
+
+describe('avgDataRowHeight —— 平均数据行高', () => {
+  it('有数据行：返回平均值', async () => {
+    const { avgDataRowHeight } = await import('./group-engine')
+    const rows = [
+      { kind: 'header' as const, height: 10, cells: [] },
+      { kind: 'data' as const, height: 6, cells: [], dataIndex: 0 },
+      { kind: 'data' as const, height: 10, cells: [], dataIndex: 1 },
+      { kind: 'static' as const, height: 20, cells: [] },
+    ]
+    expect(avgDataRowHeight(rows)).toBe(8)
+  })
+
+  it('无数据行：回落到 6mm（MIN_ROW_HEIGHT）', async () => {
+    const { avgDataRowHeight } = await import('./group-engine')
+    expect(
+      avgDataRowHeight([
+        { kind: 'header' as const, height: 10, cells: [] },
+        { kind: 'static' as const, height: 20, cells: [] },
+      ]),
+    ).toBe(6)
+  })
+})
+
+/* ============= M3 P0-1 vMerge 同字段纵向合并（集成 buildTableModel） ============= */
+
+describe('buildTableModel —— vMerge 集成', () => {
+  const measurer = createCjkMeasurer()
+
+  /** 构造一个含 id 的列配置，便于 vMerge 用列 id 引用 */
+  function buildVMergeControl(opts: {
+    columns?: Array<{ id: string; title: string; field: string; width: number }>
+    vMerge?: { columns: string[]; breakOnGroup?: boolean; breakOnPage?: boolean }
+    groupBy?: string
+    data: Array<Record<string, unknown>>
+  }): TableControl {
+    return {
+      id: 'vmt',
+      type: 'table',
+      left: 0,
+      top: 0,
+      width: 100,
+      height: 50,
+      dataSource: 'items',
+      columns: opts.columns as TableColumn[],
+      data: opts.data,
+      groupBy: opts.groupBy,
+      options: {
+        repeatHeader: true,
+        repeatFooter: false,
+        vMerge: opts.vMerge,
+      },
+    } as unknown as TableControl
+  }
+
+  const cols = (): Array<{ id: string; title: string; field: string; width: number }> => [
+    { id: 'name', title: '客户', field: 'name', width: 50 },
+    { id: 'qty', title: '数量', field: 'qty', width: 50 },
+  ]
+
+  it('1) vMerge 仅合并指定列：其他列每行独立显示数据，被吞行不删除', () => {
+    const control = buildVMergeControl({
+      columns: cols(),
+      vMerge: { columns: ['name'] },
+      data: [
+        { name: 'A', qty: 1 },
+        { name: 'A', qty: 2 },
+        { name: 'A', qty: 3 },
+        { name: 'B', qty: 4 },
+      ],
+    })
+    const ctx: EvalContext = { data: { items: control.data } } as EvalContext
+    const model = buildTableModel({ control, ctx, measurer, widthMm: 100, heightMm: 50 })
+    // 关键修正：4 行数据全部保留（被吞行不删除）
+    const dataRows = model.rows.filter((r) => r.kind === 'data')
+    expect(dataRows.length).toBe(4)
+    // 锚点 row 写 rowSpan=3（> 1 时写）；被吞行 row 0/1/2 上 name 列打 consumed=true
+    expect(dataRows[0]!.cells[0]!.rowSpan).toBe(3)
+    expect(dataRows[0]!.cells[0]!.consumed).toBeUndefined() // 锚点自身非 consumed
+    expect(dataRows[1]!.cells[0]!.consumed).toBe(true) // 被吞
+    expect(dataRows[2]!.cells[0]!.consumed).toBe(true)
+    expect(dataRows[3]!.cells[0]!.consumed).toBeUndefined() // B 单独
+    // 其他列（qty）不受影响，每行独立显示自己的数据
+    expect(dataRows[0]!.cells[1]!.text).toBe('1')
+    expect(dataRows[1]!.cells[1]!.text).toBe('2')
+    expect(dataRows[2]!.cells[1]!.text).toBe('3')
+    expect(dataRows[3]!.cells[1]!.text).toBe('4')
+    // 行高不放大：HTML rowspan=N 让锚格视觉占 N 行高（浏览器自动撑满）
+    // 所以每行 height 应一致
+    expect(dataRows[0]!.height).toBeCloseTo(dataRows[1]!.height, 6)
+  })
+
+  it('2) vMerge 与 repeatHeader 共存：表头后第一行即开始合并', () => {
+    const control = buildVMergeControl({
+      columns: cols(),
+      vMerge: { columns: ['name'] },
+      data: [
+        { name: 'X', qty: 1 },
+        { name: 'X', qty: 2 },
+      ],
+    })
+    const ctx: EvalContext = { data: { items: control.data } } as EvalContext
+    const model = buildTableModel({ control, ctx, measurer, widthMm: 100, heightMm: 50 })
+    // 2 行数据全部保留
+    expect(model.rows.length).toBe(2)
+    expect(model.rows[0]!.kind).toBe('data')
+    expect(model.rows[0]!.cells[0]!.rowSpan).toBe(2)
+    // 第 2 行 name 列被吞
+    expect(model.rows[1]!.cells[0]!.consumed).toBe(true)
+    // 第 2 行 qty 列仍显示自己的数据
+    expect(model.rows[1]!.cells[1]!.text).toBe('2')
+  })
+
+  it('3) vMerge 与 P0-2 补空行：补空行（kind=blank）不参与 vMerge，但被吞行（kind=data）保留在 model.rows', () => {
+    const control = buildVMergeControl({
+      columns: cols(),
+      vMerge: { columns: ['name'] },
+      data: [
+        { name: 'A', qty: 1 },
+        { name: 'B', qty: 2 },
+      ],
+    })
+    const ctx: EvalContext = { data: { items: control.data } } as EvalContext
+    const model = buildTableModel({ control, ctx, measurer, widthMm: 100, heightMm: 50 })
+    // P0-2 补空逻辑发生在 sliceTable（不是 buildTableModel），所以 model.rows 不含 blank。
+    // 这里验证：vMerge 计算后 2 个独立数据行都在（A/B 不同值 → 不合并）
+    expect(model.rows.length).toBe(2)
+    expect(model.rows[0]!.cells[0]!.rowSpan).toBeUndefined() // A 单独
+    expect(model.rows[1]!.cells[0]!.rowSpan).toBeUndefined() // B 单独
+    expect(model.rows[0]!.dataIndex).toBe(0)
+    expect(model.rows[1]!.dataIndex).toBe(1)
+  })
+
+  it('4) 列下标变化（id 稳定）：vMerge 通过列 id 命中正确列', () => {
+    // 列顺序变为 [qty, name]，但 vMerge 配 name → 应命中下标 1
+    const altColumns = [
+      { id: 'qty', title: '数量', field: 'qty', width: 50 },
+      { id: 'name', title: '客户', field: 'name', width: 50 },
+    ]
+    const control = buildVMergeControl({
+      columns: altColumns,
+      vMerge: { columns: ['name'] },
+      data: [
+        { name: '阿里', qty: 1 },
+        { name: '阿里', qty: 2 },
+      ],
+    })
+    const ctx: EvalContext = { data: { items: control.data } } as EvalContext
+    const model = buildTableModel({ control, ctx, measurer, widthMm: 100, heightMm: 50 })
+    // 2 行保留
+    expect(model.rows.length).toBe(2)
+    // name 在列 1，应被合并
+    expect(model.rows[0]!.cells[1]!.rowSpan).toBe(2)
+    expect(model.rows[1]!.cells[1]!.consumed).toBe(true)
+    // qty 在列 0，未启用 vMerge → 不写 rowSpan 也不 consumed
+    expect(model.rows[0]!.cells[0]!.rowSpan).toBeUndefined()
+    expect(model.rows[1]!.cells[0]!.consumed).toBeUndefined()
+  })
+})
+
+/* ============= Bug7 修复：cell.segments 单 text 段 + 聚合 token → buildFooterRow 识别 ============= */
+
+describe('Bug7 修复：cell.segments 单 text 段 agg token → 走 buildFooterRow 渲染大写', () => {
+  /**
+   * v2 模型下用户用 ContentValueEditor「聚合」按钮插入 token：
+   *   textToSegments('{{#totalCap}}') → [{ kind: 'text', value: '{{#totalCap}}' }]
+   *   → cell.text=undefined, cell.segments=[{text,'{{#totalCap}}'}]
+   * 老 buildFooterRow 只读 cell.text → 识别不到 token → fk='static' → 画布显示字面 '{{#totalCap}}'
+   * 修复后 buildFooterRow 也读 cell.segments（单 text 段），按 capital 渲染大写金额
+   */
+  function buildModel(control: TableControl, ctx: EvalContext): Model {
+    return buildTableModel({
+      control,
+      ctx,
+      measurer: createCjkMeasurer(),
+      widthMm: control.width,
+      heightMm: control.height,
+    })
+  }
+
+  function sliceAll(model: Model): Array<ReturnType<typeof sliceTable>> {
+    const slices: Array<ReturnType<typeof sliceTable>> = []
+    let start = 0
+    for (let p = 0; p < 20; p++) {
+      const s = sliceTable(model, { avail: 1000, start })
+      slices.push(s)
+      if (s.isLast) break
+      start = s.nextStart
+    }
+    return slices
+  }
+
+  it('segments 单 text 段 + {{#totalCap}} → 末页 footerKind=capital + 渲染大写金额', () => {
+    const ctrl: TableControl = {
+      id: 't1',
+      type: 'table',
+      left: 0,
+      top: 0,
+      width: 100,
+      height: 60,
+      dataSource: 'items',
+      columns: [
+        { title: '名称', field: 'items[].name', width: 50 },
+        { title: '金额', field: 'items[].amount', width: 50 },
+      ],
+      // ★ 关键：cell.segments 单 text 段为 agg token，cell.text 为空
+      cells: [
+        [{ text: '名称' }, { text: '金额' }],
+        [{ field: 'name' }, { field: 'amount' }],
+        [{ text: '大写：' }, { segments: [{ kind: 'text', value: '{{#totalCap}}' }] }],
+      ],
+      staticRows: 1,
+    }
+    const ctx: EvalContext = { data: { items: [{ name: 'A', amount: 100 }, { name: 'B', amount: 50 }] } }
+    const model = buildModel(ctrl, ctx)
+    const last = sliceAll(model).at(-1)!
+    const cap = last.footerRows.find((r) => r.footerKind === 'capital')
+    expect(cap, '末页应识别 capital 行').toBeTruthy()
+    // 大写金额：100 + 50 = 150 → 壹佰伍拾元整
+    expect(cap!.cells[1]!.text).toBe('壹佰伍拾元整')
+  })
+
+  it('cell.text 老路径（v1）也仍正常识别（回归保护）', () => {
+    const ctrl: TableControl = {
+      id: 't2',
+      type: 'table',
+      left: 0,
+      top: 0,
+      width: 100,
+      height: 60,
+      dataSource: 'items',
+      columns: [
+        { title: '名称', field: 'items[].name', width: 50 },
+        { title: '金额', field: 'items[].amount', width: 50 },
+      ],
+      cells: [
+        [{ text: '名称' }, { text: '金额' }],
+        [{ field: 'name' }, { field: 'amount' }],
+        [{ text: '大写：' }, { text: '{{#totalCap}}' }],
+      ],
+      staticRows: 1,
+    }
+    const ctx: EvalContext = { data: { items: [{ name: 'A', amount: 200 }] } }
+    const model = buildModel(ctrl, ctx)
+    const last = sliceAll(model).at(-1)!
+    const cap = last.footerRows.find((r) => r.footerKind === 'capital')
+    expect(cap).toBeTruthy()
+    expect(cap!.cells[1]!.text).toBe('贰佰元整')
+  })
+})
+
+/* ============= Bug10 修复：#totalCount / #pageCount 在非数值列也应计算 ============= */
+
+describe('Bug10 修复：count token（pageCount/totalCount）不依赖列字段类型', () => {
+  /**
+   * count token 语义：rows.length，与列字段无关。
+   * 老 buildFooterRow 用 `numeric && field` 双重门 → 字符串列（实测值 FinalVal 等）
+   * 的 #totalCount 被吞，画布显示空。
+   * 修复后：count token 直接标记 isAgg + tokenKind，不再被「非数值列」分支吞掉。
+   */
+  function buildModel(control: TableControl, ctx: EvalContext): Model {
+    return buildTableModel({
+      control,
+      ctx,
+      measurer: createCjkMeasurer(),
+      widthMm: control.width,
+      heightMm: control.height,
+    })
+  }
+  function sliceAll(model: Model): Array<ReturnType<typeof sliceTable>> {
+    const slices: Array<ReturnType<typeof sliceTable>> = []
+    let start = 0
+    for (let p = 0; p < 20; p++) {
+      const s = sliceTable(model, { avail: 1000, start })
+      slices.push(s)
+      if (s.isLast) break
+      start = s.nextStart
+    }
+    return slices
+  }
+
+  it('#totalCount 放在字符串列（FinalVal=文字）→ 末页 grandTotal 行 text = 数据行数', () => {
+    const ctrl: TableControl = {
+      id: 't10',
+      type: 'table',
+      left: 0, top: 0, width: 100, height: 60,
+      dataSource: 'items',
+      columns: [
+        { title: '名称', field: 'items[].name', width: 50 },
+        // 字符串列：实测值/结论等文字
+        { title: '实测', field: 'items[].finalVal', width: 50 },
+      ],
+      cells: [
+        [{ text: '名称' }, { text: '实测' }],
+        [{ field: 'name' }, { field: 'finalVal' }],
+        // 末行：「合计」 + #totalCount；#totalCount 在字符串列
+        [{ text: '合计' }, { text: '{{#totalCount}}' }],
+      ],
+      staticRows: 1,
+    }
+    const ctx: EvalContext = {
+      data: {
+        items: [
+          { name: 'A', finalVal: '符合规定' },
+          { name: 'B', finalVal: '合格' },
+          { name: 'C', finalVal: '94.6%' },
+        ],
+      },
+    }
+    const model = buildModel(ctrl, ctx)
+    const last = sliceAll(model).at(-1)!
+    const summary = last.footerRows.find((r) => r.footerKind === 'grandTotal')
+    expect(summary, '末页应识别 grandTotal 行').toBeTruthy()
+    // 修复点：count 列（第 2 列）text = '3'
+    expect(summary!.cells[1]!.text).toBe('3')
+  })
+
+  it('#pageCount 放在字符串列 → 本页合计行 text = 本页数据行数', () => {
+    const ctrl: TableControl = {
+      id: 't11',
+      type: 'table',
+      left: 0, top: 0, width: 100, height: 60,
+      dataSource: 'items',
+      columns: [
+        { title: '名称', field: 'items[].name', width: 50 },
+        { title: '实测', field: 'items[].finalVal', width: 50 },
+      ],
+      cells: [
+        [{ text: '名称' }, { text: '实测' }],
+        [{ field: 'name' }, { field: 'finalVal' }],
+        [{ text: '本页合计' }, { text: '{{#pageCount}}' }],
+      ],
+      staticRows: 1,
+      options: { pageRows: 2 } as TableControl['options'],
+    }
+    const ctx: EvalContext = {
+      data: {
+        items: Array.from({ length: 5 }, (_, i) => ({
+          name: 'item' + i,
+          finalVal: '合格',
+        })),
+      },
+    }
+    const model = buildModel(ctrl, ctx)
+    const slices = sliceAll(model)
+    // 5 行 / 2 行每页 → 3 页（前两页各 2 行，末页 1 行）
+    expect(slices.length).toBe(3)
+    slices.forEach((s, p) => {
+      const sub = s.footerRows.find((r) => r.footerKind === 'pageSubtotal')
+      expect(sub, `第 ${p + 1} 页应有本页合计`).toBeTruthy()
+      // 第 1、2 页各 2 行；第 3 页 1 行
+      const expected = p === 2 ? 1 : 2
+      expect(sub!.cells[1]!.text).toBe(String(expected))
+    })
+  })
+
+  it('回归保护：#totalSum 放在字符串列 → 仍按预期留空（非数值列不计算 sum）', () => {
+    const ctrl: TableControl = {
+      id: 't12',
+      type: 'table',
+      left: 0, top: 0, width: 100, height: 60,
+      dataSource: 'items',
+      columns: [
+        { title: '名称', field: 'items[].name', width: 50 },
+        { title: '实测', field: 'items[].finalVal', width: 50 },  // 字符串列
+      ],
+      cells: [
+        [{ text: '名称' }, { text: '实测' }],
+        [{ field: 'name' }, { field: 'finalVal' }],
+        [{ text: '合计' }, { text: '{{#totalSum}}' }],
+      ],
+      staticRows: 1,
+    }
+    const ctx: EvalContext = {
+      data: { items: [{ name: 'A', finalVal: '10' }, { name: 'B', finalVal: '20' }] },
+    }
+    const model = buildModel(ctrl, ctx)
+    const last = sliceAll(model).at(-1)!
+    const summary = last.footerRows.find((r) => r.footerKind === 'grandTotal')
+    expect(summary).toBeTruthy()
+    // sum 在非数值列不参与计算 → 留空（与原行为一致）
+    expect(summary!.cells[1]!.text).toBe('')
+  })
+})

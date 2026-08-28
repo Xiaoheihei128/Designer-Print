@@ -4,19 +4,25 @@
  * 交互：控件库卡片 draggable → dragstart 写入控件类型 →
  * 画布容器 dragover 允许放置 → drop 时把 client 坐标换算为
  * 相对页边距内容区（或页眉/页脚区域）的 mm 坐标，调用 store.addControlOfType。
+ *
+ * 注意：字段绑定走"左键待绑态 + 点击左栏字段"路径（见 DataSourceTree.vue onFieldClick），
+ * 本 hook 不再处理字段拖拽 — 字段拖拽的落点语义复杂（需命中 td 上下文/区分文本框），
+ * 用户选择保留更稳的"两键式"绑定流程。
  */
 import { onBeforeUnmount, onMounted, type Ref } from 'vue'
-import type { AnyControl, ControlType } from '@op/types/control'
+import type { ControlType } from '@op/types/control'
 import { useDesignerStore } from '@op/design/stores/designer'
 import { MM_TO_PX } from '@op/utils/constants'
 
 export const DRAG_TYPE_KEY = 'application/x-openprint-control'
+/** 字段路径 mime（保留供 DataSourceTree.vue:dragstart 引用，不在本 hook 使用） */
+export const DRAG_BINDING_KEY = 'application/x-openprint-binding'
 
 /** 拖拽时携带的额外初始属性（如圆形 shape），同标签页内拖拽为同步过程，用模块级变量传递 */
-let pendingInit: Partial<AnyControl> | undefined
+let pendingInit: Partial<unknown> | undefined
 
 /** 控件库侧：卡片 dragstart 调用；init 允许注入额外初始属性 */
-export function startControlDrag(e: DragEvent, type: ControlType, init?: Partial<AnyControl>): void {
+export function startControlDrag(e: DragEvent, type: ControlType, init?: Partial<unknown>): void {
   e.dataTransfer?.setData(DRAG_TYPE_KEY, type)
   pendingInit = init
   if (e.dataTransfer) e.dataTransfer.effectAllowed = 'copy'

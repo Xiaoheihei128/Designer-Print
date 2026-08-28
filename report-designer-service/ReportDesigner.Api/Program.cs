@@ -232,7 +232,7 @@ public static class Program
             new { path = "Header.InspectionBasis", label = "检验依据", type = "string", tableId = "header", group = "检验信息", sort = 14, sample = "GB/T 15046-2015" },
             new { path = "Header.Result", label = "检验结论", type = "string", tableId = "header", group = "检验信息", sort = 15, sample = "合格" },
             // ReportItems 明细
-            new { path = "ReportItems[].AnaItem", label = "检验项目", type = "string", tableId = "items", group = "检验明细", sort = 1, sample = "外观" },
+            new { path = "ReportItems[].AnalysisItem", label = "检验项目", type = "string", tableId = "items", group = "检验明细", sort = 1, sample = "外观" },
             new { path = "ReportItems[].TestStandard", label = "标准要求", type = "string", tableId = "items", group = "检验明细", sort = 2, sample = "无色至淡黄色透明液体" },
             new { path = "ReportItems[].FinalVal", label = "实测值", type = "string", tableId = "items", group = "检验明细", sort = 3, sample = "符合规定" },
             new { path = "ReportItems[].InspectionResultName", label = "单项结论", type = "string", tableId = "items", group = "检验明细", sort = 4, sample = "合格" },

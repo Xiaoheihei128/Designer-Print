@@ -8,7 +8,7 @@
  */
 import type { TableControl } from '@op/types/control'
 import { evaluate, resolveBinding, stringifyValue } from './expression'
-import type { EvalContext, RenderRowKind } from './types'
+import type { EvalContext, RenderCell, RenderRow, RenderRowKind } from './types'
 
 export type RowPlanKind = Extract<RenderRowKind, 'data' | 'group' | 'subtotal' | 'summary'>
 
@@ -211,3 +211,39 @@ export function buildSummaryPlan(
 }
 
 export { readField }
+
+/* ------------------------- P0-2 按纸张补空行 ------------------------- */
+
+/**
+ * 生成 N 行空白占位行（每行 height mm，cells 全为空）。
+ * 用于 sliceTable 在剩余预算里追加，使表格块填满至内容区底部。
+ *
+ * colWidths 决定 cells 数量（与列数一致），height 为平均数据行高（avgDataRowHeight）。
+ * 不参与 vMerge / 聚合 / 边框。设计期不渲染（避免布局网格被人为拉空）。
+ */
+export function buildBlankPlans(
+  count: number,
+  height: number,
+  colWidths: number[],
+): RenderRow[] {
+  if (count <= 0) return []
+  const cells: RenderCell[] = colWidths.map(() => ({ text: '', align: 'left' as const }))
+  return Array.from({ length: count }, () => ({
+    kind: 'blank' as const,
+    height,
+    cells,
+  }))
+}
+
+/**
+ * 计算一组数据行的平均行高（mm）。
+ * 用于补空决策：填满策略用此值决定能塞多少行。
+ * 行数 < 1 时回落到 6mm（MIN_ROW_HEIGHT），避免退化到 0 行。
+ */
+export function avgDataRowHeight(rows: RenderRow[]): number {
+  const data = rows.filter((r) => r.kind === 'data')
+  if (data.length === 0) return 6
+  let sum = 0
+  for (const r of data) sum += r.height
+  return sum / data.length
+}

@@ -24,6 +24,7 @@ import type {
 } from '@op/types/control'
 import { interpolate, evaluateVisible, resolveBinding, stringifyValue, formatCellValue } from './expression'
 import type { EvalContext, ResolvedContent, RenderWarning } from './types'
+import { resolveSegments } from './segments'
 import { renderChartControl } from '@op/core/chartkit'
 import { renderMathControl } from '@op/core/mathkit'
 
@@ -41,7 +42,12 @@ export function isControlPrintable(control: AnyControl, ctx: EvalContext): boole
 /* -------------------------------- 文本 -------------------------------- */
 
 /**
- * 文本取值优先级：expression > binding > value。
+ * 文本取值优先级：segments（v2 模型）> expression > binding > value。
+ *
+ * - segments 命中走 resolveSegments，单片段失败聚合 errors[]（与 interpolate 语义对齐）。
+ *   段级 format 优先；缺失时回退 control.format（与 binding 路径行为一致）。
+ * - 老路径 expression > binding > value 一字不动，老模板零迁移即可继续渲染。
+ *
  * 注意 `value` 里也允许写 `{{}}`（用户在属性面板静态文本里手打变量是常见操作），
  * 所以静态文本同样过一遍插值。
  */
@@ -49,6 +55,11 @@ export function resolveTextValue(
   control: TextControl,
   ctx: EvalContext,
 ): { text: string; errors: string[] } {
+  // v2: segments 优先
+  if (control.segments && control.segments.length) {
+    return resolveSegments(control.segments, ctx, { fallbackFormat: control.format })
+  }
+  // legacy: 一字不动
   if (control.expression) return interpolate(control.expression, ctx)
   if (control.binding) {
     // binding 模式：按控件 format 格式化（expression 模式请用 {{field | date:'...'}} 过滤器）
@@ -80,29 +91,38 @@ function resolveImageSrc(control: ImageControl, ctx: EvalContext): string {
 
 /** 条码/二维码编码文本：按 contentType 三态取值（表达式/字段绑定/静态），空值回落示例码 */
 export function resolveCodeText(control: BarcodeControl | QrcodeControl, ctx: EvalContext): string {
-  const mode = control.contentType
-  let raw: string | undefined
-  // 显式三态：expression → 表达式求值；variable → 字段绑定；fixed → 静态内容（可含 {{}} 插值）
-  if (mode === 'expression') {
-    raw = control.expression ? interpolate(control.expression, ctx).text : undefined
-  } else if (mode === 'variable') {
-    if (control.binding) {
-      const v = resolveBinding(control.binding, ctx)
-      if (v !== null && v !== undefined && v !== '') return String(v)
-    }
-    raw = undefined
-  } else if (mode === 'fixed') {
-    raw = control.value ? interpolate(control.value, ctx).text : undefined
+  // v2: segments 优先 —— 解出非空直接返回；为空仍走老路径 sample-code 兜底
+  // （保持"条码永不空白"的设计期占位约束）
+  if (control.segments && control.segments.length) {
+    const segText = resolveSegments(control.segments, ctx).text
+    if (segText) return segText
+    // 落入下方兜底
   } else {
-    // 老模板（无 contentType）：binding > value 启发式
-    if (control.binding) {
-      const v = resolveBinding(control.binding, ctx)
-      if (v !== null && v !== undefined && v !== '') return String(v)
+    const mode = control.contentType
+    let raw: string | undefined
+    // 显式三态：expression → 表达式求值；variable → 字段绑定；fixed → 静态内容（可含 {{}} 插值）
+    if (mode === 'expression') {
+      raw = control.expression ? interpolate(control.expression, ctx).text : undefined
+    } else if (mode === 'variable') {
+      if (control.binding) {
+        const v = resolveBinding(control.binding, ctx)
+        if (v !== null && v !== undefined && v !== '') return String(v)
+      }
+      raw = undefined
+    } else if (mode === 'fixed') {
+      raw = control.value ? interpolate(control.value, ctx).text : undefined
+    } else {
+      // 老模板（无 contentType）：binding > value 启发式
+      if (control.binding) {
+        const v = resolveBinding(control.binding, ctx)
+        if (v !== null && v !== undefined && v !== '') return String(v)
+      }
+      raw = control.value ? interpolate(control.value, ctx).text : undefined
     }
-    raw = control.value ? interpolate(control.value, ctx).text : undefined
+    if (raw) return raw
   }
   // 各模式内容为空：回落示例码（保持"条码永不空白"的设计期占位约束）
-  return raw || (control.type === 'qrcode' ? 'https://openprint.dev' : '0123456789')
+  return control.type === 'qrcode' ? 'https://openprint.dev' : '0123456789'
 }
 
 /**

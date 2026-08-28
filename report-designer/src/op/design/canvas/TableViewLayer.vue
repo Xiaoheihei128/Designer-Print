@@ -42,6 +42,10 @@ interface OverlayItem {
 }
 
 const editingId = computed(() => store.editingCell?.controlId ?? null)
+/** 待绑态单元格 id（与 editingCell 互斥） */
+const pendingId = computed(() => store.pendingBindCell?.controlId ?? null)
+/** 待绑态气泡位置（锚定到目标 td 顶部） */
+const pendingBubblePos = ref<{ x: number; y: number } | null>(null)
 
 /** 编辑行首列左侧的角色名标签（标题行 / 数据行 / 本页合计行 / 总计行 / 大写金额行）位置与文案 */
 const rowLabelPos = ref<{ x: number; y: number } | null>(null)
@@ -51,6 +55,42 @@ const editingRowLabel = computed(() => {
   if (!control || !e) return ''
   return rowRoleLabel(buildDesignGrid(control), e.row)
 })
+
+/**
+ * 给当前 pendingBindCell 对应的 td 打 `is-pending-bind` 类。
+ * 设计期 v-html 输出已生成，DOM 后处理比改渲染函数更不侵入。
+ */
+watch(
+  () => [store.pendingBindCell?.controlId, store.pendingBindCell?.row, store.pendingBindCell?.col, store.canvasTick] as const,
+  async () => {
+    await nextTick()
+    // 清掉所有旧标记
+    layerRef.value?.querySelectorAll('td.is-pending-bind').forEach((td) => td.classList.remove('is-pending-bind'))
+    const p = store.pendingBindCell
+    if (!p) {
+      pendingBubblePos.value = null
+      return
+    }
+    const wrap = wrapperOf(p.controlId)
+    if (!wrap) {
+      pendingBubblePos.value = null
+      return
+    }
+    const td = wrap.querySelector<HTMLElement>(`td[data-row="${p.row}"][data-col="${p.col}"]`)
+    if (!td) {
+      pendingBubblePos.value = null
+      return
+    }
+    td.classList.add('is-pending-bind')
+    // 气泡定位：锚定到 td 顶部 + 上方 28px
+    const a = td.getBoundingClientRect()
+    const layer = layerRef.value
+    if (!layer) return
+    const b = layer.getBoundingClientRect()
+    pendingBubblePos.value = { x: a.left - b.left, y: a.top - b.top - 28 }
+  },
+  { immediate: false },
+)
 
 /** 从 store 模型里取表格控件（overlay 写回的目标） */
 function controlById(id: string): TableControl | undefined {
@@ -70,6 +110,10 @@ const items = computed<OverlayItem[]>(() => {
   void store.canvasTick
   void store.controls
   void store.zones
+  // Bug9 修复：显式把 frozenHtml 列为依赖。
+  // editing 态下 overlay 用 frozenHtml 快照，若 items 不订阅 frozenHtml，
+  // refreshFrozen 改 frozenHtml 后画布不会立刻刷新 —— 表现为「改了字段画布不变」。
+  void frozenHtml.value
   const d = store.designer
   if (!d?.canvas) return []
   const vt = d.canvas.viewportTransform
@@ -342,11 +386,20 @@ function exitEditing(): void {
   store.closeCellEditor()
 }
 
-/** 工具栏改样式后重放 HTML（保留编辑态与焦点） */
+/**
+ * 工具栏改样式后重放 HTML（保留编辑态与焦点）
+ *
+ * Bug9 修复：除更新 frozenHtml 外，主动 bump canvasTick 触发 items 重算。
+ * 背景：editing 态下 overlay 展示 frozenHtml 快照，若 items computed 未把
+ * frozenHtml 列为依赖（或与 store.controls 的更新被合并到同一 tick 但
+ * 控制流中间有别处读 items 的早返），画布会停留在旧字段占位符。bump 后
+ * 强制 Vue 调度一次新渲染，避免与 CellToolbar apply 链路的竞态。
+ */
 async function refreshFrozen(id: string): Promise<void> {
   const control = controlById(id)
   if (!control) return
   frozenHtml.value = renderTableGridHtml(control)
+  store.bumpCanvasTick()
   await nextTick()
   enableEditing(id)
   void focusCell()
@@ -372,16 +425,50 @@ function isNaiveTeleportTarget(target: Node | null): boolean {
 }
 
 function onDocMouseDown(e: MouseEvent): void {
-  if (!store.editingCell) return
-  const target = e.target as Node | null
-  if (target && layerRef.value?.contains(target)) return
-  // naive-ui 浮层可能 teleport 到 body，点击它们不结束编辑
-  if (isNaiveTeleportTarget(target)) return
-  exitEditing()
+  if (store.editingCell) {
+    const target = e.target as Node | null
+    if (target && layerRef.value?.contains(target)) return
+    if (isNaiveTeleportTarget(target)) return
+    // ★ Bug6 修复：CellToolbar 内点击不退出编辑
+    // 之前 NPopover 按钮（聚合/字段/函数）被 document capture 阶段的 mousedown 拦截，
+    // 触发 exitEditing → CellToolbar 消失 → popover 来不及弹 → 用户点了聚合按钮却看不到任何响应。
+    // 现在豁免：CellToolbar 是个独立的 floating UI，按钮 / popover / 输入都不应被"点外即关"误伤。
+    if (target && (target as Element).closest?.('.op-cell-toolbar')) return
+    exitEditing()
+  }
+  // 待绑态：点任何非 overlay / 非左栏字段 / 非数据源弹窗的地方都退出
+  if (store.pendingBindCell) {
+    const target = e.target as Node | null
+    // 左栏数据源字段区 / 变量弹窗（naive-ui teleport）不退出，等用户点字段
+    const inDataSource = !!(target && (target as Element).closest?.('[data-op-datasource-tree], .n-base-select-menu'))
+    if (target && layerRef.value?.contains(target)) return
+    if (inDataSource) return
+    if (isNaiveTeleportTarget(target)) return
+    store.closePendingBind()
+  }
 }
 
-onMounted(() => document.addEventListener('mousedown', onDocMouseDown, true))
-onBeforeUnmount(() => document.removeEventListener('mousedown', onDocMouseDown, true))
+/**
+ * 全局 keydown：Esc 退出待绑态 / 编辑态。
+ * 用 capture 阶段拦截，避免被 CellToolbar 等组件吞掉。
+ */
+function onDocKeyDown(e: KeyboardEvent): void {
+  if (e.key !== 'Escape') return
+  if (store.pendingBindCell) {
+    e.preventDefault()
+    e.stopPropagation()
+    store.closePendingBind()
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('mousedown', onDocMouseDown, true)
+  document.addEventListener('keydown', onDocKeyDown, true)
+})
+onBeforeUnmount(() => {
+  document.removeEventListener('mousedown', onDocMouseDown, true)
+  document.removeEventListener('keydown', onDocKeyDown, true)
+})
 
 /* ------------------------------ 工具栏动作 ------------------------------ */
 
@@ -389,6 +476,18 @@ function onToolbarApply(next: TableControl): void {
   const id = store.editingCell?.controlId
   if (!id) return
   store.updateControl(id, next)
+  void refreshFrozen(id)
+}
+
+/**
+ * CellToolbar lazy migration emit —— 仅添加 segments 字段、不动用户内容。
+ * 走 silent 写入：进 store 模型但不进 undo 栈、不标 dirty；
+ * 用户关闭工具栏前若没主动编辑，不应产生可撤销副作用。
+ */
+function onToolbarMigrate(next: TableControl): void {
+  const id = store.editingCell?.controlId
+  if (!id) return
+  store.updateControlSilent(id, next)
   void refreshFrozen(id)
 }
 
@@ -433,6 +532,14 @@ const editingRowKind = computed(() => {
       {{ editingRowLabel }}
     </div>
 
+    <div
+      v-if="store.pendingBindCell && pendingBubblePos"
+      class="op-pending-bubble"
+      :style="{ left: `${pendingBubblePos.x}px`, top: `${pendingBubblePos.y}px` }"
+    >
+      请点击左侧字段树中的字段完成绑定（Esc 取消）
+    </div>
+
     <CellToolbar
       v-if="editingControl && store.editingCell && toolbarPos"
       :control="editingControl"
@@ -442,6 +549,7 @@ const editingRowKind = computed(() => {
       :x="toolbarPos.x"
       :y="toolbarPos.y"
       @apply="onToolbarApply"
+      @migrate="onToolbarMigrate"
       @close="exitEditing"
     />
   </div>
@@ -506,5 +614,36 @@ const editingRowKind = computed(() => {
   padding: 1px 6px;
   white-space: nowrap;
   z-index: 29;
+}
+
+/* 待绑态：左键单击单元格进入的虚线高亮，等用户从左栏点字段 */
+.op-table-overlay__item :deep(td.is-pending-bind) {
+  outline: 2px dashed var(--brand-primary, #1677ff);
+  outline-offset: -2px;
+  cursor: crosshair;
+  background-color: rgba(22, 119, 255, 0.06);
+}
+
+/* 待绑态高亮（"左键点单元格 + 点字段"路径） */
+.op-table-overlay__item :deep(td.is-pending-bind) {
+  outline: 2px dashed var(--brand-primary, #1677ff);
+  outline-offset: -2px;
+  cursor: crosshair;
+  background-color: rgba(22, 119, 255, 0.06);
+}
+
+/* 待绑气泡：固定在目标 td 上方 */
+.op-pending-bubble {
+  position: absolute;
+  pointer-events: none;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--brand-primary, #1677ff);
+  background: rgba(22, 119, 255, 0.1);
+  border: 1px solid var(--brand-primary, #1677ff);
+  border-radius: 4px;
+  padding: 2px 8px;
+  white-space: nowrap;
+  z-index: 30;
 }
 </style>

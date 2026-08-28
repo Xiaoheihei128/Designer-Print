@@ -10,25 +10,49 @@
  */
 import { computed, onMounted, ref } from 'vue'
 import { NButton, NInput, NRadioButton, NRadioGroup, NScrollbar, NSelect, NSpin, NTooltip } from 'naive-ui'
-import { useDataSourceStore } from '@op/design/stores/dataSource'
+import { useFieldCatalogStore } from '@op/design/stores/fieldCatalog'
+import { useClientDbStore } from '@op/design/stores/clientDb'
+import { useDesignerStore } from '@op/design/stores/designer'
 import DatabaseExplorer from './DatabaseExplorer.vue'
 import type { DataSourceKind } from '@op/config/data-source'
 
-const store = useDataSourceStore()
+const catalog = useFieldCatalogStore()
+const clientDb = useClientDbStore()
+const designerStore = useDesignerStore()
 const keyword = ref('')
 
+/**
+ * 字段项点击：若已有 pendingBindCell（左键点单元格进入的待绑态），
+ * 直接把当前字段绑过去并退出待绑态。否则不做任何事（保持字段仅可拖）。
+ */
+function onFieldClick(fieldPath: string): void {
+  if (designerStore.pendingBindCell) {
+    const p = designerStore.pendingBindCell
+    designerStore.bindFieldToCell(p.controlId, p.row, p.col, fieldPath)
+  }
+}
+
 const sourceOptions = computed(() =>
-  store.sources.map((s) => ({ label: s.name, value: s.id })),
+  catalog.sources.map((s) => ({ label: s.name, value: s.id })),
 )
 
-function onSelectProvider(v: string | number): void {
-  void store.selectProvider(v as DataSourceKind)
+async function onSelectProvider(v: string | number): Promise<void> {
+  const next = v as DataSourceKind
+  if (next === 'database') {
+    // db 模式：清掉 catalog 字段（避免残留），等 clientDb 选表后构造
+    await catalog.selectProvider('sample')
+    if (clientDb.dbEnabled && clientDb.dbAvailable) {
+      await clientDb.loadDatabases()
+    }
+    return
+  }
+  await catalog.selectProvider(next)
 }
 
 const filteredGroups = computed(() => {
   const kw = keyword.value.trim().toLowerCase()
-  if (!kw) return store.fieldTree
-  return store.fieldTree
+  if (!kw) return catalog.fieldTree
+  return catalog.fieldTree
     .map((t) => ({
       table: t.table,
       fields: t.fields.filter(
@@ -39,7 +63,7 @@ const filteredGroups = computed(() => {
 })
 
 onMounted(() => {
-  void store.init()
+  void catalog.init()
 })
 
 const typeColor = (type: string): string => {
@@ -72,17 +96,17 @@ const typeLabel = (type: string): string => {
 </script>
 
 <template>
-  <div class="flex h-full flex-col">
+  <div class="flex h-full flex-col" data-op-datasource-tree>
     <!-- 三选一（固定） -->
     <div class="border-b border-brand-border px-3 py-2">
       <div class="mb-1 text-12px text-brand-text-3">数据源类型</div>
       <NRadioGroup
-        :value="store.kind"
+        :value="catalog.kind"
         size="small"
         @update:value="onSelectProvider"
       >
         <NRadioButton value="sample">示例数据</NRadioButton>
-        <NRadioButton value="erp" :disabled="!store.erpAvailable">ERP</NRadioButton>
+        <NRadioButton value="erp" :disabled="!catalog.erpAvailable">ERP</NRadioButton>
         <NRadioButton value="database">数据库</NRadioButton>
       </NRadioGroup>
     </div>
@@ -92,11 +116,11 @@ const typeLabel = (type: string): string => {
       <NInput v-model:value="keyword" size="small" placeholder="搜索字段" clearable />
       <NTooltip>
         <template #trigger>
-          <NButton size="small" quaternary @click="store.refreshFields()">
+          <NButton size="small" quaternary @click="catalog.refreshFields()">
             <div class="i-carbon-renew text-14px" />
           </NButton>
         </template>
-        {{ store.kind === 'database' ? '重新取数' : '刷新字段' }}
+        刷新字段
       </NTooltip>
     </div>
 
@@ -104,21 +128,21 @@ const typeLabel = (type: string): string => {
     <NScrollbar class="flex-1 min-h-0">
       <div class="flex flex-col">
         <!-- 数据库：四步探索器 -->
-        <DatabaseExplorer v-if="store.kind === 'database'" />
+        <DatabaseExplorer v-if="catalog.kind === 'database'" />
 
         <!-- 非数据库：数据源选择 -->
         <div v-else class="border-b border-brand-border px-3 py-2">
           <div class="mb-1 text-12px text-brand-text-3">数据源</div>
           <NSelect
             size="small"
-            :value="store.activeSourceId"
+            :value="catalog.activeSourceId"
             :options="sourceOptions"
-            @update:value="store.selectSource($event)"
+            @update:value="catalog.selectSource($event)"
           />
         </div>
 
         <!-- 字段树 -->
-        <NSpin :show="store.loading">
+        <NSpin :show="catalog.loading">
           <div class="p-2 pt-0">
             <div v-for="group in filteredGroups" :key="group.table.id" class="mb-3">
               <div class="mb-1 flex items-center gap-1 text-11px font-medium text-brand-text-3">
@@ -133,7 +157,10 @@ const typeLabel = (type: string): string => {
                 draggable="true"
                 @dragstart="(e: DragEvent) => {
                   e.dataTransfer?.setData('application/x-openprint-binding', field.path)
+                  // 兜底：拖出浏览器到其他应用时仍能看到路径文本
+                  e.dataTransfer?.setData('text/plain', field.path)
                 }"
+                @click="onFieldClick(field.path)"
               >
                 <span class="flex-1 truncate text-12px">
                   {{ field.label }}

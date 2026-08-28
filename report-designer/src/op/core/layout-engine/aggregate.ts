@@ -53,7 +53,8 @@ export function footerKindOf(kind: AggKind | null): FooterKind {
 
 /* -------------------------------- 字段工具 -------------------------------- */
 
-/** 去 `items[].` 前缀，得到数据行字段键（items[].amount → amount） */
+/** 去 `ReportItems[].` 前缀，得到数据行字段键（ReportItems[].amount → amount）；
+ * 实际按 `[].` 任意前缀剥离——前缀名只是模板命名约定，引擎不关心。 */
 export function stripItems(field: string | undefined): string {
   if (!field) return ''
   return field.includes('[].') ? field.slice(field.indexOf('[].') + 3) : field

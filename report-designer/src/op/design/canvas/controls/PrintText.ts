@@ -4,7 +4,7 @@
  * 字号协议层是 pt，Fabric 用 px，此处统一换算。
  */
 import { Textbox } from 'fabric'
-import type { TextControl, TextStyle } from '@op/types/control'
+import type { Segment, TextControl, TextStyle } from '@op/types/control'
 import { ptToPx, pxToPt } from '@op/core/units'
 import { mm, px, readBaseGeometry, round2, type IPrintObject } from './PrintObject'
 
@@ -93,8 +93,15 @@ export class PrintText extends Textbox implements IPrintObject {
   }
 }
 
-/** 设计期显示文本：按 contentType 显示占位符，老模板回退到 expression/binding 启发式 */
+/** 设计期显示文本：按 contentType 显示占位符，老模板回退到 expression/binding 启发式
+ *  v2 优先：segments 模式 → 拼接 segments 字符串作为占位显示（与 ContentValueEditor 一致）
+ */
 function displayText(control: TextControl): string {
+  // ★ v2 segments 模式优先：有 segments 即按 segmentsToDisplayText 拼接
+  // 即使 value/binding/expression 为空，segments 也提供占位文本
+  if (control.segments && control.segments.length) {
+    return segmentsToDisplayText(control.segments)
+  }
   const mode = control.contentType
   if (mode === 'expression') return control.expression ?? ''
   if (mode === 'variable') return control.binding ? `{{${control.binding}}}` : ''
@@ -103,6 +110,17 @@ function displayText(control: TextControl): string {
   if (control.expression) return control.expression
   if (control.binding) return `{{${control.binding}}}`
   return control.value ?? '文本'
+}
+
+/** segments → 文本（与 ContentValueEditor.segmentsToText 逻辑一致 —— field/expr 都包 {{ }}） */
+function segmentsToDisplayText(segments: Segment[]): string {
+  return segments
+    .map((s) => {
+      if (s.kind === 'text') return s.value
+      if (s.kind === 'field') return `{{${s.path}}}`
+      return `{{${s.src}}}`
+    })
+    .join('')
 }
 
 function styleToFabric(style?: TextStyle) {

@@ -3,7 +3,7 @@
  */
 import { FabricImage } from 'fabric'
 import QRCode from 'qrcode'
-import type { QrcodeControl } from '@op/types/control'
+import type { QrcodeControl, Segment } from '@op/types/control'
 import { mm, readBaseGeometry, type IPrintObject } from './PrintObject'
 
 export class PrintQrcode extends FabricImage implements IPrintObject {
@@ -17,6 +17,8 @@ export class PrintQrcode extends FabricImage implements IPrintObject {
   binding?: string
   textValue?: string
   exprValue?: string
+  /** v2 segments 模式：与 ContentValueEditor 文本一致 */
+  segments?: Segment[]
   contentType?: 'fixed' | 'variable' | 'expression'
   errorLevel: 'L' | 'M' | 'Q' | 'H' = 'M'
 
@@ -33,6 +35,7 @@ export class PrintQrcode extends FabricImage implements IPrintObject {
     this.binding = control.binding
     this.textValue = control.value
     this.exprValue = control.expression
+    this.segments = control.segments
     this.errorLevel = control.errorLevel ?? 'M'
     this.printable = control.printable ?? true
     this.visibleIf = control.visibleIf
@@ -41,8 +44,12 @@ export class PrintQrcode extends FabricImage implements IPrintObject {
     void this.regenerate()
   }
 
-  /** 设计期占位文本：按 contentType 取对应字段 */
+  /** 设计期占位文本：v2 segments 模式优先（拼接 segments），老模板走 contentType 启发式 */
   private displayValue(): string | undefined {
+    // ★ v2 segments 模式优先：有 segments 即按 segmentsToDisplayValue 拼接
+    if (this.segments && this.segments.length) {
+      return segmentsToDisplayValue(this.segments)
+    }
     const m = this.contentType
     if (m === 'expression') return this.exprValue
     if (m === 'variable') return this.binding ? `{{${this.binding}}}` : undefined
@@ -84,6 +91,7 @@ export class PrintQrcode extends FabricImage implements IPrintObject {
       binding: this.binding,
       value: this.textValue,
       expression: this.exprValue,
+      segments: this.segments,
       errorLevel: this.errorLevel,
       printable: this.printable,
       visibleIf: this.visibleIf,
@@ -96,6 +104,7 @@ export class PrintQrcode extends FabricImage implements IPrintObject {
     this.binding = control.binding
     this.textValue = control.value
     this.exprValue = control.expression
+    this.segments = control.segments
     this.errorLevel = control.errorLevel ?? 'M'
     this.printable = control.printable ?? true
     this.visibleIf = control.visibleIf
@@ -110,4 +119,15 @@ export class PrintQrcode extends FabricImage implements IPrintObject {
     })
     void this.regenerate()
   }
+}
+
+/** segments → 文本（与 ContentValueEditor.segmentsToText 逻辑一致 —— field/expr 都包 {{ }}） */
+function segmentsToDisplayValue(segments: Segment[]): string {
+  return segments
+    .map((s) => {
+      if (s.kind === 'text') return s.value
+      if (s.kind === 'field') return `{{${s.path}}}`
+      return `{{${s.src}}}`
+    })
+    .join('')
 }

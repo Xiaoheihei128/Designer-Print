@@ -2,7 +2,7 @@
 /**
  * TextProps —— 文本控件属性（§5.2/§5.3）：内容（静态/绑定/表达式）+ 排版样式
  */
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import {
   NInput,
   NInputNumber,
@@ -13,13 +13,14 @@ import {
   NButton,
 } from 'naive-ui'
 import type { SelectOption, SelectGroupOption } from 'naive-ui'
-import type { CellFormat, CellFormatKind, TextControl, TextStyle } from '@op/types/control'
+import type { CellFormat, CellFormatKind, Segment as SegmentT, TextControl, TextStyle } from '@op/types/control'
 import { useDesignerStore } from '@op/design/stores/designer'
-import { useDataSourceStore } from '@op/design/stores/dataSource'
+import { useFieldCatalogStore } from '@op/design/stores/fieldCatalog'
 import { FONT_CATALOG } from '@op/core/fonts/catalog'
 import { useSystemFonts } from '@op/core/fonts/system'
 import ContentValueEditor from './ContentValueEditor.vue'
 import type { ContentMode } from './ContentValueEditor.vue'
+import { ensureSegments } from '@op/design/segments-migration'
 import {
   formatKindOptions,
   datePatternOptions,
@@ -34,7 +35,7 @@ import {
 
 const store = useDesignerStore()
 const control = computed(() => store.selectedControl as TextControl | null)
-const ds = useDataSourceStore()
+const ds = useFieldCatalogStore()
 
 /** 字体下拉选项（内置预设 + 连接客户端后的电脑系统字体分组） */
 const sysFonts = useSystemFonts()
@@ -77,11 +78,15 @@ function toggleUnderline(): void {
   patchStyle({ textDecoration: isUnderline.value ? 'none' : 'underline' })
 }
 
-/** 内容类型：固定值 / 变量（字段绑定） / 表达式（显式 contentType 判别，兼容老模板回退） */
-const contentMode = computed<ContentMode>(() => {
+/** 内容类型：固定值 / 变量（字段绑定） / 表达式（显式 contentType 判别，兼容老模板回退）
+ *  v2: 已有 segments 时返回 undefined，让 ContentValueEditor 切到 segments 模式
+ */
+const contentMode = computed<ContentMode | undefined>(() => {
   const c = control.value
-  if (c?.contentType) return c.contentType
-  return c?.expression ? 'expression' : c?.binding ? 'variable' : 'fixed'
+  if (!c) return undefined
+  if (c.segments && c.segments.length) return undefined
+  if (c.contentType) return c.contentType
+  return c.expression ? 'expression' : c.binding ? 'variable' : 'fixed'
 })
 
 /** 模式切换：写 contentType + 清空其它两个字段（默认值由 ContentValueEditor 注入） */
@@ -100,9 +105,12 @@ function onModeChange(m: ContentMode): void {
 
 const textFormat = computed<CellFormat>(() => control.value?.format ?? { kind: 'none' })
 
-/** 绑定字段在数据源里的类型（用于提示选哪种格式） */
+/** 绑定字段在数据源里的类型（用于提示选哪种格式）
+ *  v2: 优先从 segments 首段 field 取路径，否则从 binding 取
+ */
 const boundFieldType = computed(() => {
-  const path = control.value?.binding
+  const c = control.value
+  const path = c?.binding ?? c?.segments?.find((s) => s.kind === 'field')?.path
   if (!path) return undefined
   const f = ds.flatFields.find((x) => x.path === path)
   return f?.type
@@ -129,6 +137,27 @@ function setFormatKind(kind: CellFormatKind): void {
 function isPresetDatePattern(p?: string): boolean {
   return Boolean(p && datePatternOptions.some((o) => o.value !== '__custom__' && o.value === p))
 }
+
+/* -------------------------------- segments 适配 -------------------------------- */
+
+/** v2: textarea 内容变更时回写 segments（与老 3 态字段并存；segments 模式下老字段失效） */
+function onSegmentsChange(s: SegmentT[]): void {
+  patch({ segments: s })
+}
+
+/** Properties Panel 打开/控件变化时调 ensureSegments —— 老 schema 一次性 lazy 迁移（不进 undo 栈） */
+watch(
+  () => control.value,
+  (c) => {
+    if (!c) return
+    const next = ensureSegments(c)
+    if (next !== c) {
+      // 触发 silent 更新：不动 undo / dirty
+      store.updateControlSilent(c.id, next as unknown as Record<string, unknown>)
+    }
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
@@ -140,6 +169,8 @@ function isPresetDatePattern(p?: string): boolean {
       :value="control.value ?? ''"
       :binding="control.binding ?? ''"
       :expression="control.expression ?? ''"
+      :segments="control.segments"
+      :format="textFormat.kind === 'none' ? undefined : textFormat"
       placeholder="文本内容"
       fixed-default="文本"
       binding-default="order.orderNo"
@@ -148,6 +179,7 @@ function isPresetDatePattern(p?: string): boolean {
       @update:value="patch({ value: $event })"
       @update:binding="patch({ binding: $event })"
       @update:expression="patch({ expression: $event || undefined })"
+      @update:segments="onSegmentsChange"
     />
 
     <div v-if="contentMode === 'variable'" class="props-section">

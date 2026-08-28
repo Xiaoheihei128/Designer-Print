@@ -3,7 +3,7 @@
  * 设计期用绑定路径占位文本渲染，运行期由渲染引擎注入真实值。
  */
 import { FabricImage } from 'fabric'
-import type { BarcodeControl } from '@op/types/control'
+import type { BarcodeControl, Segment } from '@op/types/control'
 import { mm, px, readBaseGeometry, type IPrintObject } from './PrintObject'
 import { drawBarcode } from '../barcode-draw'
 
@@ -18,6 +18,8 @@ export class PrintBarcode extends FabricImage implements IPrintObject {
   binding?: string
   textValue?: string
   exprValue?: string
+  /** v2 segments 模式：与 ContentValueEditor 文本一致 */
+  segments?: Segment[]
   contentType?: 'fixed' | 'variable' | 'expression'
   format = 'CODE128'
   showText = true
@@ -35,6 +37,7 @@ export class PrintBarcode extends FabricImage implements IPrintObject {
     this.binding = control.binding
     this.textValue = control.value
     this.exprValue = control.expression
+    this.segments = control.segments
     this.format = control.format ?? 'CODE128'
     this.showText = control.showText ?? true
     this.printable = control.printable ?? true
@@ -45,8 +48,12 @@ export class PrintBarcode extends FabricImage implements IPrintObject {
     void this.regenerate()
   }
 
-  /** 设计期占位显示文本：按 contentType 取对应字段，未设置时保持原绑定优先 */
+  /** 设计期占位显示文本：v2 segments 模式优先（拼接 segments），老模板走 contentType 启发式 */
   private displayValue(): string | undefined {
+    // ★ v2 segments 模式优先：有 segments 即按 segmentsToDisplayValue 拼接
+    if (this.segments && this.segments.length) {
+      return segmentsToDisplayValue(this.segments)
+    }
     const m = this.contentType
     if (m === 'expression') return this.exprValue
     if (m === 'variable') return this.binding ? `{{${this.binding}}}` : undefined
@@ -100,6 +107,7 @@ export class PrintBarcode extends FabricImage implements IPrintObject {
       binding: this.binding,
       value: this.textValue,
       expression: this.exprValue,
+      segments: this.segments,
       format: this.format,
       showText: this.showText,
       printable: this.printable,
@@ -113,6 +121,7 @@ export class PrintBarcode extends FabricImage implements IPrintObject {
     this.binding = control.binding
     this.textValue = control.value
     this.exprValue = control.expression
+    this.segments = control.segments
     this.format = control.format ?? 'CODE128'
     this.showText = control.showText ?? true
     this.printable = control.printable ?? true
@@ -128,4 +137,15 @@ export class PrintBarcode extends FabricImage implements IPrintObject {
     })
     void this.regenerate()
   }
+}
+
+/** segments → 文本（与 ContentValueEditor.segmentsToText 逻辑一致 —— field/expr 都包 {{ }}） */
+function segmentsToDisplayValue(segments: Segment[]): string {
+  return segments
+    .map((s) => {
+      if (s.kind === 'text') return s.value
+      if (s.kind === 'field') return `{{${s.path}}}`
+      return `{{${s.src}}}`
+    })
+    .join('')
 }

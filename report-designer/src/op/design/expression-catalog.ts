@@ -79,37 +79,101 @@ export const EXPRESSION_CATALOG: ExprCategory[] = [
       {
         id: 'sum',
         label: '求和',
-        snippet: "{{sum('items[].amount')}}",
+        snippet: "{{sum('ReportItems[].amount')}}",
         description: '对数据数组的数值字段求和，常用于明细金额合计。',
-        note: "路径须用引号包住，形如 'items[].amount'。",
+        note: "路径须用引号包住，形如 'ReportItems[].amount'。",
       },
       {
         id: 'avg',
         label: '平均值',
-        snippet: "{{avg('items[].qty')}}",
+        snippet: "{{avg('ReportItems[].qty')}}",
         description: '对数据数组的数值字段求平均值。',
-        note: "路径须用引号包住，形如 'items[].qty'。",
+        note: "路径须用引号包住，形如 'ReportItems[].qty'。",
       },
       {
         id: 'count',
         label: '计数',
-        snippet: "{{count('items[].qty')}}",
+        snippet: "{{count('ReportItems[].qty')}}",
         description: '统计数据数组中的项数（行数）。',
-        note: "路径须用引号包住，形如 'items[].qty'。",
+        note: "路径须用引号包住，形如 'ReportItems[].qty'。",
       },
       {
         id: 'min',
         label: '最小值',
-        snippet: "{{min('items[].amount')}}",
+        snippet: "{{min('ReportItems[].amount')}}",
         description: '取数据数组数值字段的最小值。',
-        note: "路径须用引号包住，形如 'items[].amount'。",
+        note: "路径须用引号包住，形如 'ReportItems[].amount'。",
       },
       {
         id: 'max',
         label: '最大值',
-        snippet: "{{max('items[].amount')}}",
+        snippet: "{{max('ReportItems[].amount')}}",
         description: '取数据数组数值字段的最大值。',
-        note: "路径须用引号包住，形如 'items[].amount'。",
+        note: "路径须用引号包住，形如 'ReportItems[].amount'。",
+      },
+    ],
+  },
+  {
+    // ⚡ 聚合 token（合计行专用）—— 与"合计统计"分类的区别：
+    //   - 普通函数 sum/avg/count：表达式引擎求值，单个表达式得一个数字
+    //   - 聚合 token (本分类)：专用占位，由 buildFooterRow 在运行期按"本页/总计"重算；
+    //     大写金额 token (#pageCap/#totalCap) 由 toChineseCapitalRMB 渲染成中文大写
+    //   - 注意必须带 # 前缀 —— 没有 # 时引擎视为字段路径，找不到会静默空
+    //   - 大写 token 必须紧跟对应的 sum 行（同列同字段）才生效
+    key: 'aggregate-token',
+    label: '⚡ 聚合 token（合计行专用）',
+    items: [
+      {
+        id: 'agg-pageSum',
+        label: '本页合计',
+        snippet: '{{#pageSum}}',
+        description: '本页数字合计（运行期按页切片重算）',
+        note: '通常放在「合计：」/「小计：」标签后的数值列',
+      },
+      {
+        id: 'agg-totalSum',
+        label: '总计',
+        snippet: '{{#totalSum}}',
+        description: '整表数字合计（仅末页显示）',
+        note: '通常放在「总计：」标签后的数值列；大写 token 必须紧跟其下一行同列同字段',
+      },
+      {
+        id: 'agg-pageCap',
+        label: '本页大写',
+        snippet: '{{#pageCap}}',
+        description: '本页合计转中文大写（如：壹仟贰佰元整）',
+        note: '必须紧跟 {{#pageSum}} 行的下一行，引擎从 sum 行推断字段',
+      },
+      {
+        id: 'agg-totalCap',
+        label: '总金额大写',
+        snippet: '{{#totalCap}}',
+        description: '整表合计转中文大写（仅末页显示）',
+        note: '必须紧跟 {{#totalSum}} 行的下一行',
+      },
+      {
+        id: 'agg-pageAvg',
+        label: '本页平均',
+        snippet: '{{#pageAvg}}',
+        description: '本页数值平均值',
+      },
+      {
+        id: 'agg-totalAvg',
+        label: '总平均',
+        snippet: '{{#totalAvg}}',
+        description: '整表数值平均值（仅末页显示）',
+      },
+      {
+        id: 'agg-pageCount',
+        label: '本页行数',
+        snippet: '{{#pageCount}}',
+        description: '本页数据行数',
+      },
+      {
+        id: 'agg-totalCount',
+        label: '总行数',
+        snippet: '{{#totalCount}}',
+        description: '整表行数（仅末页显示）',
       },
     ],
   },

@@ -224,6 +224,7 @@ const ROW_CLASS: Record<RenderRow['kind'], string> = {
   subtotal: 'is-subtotal',
   summary: 'is-summary',
   static: 'is-static',
+  blank: 'is-blank',
 }
 
 /**
@@ -236,6 +237,9 @@ function renderRow(row: RenderRow, striped: boolean): string {
   if (striped && row.kind === 'data' && (row.dataIndex ?? 0) % 2 === 1) cls.push('is-striped')
 
   const cells = row.cells
+    // vMerge：consumed=true 的 cell 不输出 <td>（上方锚行 rowspan 已"吞掉"该格位）
+    // 同行其他列照常输出 —— vMerge 仅合并指定列，其他列每行独立显示
+    .filter((cell) => !cell.consumed)
     .map((cell) => {
       const style = [
         `text-align:${cell.align ?? 'left'}`,

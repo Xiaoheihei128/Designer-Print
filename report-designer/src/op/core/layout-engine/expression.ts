@@ -240,7 +240,7 @@ class Parser {
       if (tok.value === 'false') return { t: 'lit', v: false }
       if (tok.value === 'null') return { t: 'lit', v: null }
       if (tok.value === 'undefined') return { t: 'lit', v: undefined }
-      // 标识符后紧跟 ( → 函数调用：now() / sum('items[].amount')
+      // 标识符后紧跟 ( → 函数调用：now() / sum('ReportItems[].amount')
       if (this.peek().type === 'op' && this.peek().value === '(') {
         return this.parseCall(tok.value)
       }
@@ -532,7 +532,7 @@ export const FILTERS: Record<string, Filter> = {
     const symbol = CURRENCY_SYMBOL[String(code).toUpperCase()] ?? ''
     return symbol + groupThousands(toNum(value).toFixed(toNum(digits)))
   },
-  /** {{ items[].qty | number:0 }} → 1,234 */
+  /** {{ ReportItems[].qty | number:0 }} → 1,234 */
   number(value, digits = 2) {
     return groupThousands(toNum(value).toFixed(toNum(digits)))
   },
@@ -582,10 +582,10 @@ function toArrayLike(v: unknown): unknown[] {
 
 /**
  * 把聚合参数解析为数值数组：
- * - 字符串路径 `'items[].amount'` → 取 data.items 每项的 amount 字段；
- * - 字符串路径 `'items'` → 直接求值该路径得到数组；
+ * - 字符串路径 `'ReportItems[].amount'` → 取 data.ReportItems 每项的 amount 字段；
+ * - 字符串路径 `'ReportItems'` → 直接求值该路径得到数组；
  * - 已求值的数组 → 原样转数值。
- * 用户需写成带引号的路径字符串（裸 `items[].amount` 会被当作普通路径字段访问）。
+ * 用户需写成带引号的路径字符串（裸 `ReportItems[].amount` 会被当作普通路径字段访问）。
  */
 function resolveNumericArray(arg: unknown, ctx: EvalContext): number[] {
   let arr: unknown[]

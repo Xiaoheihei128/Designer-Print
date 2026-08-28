@@ -151,6 +151,9 @@ ${s}.op-table tr.is-striped td { background: ${TABLE_STRIPE_BG}; }
 /* 静态行（布局网格正文 / 数据表备注尾行）：默认无强调样式，
    单元格视觉以内联样式为准（与设计期 overlay 同一套 resolveCellStyleFor 取值） */
 ${s}.op-table tr.is-static td { /* 占位：保持类名与设计期对齐，避免样式遗漏 */ }
+/* 补空白行（P0-2 按纸张填满）：无内容、无背景，但保留上下边框横线，
+   让补空行视觉上"是表格的一行"（供手写 / 签字栏留白用），仅去掉内边距避免撑高 */
+${s}.op-table tr.is-blank td { padding: 0; background: transparent; }
 
 /* ---------- 表格样式预设（Excel 式快速切换；class 由渲染端挂在 table 元素上） ---------- */
 /* 默认（none）：仅表头加粗，无任何背景色（含标题行）。无需规则，class 仅作占位。 */
@@ -191,13 +194,22 @@ ${s}.op-table.ts-timetable tr.is-header td { background: ${TABLE_HEADER_BG}; }
 ${s}.op-table.b-all td { border-top: 0.2mm solid var(--op-table-border); border-left: 0.2mm solid var(--op-table-border); }
 ${s}.op-table.b-all tr:last-child td { border-bottom: 0.2mm solid var(--op-table-border); }
 ${s}.op-table.b-all td:last-child { border-right: 0.2mm solid var(--op-table-border); }
+/* Bug11 修复：vMerge 锚点（rowspan>1）不在末行，但其视觉下沿落在末行底边。
+   tr:last-child td 不命中锚点 → 末行 vMerge 列无下边框。补一条专属规则 */
+${s}.op-table.b-all td[rowspan] { border-bottom: 0.2mm solid var(--op-table-border); }
 ${s}.op-table.b-horizontal td { border-top: 0.2mm solid var(--op-table-border); }
 ${s}.op-table.b-horizontal tr:last-child td { border-bottom: 0.2mm solid var(--op-table-border); }
+${s}.op-table.b-horizontal td[rowspan] { border-bottom: 0.2mm solid var(--op-table-border); }
 ${s}.op-table.b-outline { border: 0.2mm solid var(--op-table-border); }
 ${s}.op-table.b-none td { border: 0; }
 /* 三线表：顶线 + 表头底线 + 底线，无内部横线、无竖线（建模报告 / 财务报表常用） */
 ${s}.op-table.b-three-line { border-top: 0.2mm solid var(--op-table-border); border-bottom: 0.2mm solid var(--op-table-border); }
 ${s}.op-table.b-three-line tr.is-header:last-child td { border-bottom: 0.2mm solid var(--op-table-border); }
+
+/* vMerge 同值合并（设计画布视觉提示）—— 启用列加蓝色左竖条，
+   让用户在画布上一眼看到「这列会去重纵向合并」；运行期 HTML 输出由
+   rowspan 自然折叠重复单元格，不再额外画线 */
+${s}.op-table td.is-vmerge-col { box-shadow: inset 2px 0 0 rgba(37, 99, 235, 0.55); }
 `
 }
 

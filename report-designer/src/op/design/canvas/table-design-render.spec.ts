@@ -119,6 +119,40 @@ describe('renderTableGridHtml', () => {
     const html = renderTableGridHtml({ ...t, cells, staticRows: 0 })
     expect(html).toContain('colspan="2"')
   })
+
+  it('options.summaryRow 开启时画布追加 is-summary 虚拟行（修复 Bug：右栏改标签画布无反应）', () => {
+    const html = renderTableGridHtml(
+      baseTable({
+        dataSource: 'items',
+        options: {
+          borders: 'all',
+          verticalAlign: 'middle',
+          summaryRow: { type: 'sum', fields: ['qty'], label: '总金额' },
+        },
+      }),
+    )
+    // 虚拟行存在 + 标签同步
+    expect(html).toContain('class="is-summary"')
+    expect(html).toContain('>总金额<')
+  })
+
+  it('options.summaryRow 改 label 时同步显示新文本', () => {
+    const a = renderTableGridHtml(
+      baseTable({
+        dataSource: 'items',
+        options: { summaryRow: { type: 'sum', fields: ['qty'], label: '合计' } },
+      }),
+    )
+    const b = renderTableGridHtml(
+      baseTable({
+        dataSource: 'items',
+        options: { summaryRow: { type: 'sum', fields: ['qty'], label: '总金额' } },
+      }),
+    )
+    expect(a).toContain('>合计<')
+    expect(b).toContain('>总金额<')
+    expect(b).not.toContain('>合计<')
+  })
 })
 
 describe('几何布局', () => {

@@ -3,16 +3,17 @@
  *
  * 由数据源探索器选好「库 + 表」后，用客户端返回的列元信息与真实行构造。
  * 与 createMockDataSource / createDataSourceHttp 同 DataSourceRepository 接口，
- * 整体替换无分支。字段统一走 `items[]` 数组前缀，契合表格 `items[].xxx` 绑定习惯。
+ * 整体替换无分支。字段统一走 `ReportItems[]` 数组前缀（与后端 catalog 一致），
+ * 契合表格 `ReportItems[].xxx` 绑定习惯。
  *
- * 注意：本仓库只提供「字段定义 + 单表结构」，真实数据行由 dataSource store 的
- * dbRows 持有并直接喂给预览（不再经 FieldDef.sample 合成）。
+ * 注意：本仓库只提供「字段定义 + 单表结构」，真实数据行由 businessData store 的
+ * rows 持有并直接喂给预览（不再经 FieldDef.sample 合成）。
  */
 import type { DataSourceMeta, DataSourceRepository, FieldDef, TableMeta } from '@op/types/datasource'
 import type { ClientColumn } from '@op/core/print-client'
 
-/** 明细数组路径前缀（与表格绑定 items[].xxx 对齐） */
-export const DB_ARRAY_PREFIX = 'items'
+/** 明细数组路径前缀（与表格绑定 ReportItems[].xxx 对齐） */
+export const DB_ARRAY_PREFIX = 'ReportItems'
 const DB_TABLE_ID = 'main'
 
 export interface ClientDatabaseSourceOptions {
@@ -44,7 +45,7 @@ export function createClientDatabaseSource(opts: ClientDatabaseSourceOptions): D
     id: DB_TABLE_ID,
     name: opts.table,
     relation: 'main',
-    pathPrefix: DB_ARRAY_PREFIX,
+    pathPrefix: `${DB_ARRAY_PREFIX}[]`,
     isArray: true,
   }
   const meta: DataSourceMeta = {

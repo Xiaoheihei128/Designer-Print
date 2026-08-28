@@ -87,6 +87,10 @@ export function createDemoTemplate(): TemplateData<AnyControl> {
       top: 35,
       width: CONTENT_W,
       height: 60,
+      // demo 模板同时支持「外部 data 传入 items[]」与「无外部 data 时退化用控制内嵌数据」：
+      // - 走 render({ data: { items: [...] } })：dataSource='items' 解析到外部数据；
+      // - 走 render({ data: {} })：items 找不到时回退到 control.data。
+      // （销售订单场景的常见用法是外部传 40+ 条真实数据，sdk.spec.ts 就是这个模式。）
       dataSource: 'items',
       printable: true,
       data: [

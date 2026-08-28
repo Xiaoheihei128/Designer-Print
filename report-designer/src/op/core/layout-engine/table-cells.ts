@@ -18,6 +18,7 @@ import type { TableCell, TableCellStyle, TableColumn, TableControl } from '@op/t
 import { isAggToken, parseAggToken, stripItems } from './aggregate'
 import { ptToMm } from '@op/core/units'
 import { getSharedMeasurer } from '@op/core/layout-engine/measure'
+import { genId } from '@op/utils/id'
 
 export const DEFAULT_HEADER_ROWS = 1
 
@@ -141,14 +142,25 @@ function cellFromColumn(col: TableColumn, role: 'header' | 'data'): TableCell {
 
 /**
  * 布局网格的正文行数（不含表头）。
- * 真理源优先级：已物化的 cells 行数 > 显式 designRows > 按控件高度推算。
- * （以 cells 为先，才不会在改了表头行数后把用户已填的行挤掉。）
+ *
+ * Bug12 修复：显式 `designRows`（含 0）必须优先于 cells 推断。
+ * 老逻辑把 cells 推断放在第一位，且对结果取 `Math.max(1, ...)` —— 用户把
+ * designRows 显式设为 0 时，setGridRows 已把 cells 修剪到只剩 headerRows 行，
+ * 但 buildDesignGrid 走 layoutBodyRows 时 cells.length === headerRows，
+ * `Math.max(1, 0)` 又把正文行数推回到 1，画布上出现不该有的空正文行。
+ *
+ * 优先级调整：
+ * 1) 用户显式 `designRows`（含 0）→ 直接返回（用户意图优先）
+ * 2) 已有 cells 但 designRows 未显式设置 → 按物化行数推算（保护「改表头行数时保留已填正文」）
+ * 3) 按控件高度推算（兜底，至少 1 行）
  */
 function layoutBodyRows(control: TableControl, headerRows: number): number {
+  if (typeof control.designRows === 'number') {
+    return Math.max(0, control.designRows)
+  }
   if (control.cells && control.cells.length > 0) {
     return Math.max(1, control.cells.length - headerRows)
   }
-  if (typeof control.designRows === 'number' && control.designRows > 0) return control.designRows
   const rowH = Math.max(4, control.options?.rowHeight ?? 8)
   const bodyH = Math.max(0, control.height - headerRows * rowH)
   return Math.max(1, Math.floor(bodyH / rowH) || 1)
@@ -282,9 +294,17 @@ export function designRowHeights(control: TableControl, heightMm?: number): numb
   }
 
   // ── 布局网格：按控件高度均分（画布 = 打印，真正所见即所得）──
+  // Bug12 修复：当 designRows=0 导致 bodyCount=0 时，不能再把整段 control.height 硬塞给表头——
+  // 那样 syncTableHeight 永远不动，画布下方空出 50mm 假正文。
+  // 改为按"自然行高"（表头/正文各 8mm）输出，使 control.height 能在 syncTableHeight 里被收紧到真实占位高度。
+  const naturalRowH = Math.max(_MIN_ROW_HEIGHT, control.options?.rowHeight ?? 8)
   const totalH = Math.max(1, heightMm ?? control.height)
   const headerRows = grid.headerRows
-  const bodyCount = Math.max(1, grid.rowCount - headerRows)
+  const bodyCount = grid.rowCount - headerRows // 设计行 + 静态尾行；可为 0
+  if (bodyCount === 0) {
+    const headerRowH = headerRows > 0 ? naturalRowH : totalH
+    return Array.from({ length: grid.rowCount }, () => headerRowH)
+  }
   const headerShare = Math.min(totalH * 0.32, headerRows * 8)
   const headerRowH = headerRows > 0 ? headerShare / headerRows : 0
   const bodyH = Math.max(4, (totalH - headerShare) / bodyCount)
@@ -336,18 +356,27 @@ function designRowContentHeight(row: TableCell[], colWidths: number[]): number {
 }
 
 /**
- * 数据表控件高度同步：让 `control.height` = 所有行高之和（含表头 + 数据样例行 + 静态尾行），
- * 使得画布包围盒与实际渲染尺寸一致。布局网格不受影响（画布 = 打印）。
+ * 表格控件高度同步：让 `control.height` = 所有行高之和（含表头 + 正文 + 静态尾行），
+ * 使得画布包围盒与实际渲染尺寸一致。
  *
- * 设计表增删行、改行高模式、改固定行高后都应调用此函数，避免画布包围盒与渲染尺寸脱节。
+ * - 数据表：渲染端忽略 `control.height` 按内容测量，此函数让画布框 = 实际渲染总高（WYSIWYG）。
+ * - 布局网格：渲染端用 `control.height` 作为真理，此函数把 `control.height` 收紧到实际行高之和，
+ *   避免用户把 designRows 显式置 0 后画布下方空出一大段。
+ *
+ * 行数 / 行高 / 模式变化后都应调用此函数，避免画布包围盒与渲染尺寸脱节。
+ * 高度无变化时返回原对象（避免无谓的引用变更触发 reactivity 抖动）。
  */
-export function syncDataTableHeight(control: TableControl): TableControl {
-  if (!isDataTable(control)) return control
+export function syncTableHeight(control: TableControl): TableControl {
   const heights = designRowHeights(control)
   const totalH = heights.reduce((s, h) => s + h, 0)
   if (Math.abs((control.height ?? 0) - totalH) < 0.01) return control
   return { ...control, height: totalH }
 }
+
+/**
+ * @deprecated 自 v1.x 起布局网格也需要高度同步；保留旧名仅为兼容旧调用方，新代码用 {@link syncTableHeight}。
+ */
+export const syncDataTableHeight = syncTableHeight
 
 /** 把任意 cells 矩阵归一化为 rowCount × colCount（不足补空、超出截断） */
 export function normalizeCellRows(
@@ -380,6 +409,12 @@ export function designRowInfo(grid: DesignGrid, r: number): DesignRowInfo {
 /**
  * 设计期行角色名（双击编辑时显示在首列左侧，帮助用户识别当前所在行）。
  * 聚合尾行按单元格 token 判定：大写金额 / 总计 / 本页合计。
+ *
+ * 关键：仅 `isDataTemplate=true` 的"数据样例行"才叫"数据行"。
+ * 数据表的固定尾行 / 布局网格的非表头行（备注 / 签字栏）属于 `kind='static'`，
+ * 即使无聚合 token 也必须与"数据行"严格区分 —— 否则用户会把"固定尾行"
+ * 误认成"数据样例行"，困惑为什么绑了字段后画布仍显示原占位符
+ * （其实是新行自己没绑，不是已有数据行覆盖不掉）。
  */
 export function rowRoleLabel(grid: DesignGrid, r: number): string {
   const info = designRowInfo(grid, r)
@@ -390,8 +425,8 @@ export function rowRoleLabel(grid: DesignGrid, r: number): string {
   if (tokens.some((t) => t === 'pageCap' || t === 'totalCap')) return '大写金额行'
   if (tokens.some((t) => t === 'totalSum' || t === 'totalAvg' || t === 'totalCount')) return '总计行'
   if (tokens.some((t) => t === 'pageSum' || t === 'pageAvg' || t === 'pageCount')) return '本页合计行'
-  // 其余非表头、非聚合 token 的行（数据样例行 / 备注 / 签字栏等）统一叫"数据行"
-  return '数据行'
+  // 静态行（无聚合 token）—— 数据表固定尾行 / 布局网格正文行
+  return '静态行'
 }
 
 /**
@@ -509,10 +544,52 @@ export function setGridRows(
   return { ...control, headerRows, designRows, staticRows, cells }
 }
 
+/**
+ * 老模板兼容：columns 没有 id 时一次性补齐。
+ *
+ * vMerge 等按列稳定 id 引用的功能依赖每列都有 id；老模板（升级前保存的）列配置
+ * 可能没有 id。运行时在 buildTableModel 入口处调用一次：内存中补齐、不写回持久化，
+ * 用户下次手动保存时新模板自然带 id。
+ *
+ * 同时过滤掉 vMerge.columns 里命中不到的 id（脏配置），避免后续 silently 失效。
+ */
+export function ensureColumnIds(control: TableControl): TableControl {
+  const cols = control.columns
+  if (!cols || cols.length === 0) return control
+  let mutated = false
+  const ensured: TableColumn[] = cols.map((c) => {
+    if (c.id) return c
+    mutated = true
+    return { ...c, id: genId('col') }
+  })
+  if (!mutated && !control.options?.vMerge?.columns?.length) return control
+
+  let next: TableControl = mutated ? { ...control, columns: ensured } : control
+
+  // 清理 vMerge.columns 中不存在的 id
+  const vmCols = next.options?.vMerge?.columns
+  if (vmCols && vmCols.length > 0) {
+    const idSet = new Set((next.columns ?? []).map((c) => c.id))
+    const filtered = vmCols.filter((id) => idSet.has(id))
+    if (filtered.length !== vmCols.length) {
+      next = {
+        ...next,
+        options: {
+          ...next.options,
+          vMerge: { ...next.options!.vMerge!, columns: filtered },
+        },
+      }
+    }
+  }
+  return next
+}
+
 /** 在列尾追加一列（并同步扩展每行的单元格）；返回新控件 */
 export function addTableColumn(control: TableControl, col?: Partial<TableColumn>): TableControl {
   const idx = control.columns?.length ?? 0
   const newCol: TableColumn = {
+    // 稳定列 id：vMerge / 等需要列稳定引用的功能靠 id 工作；若调用方传了 id 则沿用
+    id: col?.id ?? genId('col'),
     title: col?.title ?? `列${idx + 1}`,
     field: col?.field,
     expression: col?.expression,
@@ -545,9 +622,10 @@ export function addTableColumn(control: TableControl, col?: Partial<TableColumn>
 export function removeTableColumn(control: TableControl, index: number): TableControl {
   const cols = control.columns ?? []
   if (cols.length <= 1 || index < 0 || index >= cols.length) return control
+  const removedId = cols[index]?.id
   const grid = buildDesignGrid(control) // 当前规范矩阵
   const cells = grid.cells.map((row) => row.filter((_, i) => i !== index))
-  return {
+  let next: TableControl = {
     ...control,
     columns: cols.filter((_, i) => i !== index),
     cells,
@@ -555,6 +633,22 @@ export function removeTableColumn(control: TableControl, index: number): TableCo
     staticRows: grid.staticRows,
     designRows: grid.designRows,
   }
+  // 清理 vMerge 配置：被删列若已在 vMerge.columns 里 → 同步剔除，
+  // 否则下次加载会被解读成"某未知列启用 vMerge"，静默失效
+  if (removedId && next.options?.vMerge?.columns?.includes(removedId)) {
+    const vmCols = next.options.vMerge.columns.filter((id) => id !== removedId)
+    next = {
+      ...next,
+      options: {
+        ...next.options,
+        vMerge: {
+          ...next.options.vMerge,
+          columns: vmCols,
+        },
+      },
+    }
+  }
+  return next
 }
 
 /** 删除指定行（同步裁剪该行单元格）；至少保留 1 行 */

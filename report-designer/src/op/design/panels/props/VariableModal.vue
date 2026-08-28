@@ -8,7 +8,8 @@
 import { computed, ref, watch } from 'vue'
 import { NButton, NEmpty, NInput, NModal, NScrollbar } from 'naive-ui'
 import type { FieldDef } from '@op/types/datasource'
-import { useDataSourceStore } from '@op/design/stores/dataSource'
+import { useFieldCatalogStore } from '@op/design/stores/fieldCatalog'
+import { usePreviewDataStore } from '@op/design/stores/previewData'
 
 const props = defineProps<{
   show: boolean
@@ -21,7 +22,8 @@ const emit = defineEmits<{
   confirm: [value: string]
 }>()
 
-const ds = useDataSourceStore()
+const catalog = useFieldCatalogStore()
+const previewDataStore = usePreviewDataStore()
 const search = ref('')
 const selectedPath = ref('')
 
@@ -39,15 +41,15 @@ function typeMeta(f: FieldDef): { label: string; color: string } {
   return TYPE_META[f.type] ?? { label: f.type, color: '#8c8c8c' }
 }
 
-/* ----------------------------- 按表分组（ds.fieldTree） ----------------------------- */
+/* ----------------------------- 按表分组（catalog.fieldTree） ----------------------------- */
 const grouped = computed(() =>
-  ds.fieldTree.map((g) => ({
+  catalog.fieldTree.map((g) => ({
     table: g.table,
     fields: g.fields,
   })),
 )
 
-const totalCount = computed(() => ds.flatFields.length)
+const totalCount = computed(() => catalog.flatFields.length)
 
 /** 搜索过滤：字段名 / 路径 / 类型 / 示例值 */
 const filteredGroups = computed(() => {
@@ -86,7 +88,7 @@ function formatSample(v: unknown): string {
 }
 
 function sampleOf(f: FieldDef): string {
-  const data = (ds.previewData ?? {}) as Record<string, unknown>
+  const data = (previewDataStore.data ?? {}) as Record<string, unknown>
   const marker = f.path.indexOf('[]')
   if (marker >= 0) {
     // items[].qty → data.items[0].qty
@@ -130,7 +132,7 @@ watch(
       search.value = ''
       selectedPath.value = props.binding ?? ''
       // 弹窗独立可用：数据源未初始化（未打开过「数据源」面板）时主动加载字段
-      void ds.init()
+      void catalog.init()
     }
   },
 )
@@ -178,7 +180,7 @@ watch(
         </div>
         <NEmpty
           v-if="filteredGroups.length === 0"
-          :description="ds.loading ? '字段加载中…' : search ? '无匹配字段' : '暂无数据源字段'"
+          :description="catalog.loading ? '字段加载中…' : search ? '无匹配字段' : '暂无数据源字段'"
           class="var-empty"
         />
       </NScrollbar>

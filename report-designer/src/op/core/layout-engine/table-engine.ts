@@ -25,6 +25,7 @@
  */
 import type { HAlign, TableCell, TableCellStyle, TableColumn, TableControl } from '@op/types/control'
 import { FILTERS, interpolate, resolveBinding, stringifyValue, formatCellValue } from './expression'
+import { resolveSegments } from './segments'
 import {
   aggValueForRows,
   columnAggregatable,
@@ -39,12 +40,15 @@ import {
   buildDesignGrid,
   computeSpanLayout,
   designRowHeights,
+  ensureColumnIds,
   isDataTable,
   resolveCellStyleFor,
   type CellSpan,
   type DesignRowKind,
 } from './table-cells'
 import {
+  avgDataRowHeight,
+  buildBlankPlans,
   buildSummaryPlan,
   isEmptyRow,
   planRows,
@@ -52,6 +56,7 @@ import {
   summaryLabel,
   type RowPlan,
 } from './group-engine'
+import { computeVMergeSpans } from './vmerge'
 import type { TextMeasurer } from './measure'
 import type { EvalContext, RenderCell, RenderRow, RenderWarning } from './types'
 
@@ -129,11 +134,26 @@ function resolveRows(
   warnings: RenderWarning[],
 ): Array<Record<string, unknown>> {
   const path = control.dataSource?.trim()
+  const embedded = embeddedRows(control)
+
+  // 「导入数据」场景：模板落地时显式把 dataSource 写成 "__embedded__"，
+  // 引擎见此值直接吃 control.data，不再尝试解析业务数据。
+  if (path === '__embedded__') {
+    if (embedded.length === 0) {
+      warnings.push({
+        code: 'DATASOURCE_EMPTY',
+        message: '表格 dataSource="__embedded__" 但未提供内嵌数据',
+        controlId: control.id,
+      })
+    }
+    return embedded
+  }
+
   if (path) {
     const raw = resolveBinding(path, ctx)
-    const embedded = embeddedRows(control)
     if (raw === null || raw === undefined) {
-      // dataSource 缺失：有内嵌 data 则回退（模板示例/导入场景），否则告警
+      // 业务数据里找不到 dataSource 指向的字段：回退到 control.data（兼容老模板/导入场景），
+      // 没有内嵌数据再告警，避免新模型下沉默地丢失可见的明细行。
       if (embedded.length) return embedded
       warnings.push({
         code: 'DATASOURCE_EMPTY',
@@ -171,7 +191,7 @@ function resolveRows(
     }
 
     if (out.length === 0) {
-      // dataSource 为空数组：有内嵌 data 则回退
+      // dataSource 解析为空数组：回退到 control.data（兼容老模板/导入场景）
       if (embedded.length) return embedded
       warnings.push({
         code: 'DATASOURCE_EMPTY',
@@ -182,8 +202,17 @@ function resolveRows(
     return out
   }
 
-  // 表格自带内嵌数据（导入数据场景）：与 dataSource 字段解耦，直接作为数据行
-  return embeddedRows(control)
+  // dataSource 未设置：老模板/导入数据场景靠 control.data 吃饭，回退到内嵌行；
+  // 与上一版"完全静默 fallback"的差异：现在仅在没有内嵌数据时告警，且告警带 DATASOURCE_MISSING
+  // 让用户/排错脚本能区分"模板忘了绑数据源"与"模板根本没数据"。
+  if (embedded.length === 0) {
+    warnings.push({
+      code: 'DATASOURCE_MISSING',
+      message: '表格未设置 dataSource（导入数据场景请显式写 "__embedded__"）',
+      controlId: control.id,
+    })
+  }
+  return embedded
 }
 
 /* ------------------------------- 列宽归一化 ------------------------------ */
@@ -218,6 +247,9 @@ function cellTextMode(cell: TableCell): 'fixed' | 'variable' | 'expression' {
 /**
  * 数据行单元格取值。优先级：单元格 expression > 单元格 field > 单元格固定文字 > 列 expression > 列 field。
  * （单元格未设置任何内容时回落到列配置，既兼容老模板，也让"新增列"立刻可用。）
+ *
+ * v2 segments 分支：cell.segments 命中优先于 legacy 链路；legacy 链路不变（>80% 老模板依赖列回退）。
+ * 聚合 token 短路：cell.text 为 `{{#xxx}}` 时返回 '' 让 buildFooterRow 单独处理（line 660 直接读 cell.text）。
  */
 function dataCellText(
   cell: TableCell,
@@ -225,17 +257,38 @@ function dataCellText(
   ctx: EvalContext,
   errors: string[],
 ): string {
+  // v2: cell.segments 优先
+  if (cell.segments && cell.segments.length) {
+    // ★ Bug7 修复：单 text 段且为聚合 token → 短路返回 ''，让 buildFooterRow 接管
+    // 否则 resolveSegments 会把 '{{#totalCap}}' 当字面字符串返回，画布显示字面 token
+    if (
+      cell.segments.length === 1 &&
+      cell.segments[0]!.kind === 'text' &&
+      isAggToken(cell.segments[0]!.value)
+    ) {
+      return ''
+    }
+    const r = resolveSegments(cell.segments, ctx, { fallbackFormat: cell.format ?? col?.format })
+    errors.push(...r.errors)
+    return r.text
+  }
   const mode = cellTextMode(cell)
   // 显式模式且字段非空：按模式取值；字段为空则回落老链路（列配置兜底，保证显式 variable 空路径不打断整列）
   if (mode === 'expression' && cell.expression) return interp(cell.expression, ctx, errors)
   if (mode === 'variable' && cell.field) {
     return formatCellValue(resolveBinding(cell.field, ctx), cell.format ?? col?.format)
   }
-  if (mode === 'fixed' && cell.text !== undefined) return interp(cell.text, ctx, errors)
+  if (mode === 'fixed' && cell.text !== undefined) {
+    if (isAggToken(cell.text)) return '' // buildFooterRow 直接读 cell.text 接管
+    return interp(cell.text, ctx, errors)
+  }
   // 老模板 / 显式模式字段为空：expression > field > text > 列 expression > 列 field
   if (cell.expression) return interp(cell.expression, ctx, errors)
   if (cell.field) return formatCellValue(resolveBinding(cell.field, ctx), cell.format ?? col?.format)
-  if (cell.text !== undefined) return interp(cell.text, ctx, errors)
+  if (cell.text !== undefined) {
+    if (isAggToken(cell.text)) return ''
+    return interp(cell.text, ctx, errors)
+  }
   if (col?.expression) return interp(col.expression, ctx, errors)
   if (col?.field) return formatCellValue(resolveBinding(col.field, ctx), col?.format)
   return ''
@@ -254,17 +307,37 @@ function staticCellText(
   ctx: EvalContext,
   errors: string[],
 ): string {
+  // v2: cell.segments 优先
+  if (cell.segments && cell.segments.length) {
+    // ★ Bug7 修复：单 text 段且为聚合 token → 短路返回 ''，让 buildFooterRow 接管
+    if (
+      cell.segments.length === 1 &&
+      cell.segments[0]!.kind === 'text' &&
+      isAggToken(cell.segments[0]!.value)
+    ) {
+      return ''
+    }
+    const r = resolveSegments(cell.segments, ctx, { fallbackFormat: cell.format ?? col?.format })
+    errors.push(...r.errors)
+    return r.text
+  }
   const mode = cellTextMode(cell)
   // 显式模式且字段非空：按模式取值；字段为空则回落老链路
   if (mode === 'expression' && cell.expression) return interp(cell.expression, ctx, errors)
   if (mode === 'variable' && cell.field) {
     return formatCellValue(resolveBinding(cell.field, ctx), cell.format ?? col?.format)
   }
-  if (mode === 'fixed' && cell.text !== undefined) return interp(cell.text, ctx, errors)
+  if (mode === 'fixed' && cell.text !== undefined) {
+    if (isAggToken(cell.text)) return ''
+    return interp(cell.text, ctx, errors)
+  }
   // 老模板 / 显式模式字段为空：expression > field > text > 列 field > fallback
   if (cell.expression) return interp(cell.expression, ctx, errors)
   if (cell.field) return formatCellValue(resolveBinding(cell.field, ctx), cell.format ?? col?.format)
-  if (cell.text !== undefined) return interp(cell.text, ctx, errors)
+  if (cell.text !== undefined) {
+    if (isAggToken(cell.text)) return ''
+    return interp(cell.text, ctx, errors)
+  }
   if (col?.field) return formatCellValue(resolveBinding(col.field, ctx), col?.format)
   if (!fallback) return ''
   return interp(fallback, ctx, errors)
@@ -393,13 +466,15 @@ export interface BuildTableOptions {
 }
 
 export function buildTableModel({
-  control,
+  control: controlIn,
   ctx,
   measurer,
   widthMm,
   heightMm,
 }: BuildTableOptions): TableModel {
   const warnings: RenderWarning[] = []
+  // 老模板兼容：列无 id 时运行时补齐（不写回持久化，详见 ensureColumnIds 注释）
+  const control = ensureColumnIds(controlIn)
   const columns = control.columns ?? []
   const tableWidth = widthMm ?? control.width
   const tableHeight = heightMm ?? control.height
@@ -616,8 +691,27 @@ export function buildTableModel({
    * - 非数值列（字符串等）→ 不计算，渲染为空占位。
    * 首列的行名标签（"本页合计"/"总计"/"大写金额"）按普通静态文本处理。
    */
-  function buildFooterRow(rowCells: TableCell[], spanRow: CellSpan[]): RenderRow {
-    const tokens = rowCells.map((c) => parseAggToken(c.text))
+  /**
+ * Bug7 修复：从 cell 提取聚合 token（兼容 cell.text 老路径 + cell.segments 单 text 段 v2 路径）。
+ * v2 模型下用户用 ContentValueEditor「聚合」按钮插入 → textToSegments 把 {{#totalCap}}
+ * 整体保留为单 text 段 → cell.text 为空，cell.segments 才是真相源。
+ */
+function parseAggTokenFromCell(cell: TableCell): AggKind | null {
+  return parseAggToken(cell.text) ?? parseAggTokenFromSegments(cell.segments)
+}
+
+/** 单 text 段且值为聚合 token → 识别为该 token；其它形态返回 null */
+function parseAggTokenFromSegments(segments: TableCell['segments']): AggKind | null {
+  if (!segments || segments.length !== 1) return null
+  const seg = segments[0]!
+  if (seg.kind !== 'text') return null
+  return parseAggToken(seg.value)
+}
+
+function buildFooterRow(rowCells: TableCell[], spanRow: CellSpan[]): RenderRow {
+    // ★ Bug7 修复：聚合 token 既可能在 cell.text 里也可能在 cell.segments 里
+    // segments 是单 text 段且为 agg token 时（v2 路径）也要识别
+    const tokens = rowCells.map((c) => parseAggTokenFromCell(c))
     const hasToken = tokens.some((t) => t !== null)
     let fk: FooterKind = 'static'
     if (hasToken) {
@@ -627,11 +721,14 @@ export function buildTableModel({
       else fk = 'pageSubtotal'
     }
     const built = buildRowFrom(rowCells, spanRow, (cell, col) => {
-      const tk = parseAggToken(cell.text)
+      const tk = parseAggTokenFromCell(cell)
       if (tk) {
         const field = stripItems(col?.field)
+        // Bug10 修复：count token（pageCount/totalCount）只算行数、不依赖列字段类型，
+        // 不应该被「非数值列」分支吞掉。其它 token（sum/avg/cap）才需要数值列。
+        const isCountToken = tk === 'pageCount' || tk === 'totalCount'
         const numeric = columnAggregatable(col, dataRows[0])
-        if (numeric && field) {
+        if ((numeric && field) || isCountToken) {
         return applyCellStyle(
           {
             text: '',
@@ -647,7 +744,7 @@ export function buildTableModel({
           'static',
         )
         }
-        // 非数值列：聚合 token 不参与计算，留空
+        // 非数值列 + 非 count token：聚合 token 不参与计算，留空
         return applyCellStyle(
           { text: '', align: col?.align ?? 'left', bold: true },
           control,
@@ -686,6 +783,59 @@ export function buildTableModel({
   const sample = dataRows[0]
   for (let r = grid.headerRows + 1; r < grid.rowCount; r++) {
     footerRows.push(buildFooterRow(grid.cells[r] ?? [], spanLayout[r]!))
+  }
+
+  /* ── vMerge 同值纵向合并（M3 P0-1） ──
+   * 在所有 row（含 footer）都构建好之后做最后一遍折叠：
+   *   1) 对启用列上的「相邻 data 行同值」算 rowspan + 被吞行集合
+   *   2) 锚点行：cell.rowSpan = N、row.height *= N（视觉上撑满合并组空间）
+   *   3) 从 rows 移除被吞行（breakOnPage=true 时合并组自然不跨页——
+   *      sliceTable 看到的是已折叠的连续行）
+   * 已知取舍：被吞行的 dataIndex 不计入 pageSubtotal（sliceTable 的
+   * pickedDataRows 只看 anchor 的 dataIndex）；grandTotal 用 model.dataRows
+   * 不受影响。视觉上"少显示几行"是 vMerge 的目的，小计略少属可接受代价。 */
+  const vMergeCfg = control.options?.vMerge
+  if (vMergeCfg?.columns?.length) {
+    const { spans, consumed } = computeVMergeSpans({
+      plans,
+      rows,
+      columns,
+      options: { columns: vMergeCfg.columns, breakOnGroup: vMergeCfg.breakOnGroup },
+    })
+    // 1) 锚点写 rowSpan（仅 vMerge 列；行高不放大——
+    //    HTML rowspan=N 已让锚格视觉占 N 行高，浏览器自动撑满）
+    for (let p = 0; p < rows.length; p++) {
+      const rowSpans = spans[p]
+      if (!rowSpans || rowSpans.length === 0) continue
+      const row = rows[p]!
+      if (row.kind !== 'data') continue
+      const cells = row.cells
+      for (let c = 0; c < cells.length; c++) {
+        const rs = rowSpans[c]
+        if (rs && rs > 1) {
+          cells[c] = { ...cells[c]!, rowSpan: rs }
+        }
+      }
+    }
+    // 2) 被吞行：在 vMerge 列的 cell 上打 consumed=true（不删行）。
+    //    渲染器看到此标记不输出 <td>（上方 rowspan 已吞掉该格位），
+    //    同行其他列照常输出 —— 这就是 vMerge 的核心语义：
+    //    "仅合并指定列，其他列每行独立显示自己的数据"。
+    if (consumed.size > 0) {
+      const idSet = new Set(vMergeCfg.columns)
+      const colIdxs: number[] = []
+      columns.forEach((c, i) => {
+        if (c.id && idSet.has(c.id)) colIdxs.push(i)
+      })
+      for (const p of consumed) {
+        const row = rows[p]
+        if (!row) continue
+        for (const c of colIdxs) {
+          const cell = row.cells[c]
+          if (cell) row.cells[c] = { ...cell, consumed: true }
+        }
+      }
+    }
   }
 
   flushErrors()
@@ -769,11 +919,14 @@ export function sliceTable(model: TableModel, req: SliceRequest): SliceResult {
   // 把尾行模板按当前切片重算（本页合计用本页数据行；总计/大写用全表数据行，仅末页）
   function resolveTailRow(fr: RenderRow, rows: Array<Record<string, unknown>>): RenderRow {
     const cells: RenderCell[] = fr.cells.map((cell) => {
-      if (!cell.isAgg || !cell.aggField || !cell.tokenKind) return cell
+      if (!cell.isAgg || !cell.tokenKind) return cell
+      // count token（pageCount/totalCount）不需要 aggField；其它 token 必须有字段
+      const isCountToken = cell.tokenKind === 'pageCount' || cell.tokenKind === 'totalCount'
+      if (!isCountToken && !cell.aggField) return cell
       const text =
         cell.tokenKind === 'totalCap' || cell.tokenKind === 'pageCap'
-          ? toChineseCapitalRMB(aggValueForRows('totalSum', rows, cell.aggField))
-          : formatAggNumber(aggValueForRows(cell.tokenKind, rows, cell.aggField))
+          ? toChineseCapitalRMB(aggValueForRows('totalSum', rows, cell.aggField ?? ''))
+          : formatAggNumber(aggValueForRows(cell.tokenKind, rows, cell.aggField ?? ''))
       return { ...cell, text }
     })
     return { ...fr, cells }
@@ -868,6 +1021,61 @@ export function sliceTable(model: TableModel, req: SliceRequest): SliceResult {
   }
 
   isLast = isLast && i >= model.rows.length
+
+  /* ------------- P0-2 按纸张补空行 ------------- */
+  // 语义：剩余预算够时按需补空，使表格块延展至页面可用区域。覆盖中间页 + 单页凭证两种场景。
+  // 与 pageRows（数字）互斥：pageRows 优先；冲突时发 PAGE_ROWS_CONFLICT 警告
+  // 「让出数据行腾位置」循环保证「数据恰好填满但没给 blank 留位」时也能补空。
+  const fixBottomMode = opts.fixBottomRows
+  const fixBottomActive = forcedRows === null && fixBottomMode && fixBottomMode !== 'off'
+  if (forcedRows !== null && fixBottomMode && fixBottomMode !== 'off') {
+    warnings.push({
+      code: 'PAGE_ROWS_CONFLICT',
+      message: 'fixBottomRows 与 pageRows 同时设置，pageRows 优先（fixBottomRows 被忽略）',
+      controlId: model.control.id,
+    })
+  }
+  if (fixBottomActive) {
+    // 补空可用预算 = 总可用 - 表头 - 已用数据行 - 本页表尾预留 - 离页底留白
+    const footerSum = sumRowHeights(footerRows) + footerRows.length * rowBorder
+    let remainBudget =
+      req.avail - headerH - used - pageFooterH - footerSum - (opts.fixBottomMargin ?? 0)
+    // blank 行高：取「MIN_ROW_HEIGHT」与「已 picked 数据行均高」中较大者，保证视觉与数据行一致
+    let blankH = Math.max(MIN_ROW_HEIGHT, avgDataRowHeight(picked))
+    // { min: N }：min 模式下不能把数据行让到 min 以下
+    const minDataKeep = typeof fixBottomMode === 'object' ? fixBottomMode.min : 0
+    // 关键：while 循环把数据行塞满后，remain 常远小于 blankH（即使 remain > 0），
+    // 导致 0 个 blank 行、页面未填满。让出最后若干个数据行（归到下一页），腾出至少 1 个 blank 的位置。
+    while (
+      remainBudget > 0 &&
+      remainBudget < blankH &&
+      picked.length > 0 &&
+      picked[picked.length - 1]!.kind === 'data' &&
+      picked.filter((r) => r.kind === 'data').length > minDataKeep
+    ) {
+      const last = picked.pop()!
+      used -= last.height + rowBorder
+      i++ // 让出的数据行归到下一页
+      remainBudget += last.height + rowBorder
+      blankH = Math.max(MIN_ROW_HEIGHT, avgDataRowHeight(picked))
+    }
+    if (remainBudget >= blankH) {
+      let n = 0
+      if (fixBottomMode === 'fill') {
+        n = Math.floor(remainBudget / blankH)
+      } else {
+        // { min: N }：每页至少 N 个数据行；当前数据行不足则补到 N
+        const dataCount = picked.filter((r) => r.kind === 'data').length
+        const needByMin = Math.max(0, fixBottomMode.min - dataCount)
+        n = Math.max(Math.floor(remainBudget / blankH), needByMin)
+      }
+      if (n > 0) {
+        const blanks = buildBlankPlans(n, blankH, model.columnWidths)
+        picked.push(...blanks)
+        used += blanks.reduce((s, r) => s + r.height + rowBorder, 0)
+      }
+    }
+  }
 
   return {
     headerRows,
