@@ -43,6 +43,7 @@
   let dragEl     = null;
   let dragOX     = 0;
   let dragOY     = 0;
+  let dragMoved  = false;   // true once the pointer actually moves during a drag
   let resizing   = false;
   let resizeEl   = null;
   let resizeCorner = "";
@@ -267,7 +268,7 @@
     n("prop-y").addEventListener("change",       () => update("y",         () => +n("prop-y").value));
     n("prop-w").addEventListener("change",       () => update("w",         () => +n("prop-w").value));
     n("prop-h").addEventListener("change",       () => update("h",         () => +n("prop-h").value));
-    n("prop-text").addEventListener("input",     () => update("text",      () => n("prop-text").value));
+    n("prop-text").addEventListener("change",    () => update("text",      () => n("prop-text").value));
     n("prop-fontsize").addEventListener("change",() => update("fontSize",  () => +n("prop-fontsize").value));
     n("prop-color").addEventListener("input",    () => update("color",     () => n("prop-color").value));
     n("prop-align").addEventListener("change",   () => update("align",     () => n("prop-align").value));
@@ -290,13 +291,14 @@
     const el = elements.find(el => el.id === e.currentTarget.id);
     if (!el) return;
 
-    saveUndo();
+    // Only change selection – do NOT saveUndo() here; we save on first actual move.
     selected = el.id;
     renderAll();
     updateProps();
 
-    dragging = true;
-    dragEl   = el;
+    dragging  = true;
+    dragMoved = false;
+    dragEl    = el;
     const rect = canvas.getBoundingClientRect();
     dragOX = e.clientX - rect.left - mm2px(el.x);
     dragOY = e.clientY - rect.top  - mm2px(el.y);
@@ -306,6 +308,10 @@
 
   document.addEventListener("mousemove", function (e) {
     if (dragging && dragEl) {
+      if (!dragMoved) {
+        saveUndo();
+        dragMoved = true;
+      }
       const rect = canvas.getBoundingClientRect();
       let nx = px2mm(e.clientX - rect.left - dragOX);
       let ny = px2mm(e.clientY - rect.top  - dragOY);
@@ -555,7 +561,7 @@
      Built-in templates
      ============================================================ */
   const TEMPLATES = {
-    blank: [],
+    blank: function () { return []; },
     invoice: function () {
       return [
         makeText({ x: 5, y: 8,  w: 200, h: 14, text: "发票",   fontSize: 24, bold: true, align: "center" }),
@@ -601,7 +607,7 @@
       const tpl = btn.dataset.tpl;
       if (!TEMPLATES[tpl]) return;
       saveUndo();
-      elements = Array.isArray(TEMPLATES[tpl]) ? [] : TEMPLATES[tpl]();
+      elements = TEMPLATES[tpl]();
       selected = null;
       renderAll();
       updateProps();
