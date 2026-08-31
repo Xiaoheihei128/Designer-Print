@@ -7,14 +7,16 @@
  * 卡内控件绑定 {{row.字段}} / {{rowIndex + 1}} 逐卡不同（流水号/条码/二维码）。
  */
 import { computed } from 'vue'
-import { NButton, NInput, NInputNumber, NSelect, NText, NTooltip, NSwitch } from 'naive-ui'
+import { NButton, NInputNumber, NSelect, NText, NTooltip, NSwitch } from 'naive-ui'
 import type { LabelGridControl } from '@op/types/control'
 import { useDesignerStore } from '@op/design/stores/designer'
+import { useFieldCatalogStore } from '@op/design/stores/fieldCatalog'
 import { resolveGridGeometry, labelCardBounds } from '@op/core/layout-engine/label-grid'
 import { CONTROL_TYPE_LABEL } from '@op/design/canvas/controls'
 
 const store = useDesignerStore()
 const control = computed(() => store.selectedControl as LabelGridControl | null)
+const ds = useFieldCatalogStore()
 
 /** 卡内绑定示例（写成常量引用，避免在模板 mustache 里嵌套 {{ }} 触发表达式解析错误） */
 const BIND_ROW_EXAMPLE = '{{row.字段}}'
@@ -43,6 +45,28 @@ const visibleRows = computed(() => {
   const step = g.cardHeight + g.gapY
   if (!control.value || step <= 0) return 1
   return Math.max(1, Math.floor((control.value.height + g.gapY) / step))
+})
+
+/**
+ * 数据源下拉选项：仅展示明细（数组）表的数组路径。
+ *
+ * 与 TableProps.dataSourceOptions 同源（都从 activeSource.tables.isArray 推导），
+ * 保证两个需要「按数据条数平铺」的控件在 UX 上一致。
+ */
+const dataSourceOptions = computed(() => {
+  const tables = ds.activeSource?.tables ?? []
+  return tables
+    .filter((t) => t.isArray)
+    .map((t) => {
+      // pathPrefix 形如 "ReportItems[]."，去掉 [] 与可选尾点即数组路径
+      const arrayPath = (t.pathPrefix ?? '').replace(/\[\]\.?,?$/, '')
+      if (!arrayPath) return null
+      return {
+        label: `${t.name}（${arrayPath}）`,
+        value: arrayPath,
+      }
+    })
+    .filter((o): o is { label: string; value: string } => o !== null)
 })
 
 function patch(p: Partial<LabelGridControl>): void {
@@ -127,12 +151,16 @@ function clearChildren(): void {
     </div>
     <div class="props-row" style="margin-top: 4px">
       <span class="props-label">数据源</span>
-      <NInput
+      <NSelect
         size="small"
-        :value="control.dataSource ?? ''"
-        placeholder="数组路径，如 items"
-        style="width: 148px"
-        @update:value="patch({ dataSource: ($event ?? '').trim() || undefined })"
+        :value="control.dataSource ?? null"
+        :options="dataSourceOptions"
+        placeholder="选择明细表数组路径（留空 = 纯布局）"
+        filterable
+        tag
+        clearable
+        style="width: 220px"
+        @update:value="(v: string | null) => patch({ dataSource: (v ?? '').trim() || undefined })"
       />
     </div>
     <div class="props-row">

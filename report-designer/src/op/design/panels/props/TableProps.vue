@@ -41,7 +41,6 @@ import {
 } from '@op/design/format-options'
 import { tableStyleLabel, TABLE_STYLE_PRESETS } from '@op/design/canvas/table-style-presets'
 import TableStylePickerModal from '@op/design/modals/TableStylePickerModal.vue'
-import BindingEditor from './BindingEditor.vue'
 import VariableModal from './VariableModal.vue'
 
 const store = useDesignerStore()
@@ -79,6 +78,40 @@ const columnFieldOptions = computed(() => {
       label: `${f.label}  ·  ${f.path}`,
       value: f.path,
     })),
+  ]
+})
+
+/**
+ * 数据源下拉选项：仅展示明细（数组）表的数组路径。
+ *
+ * 修复背景：原先误用 <BindingEditor>（字段路径编辑器）做 Table 的 dataSource 下拉，
+ * 导致下拉里只有 `Header.ReportNo` 这类字段路径，看不到 `ReportItems` 数组路径，
+ * 用户被迫手敲 `ReportItems` 才能展开行。
+ *
+ * 运行时契约：TableControl.dataSource 是「数组路径」，由 resolveRows() 直接 resolveBinding()
+ * 取数组（见 table-engine.ts）。数组路径 = pathPrefix 去掉 `[]` 后缀。
+ *
+ * - 业务数据源（isArray=true）：从 activeSource.tables 推导
+ * - 导入数据场景（"__embedded__"）：保留占位项
+ * - tag + filterable：仍允许手填自定义数组路径（兼容老模板）
+ */
+const dataSourceOptions = computed(() => {
+  const tables = ds.activeSource?.tables ?? []
+  const businessTables = tables
+    .filter((t) => t.isArray)
+    .map((t) => {
+      // pathPrefix 形如 "ReportItems[]." / "items[]"，去掉 [] 与可选的尾点即数组路径
+      const arrayPath = (t.pathPrefix ?? '').replace(/\[\]\.?,?$/, '')
+      if (!arrayPath) return null
+      return {
+        label: `${t.name}（${arrayPath}）`,
+        value: arrayPath,
+      }
+    })
+    .filter((o): o is { label: string; value: string } => o !== null)
+  return [
+    ...businessTables,
+    { label: '导入数据（内嵌 __embedded__）', value: '__embedded__' },
   ]
 })
 
@@ -329,10 +362,16 @@ function patchGroupBy(v: string | null): void {
     <div class="props-title">数据设置</div>
     <div class="props-row">
       <span class="props-label">数据源</span>
-      <BindingEditor
-        :value="control.dataSource"
-        placeholder="留空 = 空白表格"
-        @update:value="patch({ dataSource: $event })"
+      <NSelect
+        :value="control.dataSource ?? null"
+        :options="dataSourceOptions"
+        placeholder="选择明细表数组路径（留空 = 空白表格）"
+        size="small"
+        filterable
+        tag
+        clearable
+        class="flex-1"
+        @update:value="patch({ dataSource: $event || undefined })"
       />
     </div>
   </div>

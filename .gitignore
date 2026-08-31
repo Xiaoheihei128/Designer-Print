@@ -19,3 +19,9 @@ tmp/
 *.tmp
 vite.config.js
 vite.config.d.ts
+
+# 渲染复现调试产物(临时输出,不入库)
+repro-out*.html
+
+# TS 增量编译产物
+*.tsbuildinfo
