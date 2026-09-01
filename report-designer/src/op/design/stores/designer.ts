@@ -27,6 +27,7 @@ import { genId } from '@op/utils/id'
 import { useHistoryStore } from './history'
 import { type ImportColumn } from '@op/design/utils/data-import'
 import { seedSummaryTail, syncTableHeight, patchCell } from '@op/core/layout-engine/table-cells'
+import { isAutoMigratedFieldOnly } from '@op/design/panels/props/content-value-helpers'
 import { MM_TO_PX } from '@op/utils/constants'
 
 /** 水印默认配置（开启后居中单个、45°、浅灰） */
@@ -254,60 +255,105 @@ export const useDesignerStore = defineStore('designer', () => {
    * 把字段路径直接绑到已有文本控件（segments 模式）。
    *
    * 与属性面板 [字段] 按钮（ContentValueEditor.onVarConfirm）行为对齐：
-   *   - segments = [{kind:'field', path}]
-   *   - contentType = 'variable'（兼容老 schema 读取方）
-   *   - binding = path（兼容老 schema 读取方）
-   *   - value / expression = undefined（让老 schema 兜底分支不再触发）
-   *   - silent：不进 undo 栈（与现有迁移路径一致；属性面板 [字段] 按钮也走 silent）
-   *   - 自动选中该控件（用户拖完字段后能直接继续编辑）
+   *
+   * - 自动迁移态（segments 是从 cell.field 单点迁移来的，binding 匹配，无手写文本）
+   *   → 覆盖：用户意图是"换绑字段"，与 v1 行为一致
+   *     segs = [{field, path}], binding = path
+   *
+   * - 已有 segments（含多片段混合文本）→ 追加 field 段：保留原有文本/字段
+   *     segs = [...current.segments, {field, path}]
+   *     contentType = 'variable'（确保数据驱动渲染走变量分支）
+   *     binding 清空（多段时单 binding 语义失效，由 segments 接管）
+   *
+   * - 已有遗留文本（v1 schema 的 value/expression，但无 segments）→ 切到 segments 模式
+   *     segs = [{text, leftover}, {field, path}]
+   *     用户输入"合计："再拖字段 → 渲染为"合计：字段值"
+   *
+   * - 完全空白 → 单 field 段（最常见的落点场景）
+   *     segs = [{field, path}], binding = path
    *
    * 只对 type='text' 生效；非文本控件（图片/表格等）返回 false，调用方应降级到"新建文本控件"。
+   * silent：不进 undo 栈（与 [字段] 按钮一致；undo 语义为"操作语义步骤"而非"每次拖拽"）。
    */
   function applyFieldBindingToTextControl(controlId: string, path: string): boolean {
     const current = findControl(controlId)
     if (!current || current.type !== 'text') return false
-    // 追加语义：保留已有内容，把 field 段追加到末尾（user 反馈"拖多字段被覆盖"修复点）
-    // - 已有 segments → 在尾部 push 一条 field 段
-    // - 老 schema（contentType=fixed + value）→ 保留 value 为 text 段，追加 field 段
-    // - 完全空白 → 直接创建单 field 段
-    const cur = current as { segments?: Array<{ kind: string; value?: string; path?: string; src?: string }>; value?: string }
-    const existing: Array<{ kind: string; value?: string; path?: string; src?: string }> =
-      cur.segments && cur.segments.length
-        ? [...cur.segments]
-        : cur.value
-          ? [{ kind: 'text', value: cur.value }]
-          : []
-    existing.push({ kind: 'field', path })
+
+    const cur = current as AnyControl
+    const existingSegs = cur.segments as
+      | Array<{ kind: 'text'; value: string } | { kind: 'field'; path: string } | { kind: 'expr'; src: string }>
+      | undefined
+    const existingBinding = cur.binding as string | undefined
+    const existingValue = cur.value as string | undefined
+    const existingExpression = cur.expression as string | undefined
+
+    // 1) 自动迁移态：单 field 段 + binding 匹配 + 无手写文本 → 覆盖换绑
+    if (
+      isAutoMigratedFieldOnly({
+        segments: existingSegs,
+        field: existingBinding,
+        value: existingValue,
+        expression: existingExpression,
+      })
+    ) {
+      const next = {
+        ...current,
+        segments: [{ kind: 'field' as const, path }],
+        contentType: 'variable' as const,
+        binding: path,
+        expression: undefined,
+        value: undefined,
+      } as AnyControl
+      updateControlSilent(controlId, next)
+      selectControl(controlId)
+      return true
+    }
+
+    // 2) 已有 segments（含多片段混合）→ 追加
+    if (existingSegs && existingSegs.length > 0) {
+      const next = {
+        ...current,
+        segments: [...existingSegs, { kind: 'field' as const, path }],
+        contentType: 'variable' as const,
+        // 多段时单 binding 语义失效，由 segments 接管；保留 binding 反而会
+        // 让老 schema 兜底分支（legacyToSegments）拿到 stale 路径造成歧义。
+        binding: undefined,
+        expression: undefined,
+      } as AnyControl
+      updateControlSilent(controlId, next)
+      selectControl(controlId)
+      return true
+    }
+
+    // 3) v1 schema 遗留文本（value 或 expression）→ 切到 segments 模式
+    const leftover = ((existingValue ?? '') || (existingExpression ?? '')).trim()
+    if (leftover && leftover !== path) {
+      const next = {
+        ...current,
+        segments: [
+          { kind: 'text' as const, value: leftover },
+          { kind: 'field' as const, path },
+        ],
+        contentType: 'variable' as const,
+        binding: undefined,
+        expression: undefined,
+        value: undefined,
+      } as AnyControl
+      updateControlSilent(controlId, next)
+      selectControl(controlId)
+      return true
+    }
+
+    // 4) 空白或内容就是当前字段 → 单 field 段（最常见的落点 / 自身重绑场景）
     const next = {
       ...current,
-      segments: existing,
+      segments: [{ kind: 'field' as const, path }],
       contentType: 'variable' as const,
       binding: path,
       expression: undefined,
       value: undefined,
     } as AnyControl
     updateControlSilent(controlId, next)
-    selectControl(controlId)
-    return true
-  }
-
-  /**
-   * 画布文本控件反向同步入口（fabric.Textbox editing:exited → store）。
-   *
-   * CanvasDesigner.addControl 注入的 attachCanvasTextListener 把 fabric.text 反向
-   * 解析后的 segments 透传到 attachCanvas.setEvents.onTextEdited，最终落到此函数。
-   *
-   * 走 updateControlSilent：连续手输不进 undo 栈、不置 dirty，与属性面板 textarea
-   * onSegmentsBlur 的 silent 语义一致。若后续用户报"画布手输无法 Ctrl+Z 回退"，
-   * 再切到 updateControl（带 undo 栈）。
-   *
-   * 自动 selectControl 让右侧 ContentValueEditor 的 props.segments watch 触发 →
-   * textarea 内容刷新（断点 ③ 修复）。
-   */
-  function handleCanvasTextEdited(controlId: string, segments: import('@op/types/control').Segment[]): boolean {
-    const current = findControl(controlId)
-    if (!current || current.type !== 'text') return false
-    updateControlSilent(controlId, { segments } as Partial<AnyControl>)
     selectControl(controlId)
     return true
   }
@@ -397,12 +443,6 @@ export const useDesignerStore = defineStore('designer', () => {
         // 物化 cells 网格（同 onCellEdit 注释）
         updateControlSilent(info.controlId, info.control as AnyControl)
         setPendingBind(info.controlId, info.row, info.col)
-      },
-      // ★ v2 文本反向同步（fabric → store）：用户双击文本控件进入 fabric 编辑，
-      // 失焦退出时 PrintText 把 fabric.text 反向 parse 为 segments 透传到此。
-      // 实际写 store 走 handleCanvasTextEdited（单测可直接调），保持 attachCanvas 单一入口。
-      onTextEdited: ({ controlId, segments }) => {
-        handleCanvasTextEdited(controlId, segments)
       },
     })
     d.setPage(pageSetup.value)
@@ -974,19 +1014,11 @@ export const useDesignerStore = defineStore('designer', () => {
 
   /** 从画布序列化出完整 template.json（协议结构） */
   function buildTemplate(): TemplateData<AnyControl> {
-    // ★ buildTemplate 是纯 getter：只从 store 模型出 JSON，不再回写 store。
-    //
-    // 历史 bug：原本这里调 `designer.value?.serialize()` 把 fabric 对象 → control
-    // 后回写 controls.value / zones.value。但 PrintText / PrintBarcode / PrintQrcode
-    // 等画布对象的 toControl() 不携带 segments 字段（segments 仅活于 Pinia store），
-    // 回写等于抹掉 store.segments。紧接着 TextProps 的 watch(control.value) →
-    // ensureSegments 从 binding 派生成单段 = "1 个片段"，用户编辑的拼接内容被清空。
-    //
-    // store 始终是 source of truth：
-    // - 控件拖动 / 缩放结束 → CanvasDesigner.onObjectModified → replaceControl 写回 store
-    // - 控件字段编辑 → updateControl / handleCanvasTextEdited / applyFieldBindingToTextControl 写回 store
-    // - 控件 addControl → addControlOfType 写回 store
-    // 几何 / 字段都是 store 持有，无需从画布反向拉取。
+    const synced = designer.value?.serialize()
+    if (synced) {
+      controls.value = synced.body
+      zones.value = synced.zones
+    }
     const sections: TemplateData<AnyControl>['document']['sections'] = []
     const header = zones.value.find((z) => z.zone === 'header')
     const footer = zones.value.find((z) => z.zone === 'footer')
@@ -1334,7 +1366,6 @@ export const useDesignerStore = defineStore('designer', () => {
     updateControlSilent,
     hitTestTextControl,
     applyFieldBindingToTextControl,
-    handleCanvasTextEdited,
     reflowBody,
     removeControl,
     moveControl,

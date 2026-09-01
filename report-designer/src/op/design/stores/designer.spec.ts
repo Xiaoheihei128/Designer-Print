@@ -1,14 +1,13 @@
 /**
- * designer store 单测：M1 P0-3 待绑态 / 字段绑定写入链路 + 字段拖到文本控件 + 画布反向同步
+ * designer store 单测：M1 P0-3 待绑态 / 字段绑定写入链路 + 字段拖到文本控件
  *
  * 覆盖：
  * - setPendingBind / closePendingBind 维护 pendingBindCell
  * - openCellEditor 与 pendingBindCell 互斥
  * - bindFieldToCell 写入链路（contentType/variable + field + 清 text/expression）并退出待绑态
  * - bindFieldToCell 越界 / 非表格控件 不写
- * - applyFieldBindingToTextControl 写入 segments=[{kind:'field', path}] 并兼容老 schema
+ * - applyFieldBindingToTextControl 写入 segments=[{kind:'field', path}]（自动迁移态覆盖 / 多片段追加 / v1 文本切到 segments / 空白单 field 段）
  * - hitTestTextControl 命中 body / labelgrid 子组件 / zone 子组件
- * - handleCanvasTextEdited 写入用户手输文本反向解析后的 segments（silent + 选中）
  */
 import { beforeEach, describe, expect, it } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
@@ -147,10 +146,16 @@ describe('bindFieldToCell 写入链路', () => {
  * 修复后 useDragAdd.onDrop 接 application/x-openprint-binding mime：
  *   - 命中已有文本控件 → applyFieldBindingToTextControl（segments 模式）
  *   - 未命中 → 在落点新建文本控件，预绑字段
+ *
+ * 语义必须与属性面板 [字段] 按钮（ContentValueEditor.onVarConfirm）对齐：
+ *   - 自动迁移态（单 field 段 + binding 匹配 + 无手写文本） → 覆盖换绑
+ *   - 已有 segments（多片段混合） → 追加 field 段（保留原文与原字段）
+ *   - v1 schema 遗留文本（value/expression）→ 切成 segments=[text+field]
+ *   - 空白 → 单 field 段
  * 这里锁定 store 层契约。
  */
-describe('applyFieldBindingToTextControl 字段拖到已有文本控件（追加语义）', () => {
-  it('老 schema 控件（fixed + value）→ value 转 text 段 + 追加 field 段', () => {
+describe('applyFieldBindingToTextControl 字段拖到已有文本控件', () => {
+  it('空白文本控件：segments 写入单 field 段，兼容老 schema', () => {
     const store = useDesignerStore()
     store.controls.push({
       id: 'txt-1',
@@ -159,21 +164,16 @@ describe('applyFieldBindingToTextControl 字段拖到已有文本控件（追加
       top: 10,
       width: 50,
       height: 8,
-      contentType: 'fixed',
-      value: '旧文本',
     })
     const ok = store.applyFieldBindingToTextControl('txt-1', 'Header.ReportNo')
     expect(ok).toBe(true)
     const t = store.controls.find((c) => c.id === 'txt-1') as {
-      segments?: Array<{ kind: string; path?: string; value?: string }>
+      segments?: Array<{ kind: string; path?: string }>
       binding?: string
       contentType?: string
       value?: string
     }
-    expect(t.segments).toEqual([
-      { kind: 'text', value: '旧文本' },
-      { kind: 'field', path: 'Header.ReportNo' },
-    ])
+    expect(t.segments).toEqual([{ kind: 'field', path: 'Header.ReportNo' }])
     // 兼容老 schema：contentType=variable, binding 同步
     expect(t.contentType).toBe('variable')
     expect(t.binding).toBe('Header.ReportNo')
@@ -183,7 +183,7 @@ describe('applyFieldBindingToTextControl 字段拖到已有文本控件（追加
     expect(store.selectedIds).toContain('txt-1')
   })
 
-  it('已有 segments → 追加到末尾，不覆盖', () => {
+  it('已有 segments（多片段混合）→ 追加 field 段，保留原文与原字段', () => {
     const store = useDesignerStore()
     store.controls.push({
       id: 'txt-2',
@@ -197,59 +197,72 @@ describe('applyFieldBindingToTextControl 字段拖到已有文本控件（追加
         { kind: 'field', path: 'Header.Total' },
       ],
       contentType: 'variable',
-      binding: 'Header.Total',
     })
     store.applyFieldBindingToTextControl('txt-2', 'Header.ProductCode')
     const t = store.controls.find((c) => c.id === 'txt-2') as {
       segments?: Array<{ kind: string; path?: string; value?: string }>
+      binding?: string
     }
+    // 关键：原"合计："文字 + 原字段都保留，新字段追加在末尾
     expect(t.segments).toEqual([
       { kind: 'text', value: '合计：' },
       { kind: 'field', path: 'Header.Total' },
       { kind: 'field', path: 'Header.ProductCode' },
     ])
+    // 多段时单 binding 语义失效，由 segments 接管
+    expect(t.binding).toBeUndefined()
   })
 
-  it('拖多字段逐次追加（user 报修"被覆盖"修复点）', () => {
+  it('v1 schema 遗留 value（用户输入过文本）→ 切到 segments=[text+field]', () => {
     const store = useDesignerStore()
     store.controls.push({
-      id: 'txt-multi',
-      type: 'text',
-      left: 0,
-      top: 0,
-      width: 80,
-      height: 8,
-      contentType: 'variable',
-      binding: 'Header.A',
-      segments: [{ kind: 'field', path: 'Header.A' }],
-    })
-    store.applyFieldBindingToTextControl('txt-multi', 'Header.B')
-    store.applyFieldBindingToTextControl('txt-multi', 'Header.C')
-    const t = store.controls.find((c) => c.id === 'txt-multi') as {
-      segments?: Array<{ kind: string; path?: string }>
-    }
-    expect(t.segments).toEqual([
-      { kind: 'field', path: 'Header.A' },
-      { kind: 'field', path: 'Header.B' },
-      { kind: 'field', path: 'Header.C' },
-    ])
-  })
-
-  it('完全空白控件 → 直接创建单 field 段', () => {
-    const store = useDesignerStore()
-    store.controls.push({
-      id: 'txt-empty',
+      id: 'txt-3',
       type: 'text',
       left: 0,
       top: 0,
       width: 50,
       height: 8,
+      contentType: 'fixed',
+      value: '客户：',
     })
-    store.applyFieldBindingToTextControl('txt-empty', 'Header.X')
-    const t = store.controls.find((c) => c.id === 'txt-empty') as {
-      segments?: Array<{ kind: string; path?: string }>
+    store.applyFieldBindingToTextControl('txt-3', 'Header.CustomerName')
+    const t = store.controls.find((c) => c.id === 'txt-3') as {
+      segments?: Array<{ kind: string; path?: string; value?: string }>
+      binding?: string
+      contentType?: string
+      value?: string
     }
-    expect(t.segments).toEqual([{ kind: 'field', path: 'Header.X' }])
+    expect(t.segments).toEqual([
+      { kind: 'text', value: '客户：' },
+      { kind: 'field', path: 'Header.CustomerName' },
+    ])
+    expect(t.contentType).toBe('variable')
+    expect(t.value).toBeUndefined()
+    expect(t.binding).toBeUndefined()
+  })
+
+  it('自动迁移态（单 field 段 + binding 匹配 + 无文本）→ 覆盖换绑', () => {
+    const store = useDesignerStore()
+    // 模拟"打开老模板后字段被 ensureSegments 自动迁移到 segments"的中间态：
+    // 用户还没编辑过 segments，意图是换绑字段
+    store.controls.push({
+      id: 'txt-4',
+      type: 'text',
+      left: 0,
+      top: 0,
+      width: 50,
+      height: 8,
+      segments: [{ kind: 'field', path: 'Header.OldField' }],
+      contentType: 'variable',
+      binding: 'Header.OldField',
+    })
+    store.applyFieldBindingToTextControl('txt-4', 'Header.NewField')
+    const t = store.controls.find((c) => c.id === 'txt-4') as {
+      segments?: Array<{ kind: string; path?: string }>
+      binding?: string
+    }
+    expect(t.segments).toEqual([{ kind: 'field', path: 'Header.NewField' }])
+    expect(t.binding).toBe('Header.NewField')
   })
 
   it('非文本控件：返回 false，不动', () => {
@@ -271,7 +284,7 @@ describe('applyFieldBindingToTextControl 字段拖到已有文本控件（追加
   it('silent：不进 undo 栈（与属性面板 [字段] 按钮行为对齐）', () => {
     const store = useDesignerStore()
     store.controls.push({
-      id: 'txt-3',
+      id: 'txt-5',
       type: 'text',
       left: 0,
       top: 0,
@@ -281,7 +294,7 @@ describe('applyFieldBindingToTextControl 字段拖到已有文本控件（追加
       value: '旧',
     })
     const historyLenBefore = store.dirty
-    store.applyFieldBindingToTextControl('txt-3', 'Header.A')
+    store.applyFieldBindingToTextControl('txt-5', 'Header.A')
     // dirty 标记不应被 silent 操作翻转
     expect(store.dirty).toBe(historyLenBefore)
   })
@@ -400,95 +413,5 @@ describe('hitTestTextControl 命中检测', () => {
     const clientX = 0 + 0 + 10 * MM_TO_PX * 1
     const clientY = 0 + 0 + 7 * MM_TO_PX * 1
     expect(store.hitTestTextControl(clientX, clientY, makeStage())).toBe('header-txt')
-  })
-})
-
-/**
- * 画布文本控件反向同步（v2 segments 模式）
- *
- * 用户报修："画布上拖字段到文本控件后手输'和和和'，右侧 ContentValueEditor 不同步、
- * 预览丢中文"。根因：fabric.Textbox editing:exited 从未订阅，fabric.text 改了
- * store 完全不知道。
- *
- * 修复后 attachCanvas.setEvents.onTextEdited 路由到 handleCanvasTextEdited：
- * - 把反向解析的 segments 写入 store.controls[id].segments
- * - silent（连续手输不进 undo 栈、不置 dirty）
- * - 自动 selectControl 让右侧 ContentValueEditor 的 props.segments watch 触发 → textarea 刷新
- */
-describe('handleCanvasTextEdited 画布文本反向同步', () => {
-  it('画布手输"和和和{{Header.X}}" → store.segments 是 [field, text]，可被 ContentValueEditor watch 到', () => {
-    const store = useDesignerStore()
-    store.controls.push({
-      id: 'txt-1',
-      type: 'text',
-      left: 0,
-      top: 0,
-      width: 50,
-      height: 8,
-      segments: [{ kind: 'field', path: 'Header.X' }],
-      contentType: 'variable',
-    })
-    // 模拟画布 editing:exited 后透传的 payload
-    const ok = store.handleCanvasTextEdited('txt-1', [
-      { kind: 'field', path: 'Header.X' },
-      { kind: 'text', value: '和和和' },
-    ])
-    expect(ok).toBe(true)
-    const t = store.controls.find((c) => c.id === 'txt-1') as {
-      segments?: Array<{ kind: string; path?: string; value?: string }>
-    }
-    expect(t.segments).toEqual([
-      { kind: 'field', path: 'Header.X' },
-      { kind: 'text', value: '和和和' },
-    ])
-  })
-
-  it('silent：dirty 标记不翻转（连续手输不污染未保存状态）', () => {
-    const store = useDesignerStore()
-    store.controls.push({
-      id: 'txt-2',
-      type: 'text',
-      left: 0,
-      top: 0,
-      width: 50,
-      height: 8,
-      segments: [{ kind: 'text', value: 'old' }],
-    })
-    const dirtyBefore = store.dirty
-    store.handleCanvasTextEdited('txt-2', [{ kind: 'text', value: 'new' }])
-    expect(store.dirty).toBe(dirtyBefore)
-  })
-
-  it('自动选中该控件 → 右侧 ContentValueEditor 接收新 props.segments → watch 触发', () => {
-    const store = useDesignerStore()
-    store.controls.push({
-      id: 'txt-3',
-      type: 'text',
-      left: 0,
-      top: 0,
-      width: 50,
-      height: 8,
-      segments: [{ kind: 'field', path: 'Header.A' }],
-    })
-    expect(store.selectedIds).not.toContain('txt-3')
-    store.handleCanvasTextEdited('txt-3', [{ kind: 'text', value: 'updated' }])
-    expect(store.selectedIds).toContain('txt-3')
-  })
-
-  it('非文本控件 id：返回 false，不动', () => {
-    const store = useDesignerStore()
-    const table = makeTable()
-    store.controls.push(table)
-    const ok = store.handleCanvasTextEdited('tbl-1', [{ kind: 'text', value: 'X' }])
-    expect(ok).toBe(false)
-    expect(store.controls.find((c) => c.id === 'tbl-1')).toStrictEqual(table)
-  })
-
-  it('不存在的 id：返回 false，不抛', () => {
-    const store = useDesignerStore()
-    expect(() =>
-      store.handleCanvasTextEdited('nope', [{ kind: 'text', value: 'X' }]),
-    ).not.toThrow()
-    expect(store.handleCanvasTextEdited('nope', [{ kind: 'text', value: 'X' }])).toBe(false)
   })
 })
