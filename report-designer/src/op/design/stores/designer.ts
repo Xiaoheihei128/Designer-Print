@@ -266,11 +266,21 @@ export const useDesignerStore = defineStore('designer', () => {
   function applyFieldBindingToTextControl(controlId: string, path: string): boolean {
     const current = findControl(controlId)
     if (!current || current.type !== 'text') return false
-    const segs: Array<{ kind: 'field'; path: string }> = [{ kind: 'field', path }]
-    // 构造新对象（与 TextProps.onSegmentsChange / onVarConfirm 走法一致）
+    // 追加语义：保留已有内容，把 field 段追加到末尾（user 反馈"拖多字段被覆盖"修复点）
+    // - 已有 segments → 在尾部 push 一条 field 段
+    // - 老 schema（contentType=fixed + value）→ 保留 value 为 text 段，追加 field 段
+    // - 完全空白 → 直接创建单 field 段
+    const cur = current as { segments?: Array<{ kind: string; value?: string; path?: string; src?: string }>; value?: string }
+    const existing: Array<{ kind: string; value?: string; path?: string; src?: string }> =
+      cur.segments && cur.segments.length
+        ? [...cur.segments]
+        : cur.value
+          ? [{ kind: 'text', value: cur.value }]
+          : []
+    existing.push({ kind: 'field', path })
     const next = {
       ...current,
-      segments: segs,
+      segments: existing,
       contentType: 'variable' as const,
       binding: path,
       expression: undefined,
@@ -964,11 +974,19 @@ export const useDesignerStore = defineStore('designer', () => {
 
   /** 从画布序列化出完整 template.json（协议结构） */
   function buildTemplate(): TemplateData<AnyControl> {
-    const synced = designer.value?.serialize()
-    if (synced) {
-      controls.value = synced.body
-      zones.value = synced.zones
-    }
+    // ★ buildTemplate 是纯 getter：只从 store 模型出 JSON，不再回写 store。
+    //
+    // 历史 bug：原本这里调 `designer.value?.serialize()` 把 fabric 对象 → control
+    // 后回写 controls.value / zones.value。但 PrintText / PrintBarcode / PrintQrcode
+    // 等画布对象的 toControl() 不携带 segments 字段（segments 仅活于 Pinia store），
+    // 回写等于抹掉 store.segments。紧接着 TextProps 的 watch(control.value) →
+    // ensureSegments 从 binding 派生成单段 = "1 个片段"，用户编辑的拼接内容被清空。
+    //
+    // store 始终是 source of truth：
+    // - 控件拖动 / 缩放结束 → CanvasDesigner.onObjectModified → replaceControl 写回 store
+    // - 控件字段编辑 → updateControl / handleCanvasTextEdited / applyFieldBindingToTextControl 写回 store
+    // - 控件 addControl → addControlOfType 写回 store
+    // 几何 / 字段都是 store 持有，无需从画布反向拉取。
     const sections: TemplateData<AnyControl>['document']['sections'] = []
     const header = zones.value.find((z) => z.zone === 'header')
     const footer = zones.value.find((z) => z.zone === 'footer')

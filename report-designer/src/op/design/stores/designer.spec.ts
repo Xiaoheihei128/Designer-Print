@@ -149,8 +149,8 @@ describe('bindFieldToCell 写入链路', () => {
  *   - 未命中 → 在落点新建文本控件，预绑字段
  * 这里锁定 store 层契约。
  */
-describe('applyFieldBindingToTextControl 字段拖到已有文本控件', () => {
-  it('普通文本控件：segments 写入单 field 段，兼容老 schema', () => {
+describe('applyFieldBindingToTextControl 字段拖到已有文本控件（追加语义）', () => {
+  it('老 schema 控件（fixed + value）→ value 转 text 段 + 追加 field 段', () => {
     const store = useDesignerStore()
     store.controls.push({
       id: 'txt-1',
@@ -165,12 +165,15 @@ describe('applyFieldBindingToTextControl 字段拖到已有文本控件', () => 
     const ok = store.applyFieldBindingToTextControl('txt-1', 'Header.ReportNo')
     expect(ok).toBe(true)
     const t = store.controls.find((c) => c.id === 'txt-1') as {
-      segments?: Array<{ kind: string; path?: string }>
+      segments?: Array<{ kind: string; path?: string; value?: string }>
       binding?: string
       contentType?: string
       value?: string
     }
-    expect(t.segments).toEqual([{ kind: 'field', path: 'Header.ReportNo' }])
+    expect(t.segments).toEqual([
+      { kind: 'text', value: '旧文本' },
+      { kind: 'field', path: 'Header.ReportNo' },
+    ])
     // 兼容老 schema：contentType=variable, binding 同步
     expect(t.contentType).toBe('variable')
     expect(t.binding).toBe('Header.ReportNo')
@@ -180,7 +183,7 @@ describe('applyFieldBindingToTextControl 字段拖到已有文本控件', () => 
     expect(store.selectedIds).toContain('txt-1')
   })
 
-  it('已有 segments（多片段）→ 覆盖为单 field 段', () => {
+  it('已有 segments → 追加到末尾，不覆盖', () => {
     const store = useDesignerStore()
     store.controls.push({
       id: 'txt-2',
@@ -198,9 +201,55 @@ describe('applyFieldBindingToTextControl 字段拖到已有文本控件', () => 
     })
     store.applyFieldBindingToTextControl('txt-2', 'Header.ProductCode')
     const t = store.controls.find((c) => c.id === 'txt-2') as {
+      segments?: Array<{ kind: string; path?: string; value?: string }>
+    }
+    expect(t.segments).toEqual([
+      { kind: 'text', value: '合计：' },
+      { kind: 'field', path: 'Header.Total' },
+      { kind: 'field', path: 'Header.ProductCode' },
+    ])
+  })
+
+  it('拖多字段逐次追加（user 报修"被覆盖"修复点）', () => {
+    const store = useDesignerStore()
+    store.controls.push({
+      id: 'txt-multi',
+      type: 'text',
+      left: 0,
+      top: 0,
+      width: 80,
+      height: 8,
+      contentType: 'variable',
+      binding: 'Header.A',
+      segments: [{ kind: 'field', path: 'Header.A' }],
+    })
+    store.applyFieldBindingToTextControl('txt-multi', 'Header.B')
+    store.applyFieldBindingToTextControl('txt-multi', 'Header.C')
+    const t = store.controls.find((c) => c.id === 'txt-multi') as {
       segments?: Array<{ kind: string; path?: string }>
     }
-    expect(t.segments).toEqual([{ kind: 'field', path: 'Header.ProductCode' }])
+    expect(t.segments).toEqual([
+      { kind: 'field', path: 'Header.A' },
+      { kind: 'field', path: 'Header.B' },
+      { kind: 'field', path: 'Header.C' },
+    ])
+  })
+
+  it('完全空白控件 → 直接创建单 field 段', () => {
+    const store = useDesignerStore()
+    store.controls.push({
+      id: 'txt-empty',
+      type: 'text',
+      left: 0,
+      top: 0,
+      width: 50,
+      height: 8,
+    })
+    store.applyFieldBindingToTextControl('txt-empty', 'Header.X')
+    const t = store.controls.find((c) => c.id === 'txt-empty') as {
+      segments?: Array<{ kind: string; path?: string }>
+    }
+    expect(t.segments).toEqual([{ kind: 'field', path: 'Header.X' }])
   })
 
   it('非文本控件：返回 false，不动', () => {
