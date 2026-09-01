@@ -155,6 +155,7 @@ import { getAllMatchResults, getMatchDiagnosis, type MatchResult } from '@/servi
 import { getMockData } from '@/services/mockData'
 import { TEMPLATE_CATEGORIES, type ReportTemplate } from '@/types/template'
 import { useBusinessDataStore } from '@op/design/stores/businessData'
+import { useFieldCatalogStore } from '@op/design/stores/fieldCatalog'
 
 const router = useRouter()
 
@@ -363,28 +364,65 @@ function handleMatch() {
 // 设计器页 onMounted 时通过 usePreviewDataStore.data 拿到同一份。
 // sessionStorage 仅作兜底（SPA 重置/刷新整页时恢复）。
 function handleUseTemplate(template?: ReportTemplate) {
-  const target = template ?? matchResult.value?.template
-  if (!target) return
-  const id = target.id
-  let parsed: unknown = null
-  if (dataJson.value.trim()) {
-    try {
-      parsed = JSON.parse(dataJson.value)
-    } catch {
-      ElMessage.warning('JSON 解析失败，跳转后将使用默认示例数据')
+  try {
+    const target = template ?? matchResult.value?.template
+    if (!target) return
+    const id = target.id
+    let parsed: unknown = null
+    if (dataJson.value.trim()) {
+      try {
+        parsed = JSON.parse(dataJson.value)
+      } catch {
+        ElMessage.warning('JSON 解析失败，跳转后将使用默认示例数据')
+      }
     }
-  }
-  if (parsed && typeof parsed === 'object') {
-    const bizStore = useBusinessDataStore()
-    bizStore.setFromMatcher(parsed as Record<string, unknown>)
-    try {
-      sessionStorage.setItem('op:matcher:lastData', JSON.stringify(parsed))
-    } catch (e) {
-      console.warn('sessionStorage 写入失败：', e)
+    if (parsed && typeof parsed === 'object') {
+      // ★ 同一份数据/同一份目录注入，要走同一 sourceId —— 不然 designer.onMounted
+      //   兜底路径用 'matcher:restored' 覆盖 matcher 已经设的 'matcher:SemiFinished'，
+      //   activeSourceId 被两个路径互掐，fieldTree 看到的是被覆盖的错 ID 对应的目录。
+      const matchedCategory = target.category ?? ''
+      const matchedSourceId = `matcher:${matchedCategory}`
+      const matchedSourceName = `${target.name}（matcher 内省）`
+
+      // 步骤化定位：每一步单独 try/catch，console.error 报具体哪一步抛错
+      try {
+        const bizStore = useBusinessDataStore()
+        bizStore.setFromMatcher(parsed as Record<string, unknown>)
+        console.info('[matcher] step 1 ok: businessData.setFromMatcher')
+      } catch (e) {
+        console.error('[matcher] step 1 throw (setFromMatcher):', e)
+      }
+      try {
+        const fieldCatalog = useFieldCatalogStore()
+        const fieldCount = fieldCatalog.injectFromJson(parsed as Record<string, unknown>, {
+          sourceId: matchedSourceId,
+          sourceName: matchedSourceName,
+        })
+        console.info(`[matcher] step 2 ok: injectFromJson wrote ${fieldCount} fields`)
+      } catch (e) {
+        console.error('[matcher] step 2 throw (injectFromJson):', e)
+      }
+      try {
+        // 把 sourceId 一起塞进 sessionStorage，designer.onMounted 兜底时复用同一 ID
+        sessionStorage.setItem(
+          'op:matcher:lastData',
+          JSON.stringify({
+            __sourceId: matchedSourceId,
+            __sourceName: matchedSourceName,
+            data: parsed,
+          }),
+        )
+        console.info('[matcher] step 3 ok: sessionStorage wrote')
+      } catch (e) {
+        console.warn('[matcher] step 3 warn (sessionStorage):', e)
+      }
     }
+    ElMessage.success(`已选择模板: ${target.name}, 正在打开设计器...`)
+    router.push({ path: '/op-designer', query: { id: String(id) } })
+  } catch (err) {
+    console.error('[matcher] handleUseTemplate 异常：', err)
+    ElMessage.error('跳转设计器失败，请查看控制台')
   }
-  ElMessage.success(`已选择模板: ${target.name}, 正在打开设计器...`)
-  router.push({ path: '/op-designer', query: { id: String(id) } })
 }
 
 // 初始化

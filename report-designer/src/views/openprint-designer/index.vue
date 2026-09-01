@@ -31,6 +31,7 @@ import { getBackendConfig } from '@op/config/backend'
 import { createHttpRepository } from '@op/repository/http-repo'
 import { useDesignerStore } from '@op/design/stores/designer'
 import { useBusinessDataStore } from '@op/design/stores/businessData'
+import { useFieldCatalogStore } from '@op/design/stores/fieldCatalog'
 
 const route = useRoute()
 const uiStore = useUiStore()
@@ -66,8 +67,22 @@ onMounted(async () => {
     try {
       const raw = sessionStorage.getItem('op:matcher:lastData')
       if (raw) {
-        const data = JSON.parse(raw) as Record<string, unknown>
-        businessDataStore.setFromMatcher(data)
+        const payload = JSON.parse(raw) as {
+          __sourceId?: string
+          __sourceName?: string
+          data?: Record<string, unknown>
+        }
+        // 兼容老格式（v1 直接 JSON.stringify(parsed) 没有 __sourceId 包装）
+        const data = payload.data ?? (payload as unknown as Record<string, unknown>)
+        const sourceId = payload.__sourceId ?? 'matcher:restored'
+        const sourceName = payload.__sourceName ?? 'matcher 数据（刷新恢复）'
+        if (data && typeof data === 'object') {
+          businessDataStore.setFromMatcher(data)
+          // ★ 目录-数据一致性：用同一个 sourceId 注入，避免兜底路径覆盖 matcher 已设的 ID。
+          //   老格式（无 __sourceId）落到 'matcher:restored'，新格式落到原 category 对应的 ID。
+          const fieldCatalog = useFieldCatalogStore()
+          fieldCatalog.injectFromJson(data, { sourceId, sourceName })
+        }
         sessionStorage.removeItem('op:matcher:lastData')
       }
     } catch (e) {
