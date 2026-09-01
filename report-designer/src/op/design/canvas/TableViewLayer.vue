@@ -427,7 +427,21 @@ function isNaiveTeleportTarget(target: Node | null): boolean {
 function onDocMouseDown(e: MouseEvent): void {
   if (store.editingCell) {
     const target = e.target as Node | null
-    if (target && layerRef.value?.contains(target)) return
+    // ★ 偶发锁定修复：把"层内点击豁免"从整个 overlay 收到【当前正在编辑的那个表格 wrapper】。
+    //   旧逻辑用 layerRef.contains(target) —— 它会把所有 .op-table-overlay__item
+    //   （含 editing 那个 wrapper 通过 overflow:visible 溢出覆盖到画布其它控件上的部分）
+    //   一律判为"层内"，结果：用户在 editing 表格外、但被 wrapper 溢出区域盖住的文本
+    //   控件上 mousedown 时，Fabric 既收不到事件（被 overlay 截获）、overlay 又不退出
+    //   （被旧判断误判为"层内"），控件永远选不中拖不动，按 Esc 或点画布空白才恢复——
+    //   与"绑定字段后偶发锁定"的体感完全一致。
+    //   修复：只有 target 真的落在当前 editingId 对应那个 [data-table-id=editingId]
+    //         wrapper 内，才视为"在 editing 表格内"而豁免退出。
+    if (target) {
+      const editingWrapper = layerRef.value?.querySelector(
+        `[data-table-id="${CSS.escape(store.editingCell.controlId)}"]`,
+      )
+      if (editingWrapper && editingWrapper.contains(target)) return
+    }
     if (isNaiveTeleportTarget(target)) return
     // ★ Bug6 修复：CellToolbar 内点击不退出编辑
     // 之前 NPopover 按钮（聚合/字段/函数）被 document capture 阶段的 mousedown 拦截，
@@ -575,15 +589,23 @@ const editingRowKind = computed(() => {
 }
 
 .op-table-overlay__item.is-editing {
-  pointer-events: auto;
+  /* ★ 偶发锁定修复：wrapper 自身不接 pointer-events，只让 td 接。
+     旧逻辑 wrapper 整块 auto + overflow:visible → 编辑态下 wrapper 通过溢出
+     覆盖到画布上其它控件（如文本）上的部分会一并拦截 mousedown，
+     既不让 Fabric 选中目标控件、又不触发 onDocMouseDown 退出编辑（被旧
+     "layerRef.contains 一律豁免"误判），形成"绑定后拖不动"死锁。
+     现在 wrapper=none + td=auto：溢出覆盖区透传，单元格区域仍可编辑。 */
+  pointer-events: none;
   outline: 1px solid var(--brand-primary, #1677ff);
   outline-offset: 1px;
   /* 编辑态不裁剪：用户输入多行文本时允许撑出包围盒完整显示 */
   overflow: visible;
 }
 
-/* 编辑态放开占位符的单行截断（nowrap/ellipsis 是设计态展示用），允许换行输入 */
+/* 编辑态放开占位符的单行截断（nowrap/ellipsis 是设计态展示用），允许换行输入；
+   同步把 pointer-events: auto 收到 td 上，承接上面 wrapper 关闭拦截后的单元格交互 */
 .op-table-overlay__item.is-editing :deep(td) {
+  pointer-events: auto;
   white-space: normal !important;
   overflow: visible !important;
   text-overflow: clip !important;

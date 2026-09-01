@@ -292,6 +292,13 @@ export const useDesignerStore = defineStore('designer', () => {
     pageCount.value = d.effectivePageCount
     d.setPageBackground(pageSetup.value.backgroundColor ?? '#ffffff')
     d.setWatermark(pageSetup.value.watermark)
+    // ★ Bug1 历史对象恢复：旧版 clampToContentArea 在 X 方向叠加了 pageTop，
+    //   把第 2 页及以后控件的 left 钳到异常位置（偶发"绑定后拖不动"的根因之一——
+    //   控件本身是好的，但内存里 Fabric 对象的 left 已被旧版本写脏，aCoords 跟着
+    //   偏移到画布边缘外，hit-test 自然不命中）。
+    //   attachCanvas 末尾强制把所有正文控件走一遍修复后的钳制逻辑，把脏对象
+    //   重新对齐到当前所在页的内容区，避免用户手动操作恢复。
+    if (marginLocked.value) d.setMarginLocked(true)
   }
 
   function detachCanvas(): void {

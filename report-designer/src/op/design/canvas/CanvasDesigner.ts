@@ -413,7 +413,17 @@ export class CanvasDesigner {
   }
 
   /** 把正文控件钳制在「当前所在页」的内容区内（边距内=设计安全区，X/Y 均受限）。
-   *  边距仅作辅助设计参考线（不参与渲染），锁定可避免内容排进边距带。 */
+   *  边距仅作辅助设计参考线（不参与渲染），锁定可避免内容排进边距带。
+   *
+   *  实现要点：
+   *  1) X 方向钳制窗口只与"当前页的内容区宽"有关，**不要**叠加 pageTop；
+   *     pageTop 是垂直偏移，把它加到 X 窗口上会让第 2 页以后的控件每次拖动
+   *     都把 X 钳到右半页之外，从而被瞬间吸到画面外（旧 bug）。
+   *  2) Y 方向才需要按页偏移 pageTop，否则跨页内容无法定位。
+   *  3) 当控件尺寸超过内容区（min >= max）时钳制窗口非法，跳过该维度——
+   *     否则 Math.max(min, Math.min(max, v)) 会恒等于 min，把控件钉死在
+   *     同一个固定点，体感就是"位置锁定、怎么拖都弹回去"（偶发锁定的主因）。
+   */
   private clampToContentArea(obj: PrintFabricObject): void {
     const pageWpx = this.pageWidthMm * MM_TO_PX
     const pageHpx = this.pageHeightMm * MM_TO_PX
@@ -424,14 +434,17 @@ export class CanvasDesigner {
     const cy = (obj.top ?? 0) + h / 2
     const i = Math.max(0, Math.floor(cy / stride))
     const pageTop = i * stride
-    const minX = pageTop + this.marginMm.left * MM_TO_PX
+    // X：与页垂直偏移无关，只看当前页内容区宽度
+    const minX = this.marginMm.left * MM_TO_PX
+    const maxX = pageWpx - this.marginMm.right * MM_TO_PX - w
+    // Y：要按所在页的垂直偏移整体下移
     const minY = pageTop + this.marginMm.top * MM_TO_PX
-    const maxX = pageTop + (pageWpx - this.marginMm.right * MM_TO_PX) - w
     const maxY = pageTop + (pageHpx - this.marginMm.bottom * MM_TO_PX) - h
-    obj.set({
-      left: Math.max(minX, Math.min(maxX, obj.left ?? minX)),
-      top: Math.max(minY, Math.min(maxY, obj.top ?? minY)),
-    })
+    const curLeft = obj.left ?? minX
+    const curTop = obj.top ?? minY
+    const nextLeft = minX >= maxX ? curLeft : Math.max(minX, Math.min(maxX, curLeft))
+    const nextTop = minY >= maxY ? curTop : Math.max(minY, Math.min(maxY, curTop))
+    obj.set({ left: nextLeft, top: nextTop })
     obj.setCoords()
   }
 
