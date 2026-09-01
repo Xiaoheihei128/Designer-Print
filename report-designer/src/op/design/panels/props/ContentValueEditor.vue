@@ -19,6 +19,7 @@ import type { CellFormat, Segment } from '@op/types/control'
 import { resolveSegments } from '@op/core/layout-engine/segments'
 import { isAggToken } from '@op/core/layout-engine/aggregate'
 import { EXPRESSION_CATALOG } from '@op/design/expression-catalog'
+import { segmentsToText, textToSegments } from '@op/design/text-segments'
 import VariableModal from './VariableModal.vue'
 import ExpressionModal from './ExpressionModal.vue'
 import { isAutoMigratedFieldOnly } from './content-value-helpers'
@@ -119,51 +120,7 @@ function insertAggToken(snippet: string): void {
 
 /* -------------------------------- segments 模式 -------------------------------- */
 
-/**
- * segments → 文本（textarea 显示用）。
- * - text 段：原样输出
- * - field 段：`{{path}}`
- * - expr 段：`{{src}}`
- */
-function segmentsToText(segs: Segment[]): string {
-  return segs
-    .map((s) => {
-      if (s.kind === 'text') return s.value
-      if (s.kind === 'field') return `{{${s.path}}}`
-      return `{{${s.src}}}`
-    })
-    .join('')
-}
-
-/**
- * 文本 → segments（按 `{{...}}` 切分）。
- * 简化版：单 `{{xxx}}`（无运算符、无管道）→ field；其它 → expr。
- * agg token（`{{#xxx}}`）保持整体单 text 段，buildFooterRow 直接读 cell.text 接管。
- */
-function textToSegments(text: string): Segment[] {
-  if (!text) return [{ kind: 'text', value: '' }]
-  if (!text.includes('{{')) return [{ kind: 'text', value: text }]
-  const parts: Segment[] = []
-  const re = /\{\{([\s\S]*?)\}\}/g
-  let last = 0
-  let m: RegExpExecArray | null
-  while ((m = re.exec(text)) !== null) {
-    if (m.index > last) parts.push({ kind: 'text', value: text.slice(last, m.index) })
-    const body = m[1]!.trim()
-    if (body.startsWith('#')) {
-      // agg token 视为字面量
-      parts.push({ kind: 'text', value: m[0] })
-    } else if (/^[A-Za-z_$][\w$.\[\]]*$/.test(body)) {
-      // 纯路径（无运算符、无过滤器）→ field
-      parts.push({ kind: 'field', path: body })
-    } else {
-      parts.push({ kind: 'expr', src: body })
-    }
-    last = m.index + m[0].length
-  }
-  if (last < text.length) parts.push({ kind: 'text', value: text.slice(last) })
-  return parts.length ? parts : [{ kind: 'text', value: text }]
-}
+/** segmentsToText / textToSegments 由 @op/design/text-segments 提供（共享给画布反向同步用） */
 
 /** 是否在 segments 模式：segments 字段存在且非空数组 */
 const isSegmentsMode = computed(() => Array.isArray(props.segments) && props.segments.length > 0)

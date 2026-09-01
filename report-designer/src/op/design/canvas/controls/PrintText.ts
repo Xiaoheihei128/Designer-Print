@@ -6,7 +6,15 @@
 import { Textbox } from 'fabric'
 import type { Segment, TextControl, TextStyle } from '@op/types/control'
 import { ptToPx, pxToPt } from '@op/core/units'
+import { segmentsToText, textToSegments } from '@op/design/text-segments'
 import { mm, px, readBaseGeometry, round2, type IPrintObject } from './PrintObject'
+
+/** 画布文本编辑退出事件载荷，由 CanvasDesigner 注入回调透传到 store */
+export interface PrintTextEditedPayload {
+  controlId: string
+  rawText: string
+  segments: Segment[]
+}
 
 export class PrintText extends Textbox implements IPrintObject {
   controlId: string
@@ -21,6 +29,15 @@ export class PrintText extends Textbox implements IPrintObject {
   printable = true
   visibleIf?: string
   controlName?: string
+
+  /**
+   * 编辑退出时反向 parse 的目标回调（由 CanvasDesigner.addControl 注入）。
+   * 不直接调 store —— CanvasDesigner 是 fabric ↔ store 的唯一桥梁，画布层不持有 store 引用。
+   * 仅在 segments 模式下生效（其他模式下 displayText 已经和 store 同步）。
+   */
+  private _canvasTextListener?: (info: PrintTextEditedPayload) => void
+  /** 编辑退出 diff 守卫：保存"上次文本"，raw 与之相同时直接 return，避免无意义回写 */
+  private _origDisplayText = ''
 
   constructor(control: TextControl) {
     super(displayText(control), {
@@ -41,6 +58,30 @@ export class PrintText extends Textbox implements IPrintObject {
     this.printable = control.printable ?? true
     this.visibleIf = control.visibleIf
     this.controlName = control.name
+
+    // v2 segments 模式：双击进入 fabric 编辑态、失焦退出时把 fabric.text 反向解析
+    // 为 segments，回写到 store（CanvasDesigner 注入的 listener）。否则 fabric.text
+    // 改了 store 完全不知道 → 预览丢失 + 右侧 ContentValueEditor 不同步。
+    // 仅 segments 模式需要监听，老 schema（contentType=value 自由编辑）由 fabric 原生
+    // object:modified 走 toControl 回写 value，已经工作。
+    if (control.segments && control.segments.length) {
+      this._origDisplayText = this.text
+      this.on('editing:exited', () => {
+        const raw = this.text
+        if (raw === this._origDisplayText) return // 用户未改 → 跳过避免空转
+        const next = textToSegments(raw)
+        this._canvasTextListener?.({ controlId: this.controlId, rawText: raw, segments: next })
+        this._origDisplayText = raw
+      })
+    }
+  }
+
+  /**
+   * CanvasDesigner.addControl 调一次：把"反向 parse → store"回调注入进来。
+   * 一个 PrintText 实例只 attach 一次；applyControlProps 不重置此字段。
+   */
+  attachCanvasTextListener(cb: (info: PrintTextEditedPayload) => void): void {
+    this._canvasTextListener = cb
   }
 
   /** 序列化回协议模型（px → mm / px → pt） */
@@ -97,10 +138,10 @@ export class PrintText extends Textbox implements IPrintObject {
  *  v2 优先：segments 模式 → 拼接 segments 字符串作为占位显示（与 ContentValueEditor 一致）
  */
 function displayText(control: TextControl): string {
-  // ★ v2 segments 模式优先：有 segments 即按 segmentsToDisplayText 拼接
+  // ★ v2 segments 模式优先：有 segments 即按 segmentsToText 拼接
   // 即使 value/binding/expression 为空，segments 也提供占位文本
   if (control.segments && control.segments.length) {
-    return segmentsToDisplayText(control.segments)
+    return segmentsToText(control.segments)
   }
   const mode = control.contentType
   if (mode === 'expression') return control.expression ?? ''
@@ -110,17 +151,6 @@ function displayText(control: TextControl): string {
   if (control.expression) return control.expression
   if (control.binding) return `{{${control.binding}}}`
   return control.value ?? '文本'
-}
-
-/** segments → 文本（与 ContentValueEditor.segmentsToText 逻辑一致 —— field/expr 都包 {{ }}） */
-function segmentsToDisplayText(segments: Segment[]): string {
-  return segments
-    .map((s) => {
-      if (s.kind === 'text') return s.value
-      if (s.kind === 'field') return `{{${s.path}}}`
-      return `{{${s.src}}}`
-    })
-    .join('')
 }
 
 function styleToFabric(style?: TextStyle) {

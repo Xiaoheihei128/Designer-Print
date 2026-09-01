@@ -281,6 +281,27 @@ export const useDesignerStore = defineStore('designer', () => {
     return true
   }
 
+  /**
+   * 画布文本控件反向同步入口（fabric.Textbox editing:exited → store）。
+   *
+   * CanvasDesigner.addControl 注入的 attachCanvasTextListener 把 fabric.text 反向
+   * 解析后的 segments 透传到 attachCanvas.setEvents.onTextEdited，最终落到此函数。
+   *
+   * 走 updateControlSilent：连续手输不进 undo 栈、不置 dirty，与属性面板 textarea
+   * onSegmentsBlur 的 silent 语义一致。若后续用户报"画布手输无法 Ctrl+Z 回退"，
+   * 再切到 updateControl（带 undo 栈）。
+   *
+   * 自动 selectControl 让右侧 ContentValueEditor 的 props.segments watch 触发 →
+   * textarea 内容刷新（断点 ③ 修复）。
+   */
+  function handleCanvasTextEdited(controlId: string, segments: import('@op/types/control').Segment[]): boolean {
+    const current = findControl(controlId)
+    if (!current || current.type !== 'text') return false
+    updateControlSilent(controlId, { segments } as Partial<AnyControl>)
+    selectControl(controlId)
+    return true
+  }
+
   function replaceControl(updated: AnyControl): void {
     const i = controls.value.findIndex((c) => c.id === updated.id)
     if (i >= 0) {
@@ -366,6 +387,12 @@ export const useDesignerStore = defineStore('designer', () => {
         // 物化 cells 网格（同 onCellEdit 注释）
         updateControlSilent(info.controlId, info.control as AnyControl)
         setPendingBind(info.controlId, info.row, info.col)
+      },
+      // ★ v2 文本反向同步（fabric → store）：用户双击文本控件进入 fabric 编辑，
+      // 失焦退出时 PrintText 把 fabric.text 反向 parse 为 segments 透传到此。
+      // 实际写 store 走 handleCanvasTextEdited（单测可直接调），保持 attachCanvas 单一入口。
+      onTextEdited: ({ controlId, segments }) => {
+        handleCanvasTextEdited(controlId, segments)
       },
     })
     d.setPage(pageSetup.value)
@@ -1289,6 +1316,7 @@ export const useDesignerStore = defineStore('designer', () => {
     updateControlSilent,
     hitTestTextControl,
     applyFieldBindingToTextControl,
+    handleCanvasTextEdited,
     reflowBody,
     removeControl,
     moveControl,

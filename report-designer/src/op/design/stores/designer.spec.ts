@@ -1,5 +1,5 @@
 /**
- * designer store 单测：M1 P0-3 待绑态 / 字段绑定写入链路 + 字段拖到文本控件
+ * designer store 单测：M1 P0-3 待绑态 / 字段绑定写入链路 + 字段拖到文本控件 + 画布反向同步
  *
  * 覆盖：
  * - setPendingBind / closePendingBind 维护 pendingBindCell
@@ -8,6 +8,7 @@
  * - bindFieldToCell 越界 / 非表格控件 不写
  * - applyFieldBindingToTextControl 写入 segments=[{kind:'field', path}] 并兼容老 schema
  * - hitTestTextControl 命中 body / labelgrid 子组件 / zone 子组件
+ * - handleCanvasTextEdited 写入用户手输文本反向解析后的 segments（silent + 选中）
  */
 import { beforeEach, describe, expect, it } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
@@ -350,5 +351,95 @@ describe('hitTestTextControl 命中检测', () => {
     const clientX = 0 + 0 + 10 * MM_TO_PX * 1
     const clientY = 0 + 0 + 7 * MM_TO_PX * 1
     expect(store.hitTestTextControl(clientX, clientY, makeStage())).toBe('header-txt')
+  })
+})
+
+/**
+ * 画布文本控件反向同步（v2 segments 模式）
+ *
+ * 用户报修："画布上拖字段到文本控件后手输'和和和'，右侧 ContentValueEditor 不同步、
+ * 预览丢中文"。根因：fabric.Textbox editing:exited 从未订阅，fabric.text 改了
+ * store 完全不知道。
+ *
+ * 修复后 attachCanvas.setEvents.onTextEdited 路由到 handleCanvasTextEdited：
+ * - 把反向解析的 segments 写入 store.controls[id].segments
+ * - silent（连续手输不进 undo 栈、不置 dirty）
+ * - 自动 selectControl 让右侧 ContentValueEditor 的 props.segments watch 触发 → textarea 刷新
+ */
+describe('handleCanvasTextEdited 画布文本反向同步', () => {
+  it('画布手输"和和和{{Header.X}}" → store.segments 是 [field, text]，可被 ContentValueEditor watch 到', () => {
+    const store = useDesignerStore()
+    store.controls.push({
+      id: 'txt-1',
+      type: 'text',
+      left: 0,
+      top: 0,
+      width: 50,
+      height: 8,
+      segments: [{ kind: 'field', path: 'Header.X' }],
+      contentType: 'variable',
+    })
+    // 模拟画布 editing:exited 后透传的 payload
+    const ok = store.handleCanvasTextEdited('txt-1', [
+      { kind: 'field', path: 'Header.X' },
+      { kind: 'text', value: '和和和' },
+    ])
+    expect(ok).toBe(true)
+    const t = store.controls.find((c) => c.id === 'txt-1') as {
+      segments?: Array<{ kind: string; path?: string; value?: string }>
+    }
+    expect(t.segments).toEqual([
+      { kind: 'field', path: 'Header.X' },
+      { kind: 'text', value: '和和和' },
+    ])
+  })
+
+  it('silent：dirty 标记不翻转（连续手输不污染未保存状态）', () => {
+    const store = useDesignerStore()
+    store.controls.push({
+      id: 'txt-2',
+      type: 'text',
+      left: 0,
+      top: 0,
+      width: 50,
+      height: 8,
+      segments: [{ kind: 'text', value: 'old' }],
+    })
+    const dirtyBefore = store.dirty
+    store.handleCanvasTextEdited('txt-2', [{ kind: 'text', value: 'new' }])
+    expect(store.dirty).toBe(dirtyBefore)
+  })
+
+  it('自动选中该控件 → 右侧 ContentValueEditor 接收新 props.segments → watch 触发', () => {
+    const store = useDesignerStore()
+    store.controls.push({
+      id: 'txt-3',
+      type: 'text',
+      left: 0,
+      top: 0,
+      width: 50,
+      height: 8,
+      segments: [{ kind: 'field', path: 'Header.A' }],
+    })
+    expect(store.selectedIds).not.toContain('txt-3')
+    store.handleCanvasTextEdited('txt-3', [{ kind: 'text', value: 'updated' }])
+    expect(store.selectedIds).toContain('txt-3')
+  })
+
+  it('非文本控件 id：返回 false，不动', () => {
+    const store = useDesignerStore()
+    const table = makeTable()
+    store.controls.push(table)
+    const ok = store.handleCanvasTextEdited('tbl-1', [{ kind: 'text', value: 'X' }])
+    expect(ok).toBe(false)
+    expect(store.controls.find((c) => c.id === 'tbl-1')).toStrictEqual(table)
+  })
+
+  it('不存在的 id：返回 false，不抛', () => {
+    const store = useDesignerStore()
+    expect(() =>
+      store.handleCanvasTextEdited('nope', [{ kind: 'text', value: 'X' }]),
+    ).not.toThrow()
+    expect(store.handleCanvasTextEdited('nope', [{ kind: 'text', value: 'X' }])).toBe(false)
   })
 })

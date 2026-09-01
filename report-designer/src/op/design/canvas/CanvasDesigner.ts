@@ -48,6 +48,12 @@ export interface CanvasDesignerEvents {
   onTransformTick?: () => void
   /** 物理页数变化（内容推导或手动分页触发），驱动右侧页面面板刷新 */
   onPageCountChange?: (count: number) => void
+  /**
+   * 文本控件退出 fabric 编辑态（双击进入后失焦/点别处/按 ESC），
+   * 携带反向解析后的 segments。store 据此把 fabric.text 同步到 control.segments。
+   * 这是 v2 segments 模式的关键回写通道（fabric → store）—— 见 PrintText._canvasTextListener。
+   */
+  onTextEdited?: (info: { controlId: string; rawText: string; segments: import('@op/types/control').Segment[] }) => void
 }
 
 type PrintFabricObject = FabricObject & IPrintObject
@@ -603,6 +609,13 @@ export class CanvasDesigner {
     this.applySectionOrigin(obj, control, opts.zoneHostId)
     // 镜像「常驻辅助线」开关到 Fabric 对象，供 SmartGuides 读取
     ;(obj as unknown as { showGuides: boolean }).showGuides = control.showGuides ?? false
+    // ★ v2 文本反向同步：把 store 写入路径桥接给 PrintText 实例，
+    // 编辑退出时 fabric.text → textToSegments → 透传到 events.onTextEdited
+    if (obj instanceof PrintText) {
+      obj.attachCanvasTextListener((info) => {
+        this.events.onTextEdited?.(info)
+      })
+    }
     this.canvas.add(obj)
     // 标签网格：首卡子组件以真实 Fabric 对象渲染（可选中/拖动/编辑，所见即所得）
     if (control.type === 'labelgrid') {
