@@ -1,11 +1,13 @@
 /**
- * designer store 单测：M1 P0-3 待绑态 / 字段绑定写入链路
+ * designer store 单测：M1 P0-3 待绑态 / 字段绑定写入链路 + 字段拖到文本控件
  *
  * 覆盖：
  * - setPendingBind / closePendingBind 维护 pendingBindCell
  * - openCellEditor 与 pendingBindCell 互斥
  * - bindFieldToCell 写入链路（contentType/variable + field + 清 text/expression）并退出待绑态
  * - bindFieldToCell 越界 / 非表格控件 不写
+ * - applyFieldBindingToTextControl 写入 segments=[{kind:'field', path}] 并兼容老 schema
+ * - hitTestTextControl 命中 body / labelgrid 子组件 / zone 子组件
  */
 import { beforeEach, describe, expect, it } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
@@ -133,5 +135,220 @@ describe('bindFieldToCell 写入链路', () => {
     store.bindFieldToCell('nope', 0, 0, 'items[].qty')
     // 不存在控件 → 无副作用
     expect(store.controls.length).toBe(1)
+  })
+})
+
+/**
+ * 字段拖到画布文本控件（useDragAdd 路径 2 触发的 store 调用）
+ *
+ * 用户报修：拖动单值属性字段到画布文本控件上，画布只显示裸字段路径，
+ * 没有 {{}} —— 是 fabric.Textbox contenteditable 原生接管了 text/plain mime 造成的。
+ * 修复后 useDragAdd.onDrop 接 application/x-openprint-binding mime：
+ *   - 命中已有文本控件 → applyFieldBindingToTextControl（segments 模式）
+ *   - 未命中 → 在落点新建文本控件，预绑字段
+ * 这里锁定 store 层契约。
+ */
+describe('applyFieldBindingToTextControl 字段拖到已有文本控件', () => {
+  it('普通文本控件：segments 写入单 field 段，兼容老 schema', () => {
+    const store = useDesignerStore()
+    store.controls.push({
+      id: 'txt-1',
+      type: 'text',
+      left: 10,
+      top: 10,
+      width: 50,
+      height: 8,
+      contentType: 'fixed',
+      value: '旧文本',
+    })
+    const ok = store.applyFieldBindingToTextControl('txt-1', 'Header.ReportNo')
+    expect(ok).toBe(true)
+    const t = store.controls.find((c) => c.id === 'txt-1') as {
+      segments?: Array<{ kind: string; path?: string }>
+      binding?: string
+      contentType?: string
+      value?: string
+    }
+    expect(t.segments).toEqual([{ kind: 'field', path: 'Header.ReportNo' }])
+    // 兼容老 schema：contentType=variable, binding 同步
+    expect(t.contentType).toBe('variable')
+    expect(t.binding).toBe('Header.ReportNo')
+    // 老字段清空，避免 resolveSegments fallback 分支触发
+    expect(t.value).toBeUndefined()
+    // 自动选中
+    expect(store.selectedIds).toContain('txt-1')
+  })
+
+  it('已有 segments（多片段）→ 覆盖为单 field 段', () => {
+    const store = useDesignerStore()
+    store.controls.push({
+      id: 'txt-2',
+      type: 'text',
+      left: 0,
+      top: 0,
+      width: 50,
+      height: 8,
+      segments: [
+        { kind: 'text', value: '合计：' },
+        { kind: 'field', path: 'Header.Total' },
+      ],
+      contentType: 'variable',
+      binding: 'Header.Total',
+    })
+    store.applyFieldBindingToTextControl('txt-2', 'Header.ProductCode')
+    const t = store.controls.find((c) => c.id === 'txt-2') as {
+      segments?: Array<{ kind: string; path?: string }>
+    }
+    expect(t.segments).toEqual([{ kind: 'field', path: 'Header.ProductCode' }])
+  })
+
+  it('非文本控件：返回 false，不动', () => {
+    const store = useDesignerStore()
+    const table = makeTable()
+    store.controls.push(table)
+    const ok = store.applyFieldBindingToTextControl('tbl-1', 'Header.X')
+    expect(ok).toBe(false)
+    // 表格内容不动（Pinia reactive proxy 后引用不等，但内容应一致）
+    expect(store.controls.find((c) => c.id === 'tbl-1')).toStrictEqual(table)
+  })
+
+  it('不存在的 id：返回 false，不抛', () => {
+    const store = useDesignerStore()
+    expect(() => store.applyFieldBindingToTextControl('nope', 'X')).not.toThrow()
+    expect(store.applyFieldBindingToTextControl('nope', 'X')).toBe(false)
+  })
+
+  it('silent：不进 undo 栈（与属性面板 [字段] 按钮行为对齐）', () => {
+    const store = useDesignerStore()
+    store.controls.push({
+      id: 'txt-3',
+      type: 'text',
+      left: 0,
+      top: 0,
+      width: 50,
+      height: 8,
+      contentType: 'fixed',
+      value: '旧',
+    })
+    const historyLenBefore = store.dirty
+    store.applyFieldBindingToTextControl('txt-3', 'Header.A')
+    // dirty 标记不应被 silent 操作翻转
+    expect(store.dirty).toBe(historyLenBefore)
+  })
+})
+
+describe('hitTestTextControl 命中检测', () => {
+  /** 构造一个最小舞台对象（不依赖 DOM），hitTest 只需要 getBoundingClientRect */
+  function makeStage(): HTMLElement {
+    const rect = {
+      left: 0,
+      top: 0,
+      right: 1000,
+      bottom: 800,
+      width: 1000,
+      height: 800,
+      x: 0,
+      y: 0,
+      toJSON() {
+        return {}
+      },
+    }
+    return {
+      getBoundingClientRect: () => rect,
+    } as unknown as HTMLElement
+  }
+
+  it('命中 body 上的文本控件', () => {
+    const store = useDesignerStore()
+    store.controls.push({
+      id: 'txt-body',
+      type: 'text',
+      left: 10, // mm
+      top: 20,
+      width: 50,
+      height: 10,
+    })
+    // 默认 viewport: zoom=1, offsetX=0, offsetY=0
+    // clientX = rect.left + vp.offsetX + leftMm * MM_TO_PX * zoom
+    // MM_TO_PX = 96/25.4 ≈ 3.7795
+    const MM_TO_PX = 96 / 25.4
+    const clientX = 0 + 0 + 10 * MM_TO_PX * 1 + 1  // 落在框内
+    const clientY = 0 + 0 + 20 * MM_TO_PX * 1 + 1
+    const hit = store.hitTestTextControl(clientX, clientY, makeStage())
+    expect(hit).toBe('txt-body')
+  })
+
+  it('未命中：坐标在控件外', () => {
+    const store = useDesignerStore()
+    store.controls.push({
+      id: 'txt-body',
+      type: 'text',
+      left: 10,
+      top: 20,
+      width: 50,
+      height: 10,
+    })
+    const MM_TO_PX = 96 / 25.4
+    // 落在控件右侧外
+    const clientX = 0 + 0 + (10 + 50 + 5) * MM_TO_PX * 1
+    const clientY = 0 + 0 + 20 * MM_TO_PX * 1
+    const hit = store.hitTestTextControl(clientX, clientY, makeStage())
+    expect(hit).toBeNull()
+  })
+
+  it('非文本控件（图片）不参与命中', () => {
+    const store = useDesignerStore()
+    store.controls.push({
+      id: 'img-1',
+      type: 'image',
+      left: 10,
+      top: 20,
+      width: 50,
+      height: 10,
+    })
+    const MM_TO_PX = 96 / 25.4
+    const clientX = 0 + 0 + 30 * MM_TO_PX * 1
+    const clientY = 0 + 0 + 25 * MM_TO_PX * 1
+    expect(store.hitTestTextControl(clientX, clientY, makeStage())).toBeNull()
+  })
+
+  it('labelgrid 子组件里的文本控件也能命中', () => {
+    const store = useDesignerStore()
+    store.controls.push({
+      id: 'grid-1',
+      type: 'labelgrid',
+      left: 0,
+      top: 0,
+      width: 100,
+      height: 30,
+      children: [
+        { id: 'card-txt', type: 'text', left: 5, top: 5, width: 20, height: 8 },
+      ],
+    } as unknown as { id: string; type: string; left: number; top: number; width: number; height: number; children?: unknown[] })
+    const MM_TO_PX = 96 / 25.4
+    // 落在 card-txt 内
+    const clientX = 0 + 0 + 10 * MM_TO_PX * 1
+    const clientY = 0 + 0 + 7 * MM_TO_PX * 1
+    expect(store.hitTestTextControl(clientX, clientY, makeStage())).toBe('card-txt')
+  })
+
+  it('zone（页眉/页脚）内的文本控件也能命中', () => {
+    const store = useDesignerStore()
+    store.zones.push({
+      id: 'zone-header',
+      type: 'zone',
+      zone: 'header',
+      left: 0,
+      top: 0,
+      width: 210,
+      height: 20,
+      children: [
+        { id: 'header-txt', type: 'text', left: 5, top: 5, width: 30, height: 8 },
+      ],
+    } as unknown as { id: string; type: string; zone: string; left: number; top: number; width: number; height: number; children: unknown[] })
+    const MM_TO_PX = 96 / 25.4
+    const clientX = 0 + 0 + 10 * MM_TO_PX * 1
+    const clientY = 0 + 0 + 7 * MM_TO_PX * 1
+    expect(store.hitTestTextControl(clientX, clientY, makeStage())).toBe('header-txt')
   })
 })

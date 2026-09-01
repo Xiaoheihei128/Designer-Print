@@ -27,6 +27,7 @@ import { genId } from '@op/utils/id'
 import { useHistoryStore } from './history'
 import { type ImportColumn } from '@op/design/utils/data-import'
 import { seedSummaryTail, syncTableHeight, patchCell } from '@op/core/layout-engine/table-cells'
+import { MM_TO_PX } from '@op/utils/constants'
 
 /** 水印默认配置（开启后居中单个、45°、浅灰） */
 export const DEFAULT_WATERMARK: WatermarkConfig = {
@@ -197,6 +198,87 @@ export const useDesignerStore = defineStore('designer', () => {
       if (child) return child
     }
     return undefined
+  }
+
+  /**
+   * 客户端坐标（clientX/Y）命中检测：返回该点下第一个文本控件的 id（body + zone + labelgrid 子组件）。
+   * 用于字段树拖到画布 → "已有文本控件"分支：
+   * 把字段直接绑到命中的文本控件，而不是新建。
+   *
+   * @param clientX 浏览器视口坐标 X
+   * @param clientY 浏览器视口坐标 Y
+   * @param stageEl 画布容器 DOM（用于换算 stage-relative px）
+   * @returns 命中的文本控件 id；未命中 → null
+   */
+  function hitTestTextControl(
+    clientX: number,
+    clientY: number,
+    stageEl: HTMLElement,
+  ): string | null {
+    const rect = stageEl.getBoundingClientRect()
+    const vp = viewport.value
+    // 客户端 px → 画布 mm（与 useDragAdd 一致）
+    const canvasX = clientX - rect.left
+    const canvasY = clientY - rect.top
+    const mmX = (canvasX - vp.offsetX) / (MM_TO_PX * vp.zoom)
+    const mmY = (canvasY - vp.offsetY) / (MM_TO_PX * vp.zoom)
+    const hit = (c: AnyControl): boolean => {
+      if (c.type !== 'text') return false
+      const left = c.left
+      const top = c.top
+      const width = (c as { width?: number }).width ?? 0
+      const height = (c as { height?: number }).height ?? 0
+      return mmX >= left && mmX <= left + width && mmY >= top && mmY <= top + height
+    }
+    // body 控件（含 labelgrid 子组件）
+    for (const c of controls.value) {
+      if (c.type === 'labelgrid') {
+        const grid = c as LabelGridControl
+        for (const child of grid.children ?? []) {
+          if (hit(child)) return child.id
+        }
+      } else if (hit(c)) {
+        return c.id
+      }
+    }
+    // zone 子控件（页眉 / 页脚）
+    for (const z of zones.value) {
+      for (const child of z.children) {
+        if (hit(child)) return child.id
+      }
+    }
+    return null
+  }
+
+  /**
+   * 把字段路径直接绑到已有文本控件（segments 模式）。
+   *
+   * 与属性面板 [字段] 按钮（ContentValueEditor.onVarConfirm）行为对齐：
+   *   - segments = [{kind:'field', path}]
+   *   - contentType = 'variable'（兼容老 schema 读取方）
+   *   - binding = path（兼容老 schema 读取方）
+   *   - value / expression = undefined（让老 schema 兜底分支不再触发）
+   *   - silent：不进 undo 栈（与现有迁移路径一致；属性面板 [字段] 按钮也走 silent）
+   *   - 自动选中该控件（用户拖完字段后能直接继续编辑）
+   *
+   * 只对 type='text' 生效；非文本控件（图片/表格等）返回 false，调用方应降级到"新建文本控件"。
+   */
+  function applyFieldBindingToTextControl(controlId: string, path: string): boolean {
+    const current = findControl(controlId)
+    if (!current || current.type !== 'text') return false
+    const segs: Array<{ kind: 'field'; path: string }> = [{ kind: 'field', path }]
+    // 构造新对象（与 TextProps.onSegmentsChange / onVarConfirm 走法一致）
+    const next = {
+      ...current,
+      segments: segs,
+      contentType: 'variable' as const,
+      binding: path,
+      expression: undefined,
+      value: undefined,
+    } as AnyControl
+    updateControlSilent(controlId, next)
+    selectControl(controlId)
+    return true
   }
 
   function replaceControl(updated: AnyControl): void {
@@ -1205,6 +1287,8 @@ export const useDesignerStore = defineStore('designer', () => {
     clearLabelGridChildren,
     updateControl,
     updateControlSilent,
+    hitTestTextControl,
+    applyFieldBindingToTextControl,
     reflowBody,
     removeControl,
     moveControl,
