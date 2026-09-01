@@ -38,6 +38,23 @@ export class PrintText extends Textbox implements IPrintObject {
   private _canvasTextListener?: (info: PrintTextEditedPayload) => void
   /** 编辑退出 diff 守卫：保存"上次文本"，raw 与之相同时直接 return，避免无意义回写 */
   private _origDisplayText = ''
+  /**
+   * 编辑期间 hiddenTextarea.value 的最新缓存。
+   *
+   * fabric@7 的 Textbox.blur() handler 只 abortCursorAnimation，不主动 sync
+   * DOM → fabric.text。中文 IME 上屏的字符在某些浏览器下未及时触发 fabric 的
+   * input → onInput → updateFromTextArea 链路，导致 editing:exited 触发时
+   * this.text 仍含 IME 拼音字符 / 缺上屏中文。
+   *
+   * 解决：editing:entered 时监听其 'input' 事件，每次把 hiddenTextarea.value
+   * 缓存到此字段。editing:exited 触发时 hiddenTextarea 已被销毁（exitEditingImpl
+   * 先于 fire('editing:exited')），但缓存已是最新值。
+   */
+  private _latestEditingText = ''
+  private _onHiddenTextareaInput = (): void => {
+    const ta = this.hiddenTextarea as HTMLTextAreaElement | null
+    if (ta) this._latestEditingText = ta.value
+  }
 
   constructor(control: TextControl) {
     super(displayText(control), {
@@ -66,8 +83,22 @@ export class PrintText extends Textbox implements IPrintObject {
     // object:modified 走 toControl 回写 value，已经工作。
     if (control.segments && control.segments.length) {
       this._origDisplayText = this.text
+      this._latestEditingText = this.text
+      // ★ 关键：hiddenTextarea 是 fabric 内部的 IME 桥接 <textarea>，
+      // editing:entered 时已被创建（enterEditingImpl 先于 fire('editing:entered')，
+      // line 16886→16887），exitEditingImpl 在 fire('editing:exited') 之前销毁
+      // （line 17104→17105）。input 事件在 typing / IME compositionend 都会触发，
+      // 缓存 hiddenTextarea.value 给 editing:exited 用，避免 this.text 缺失 IME 字符。
+      this.on('editing:entered', () => {
+        const ta = this.hiddenTextarea as HTMLTextAreaElement | null
+        if (ta) ta.addEventListener('input', this._onHiddenTextareaInput)
+      })
       this.on('editing:exited', () => {
-        const raw = this.text
+        const ta = this.hiddenTextarea as HTMLTextAreaElement | null
+        if (ta) ta.removeEventListener('input', this._onHiddenTextareaInput)
+        // 用 _latestEditingText（hiddenTextarea.value 最新值）而非 this.text，
+        // this.text 在 IME 未上屏字符 / IME 期间失焦等场景可能落后于 DOM
+        const raw = this._latestEditingText
         if (raw === this._origDisplayText) return // 用户未改 → 跳过避免空转
         const next = textToSegments(raw)
         this._canvasTextListener?.({ controlId: this.controlId, rawText: raw, segments: next })
