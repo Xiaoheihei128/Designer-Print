@@ -126,10 +126,28 @@ function insertAggToken(snippet: string): void {
 const isSegmentsMode = computed(() => Array.isArray(props.segments) && props.segments.length > 0)
 
 const segmentsText = ref('')
+/**
+ * 用户是否正在 textarea 里编辑。focus 时设 true，blur 时设 false。
+ *
+ * ★ v2 反向同步关键守卫：watch(() => props.segments) 只在"非编辑中"时回填
+ * segmentsText。否则画布反向同步（fabric editing:exited → handleCanvasTextEdited
+ * → store.updateControlSilent → props.segments 引用变 → watch 触发）会把用户
+ * 正在键入但还没 blur 的字符覆盖回"权威值"，用户看到"输入即被覆盖"。
+ *
+ * blur 时 onSegmentsBlur 会正常 emit('update:segments') 把用户编辑结果写回
+ * store；watch 顺序是：用户输入 → onSegmentsInput(v) → segmentsText 同步 →
+ * 失焦 → onSegmentsBlur() → emit → 父组件 store.updateControl → store 替换
+ * → props.segments 引用变 → isUserEditing 已 false → watch 回填 segmentsText
+ * 为新权威值（与用户输入一致），闭环。
+ */
+const isUserEditing = ref(false)
+function onSegmentsFocus(): void {
+  isUserEditing.value = true
+}
 watch(
   () => props.segments,
   (segs) => {
-    if (segs && segs.length) {
+    if (segs && segs.length && !isUserEditing.value) {
       segmentsText.value = segmentsToText(segs)
     }
   },
@@ -141,6 +159,7 @@ function onSegmentsInput(v: string): void {
   segmentsText.value = v
 }
 function onSegmentsBlur(): void {
+  isUserEditing.value = false // ★ 守卫解除，下次 props.segments 变化允许 watch 回填
   const next = textToSegments(segmentsText.value)
   emit('update:segments', next)
 }
@@ -248,6 +267,7 @@ function onExprConfirm(snippet: string): void {
           :value="segmentsText"
           :placeholder="placeholder || segmentsPlaceholder"
           @update:value="onSegmentsInput"
+          @focus="onSegmentsFocus"
           @blur="onSegmentsBlur"
         />
       </div>

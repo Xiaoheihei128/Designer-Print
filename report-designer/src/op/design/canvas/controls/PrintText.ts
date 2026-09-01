@@ -158,6 +158,16 @@ export class PrintText extends Textbox implements IPrintObject {
     this.visibleIf = control.visibleIf
     this.controlName = control.name
     this.text = displayText(control)
+    // ★ 同步反向同步守卫基线：applyControlProps 把 segments 重新同步到 fabric.text，
+    //   旧版 _origDisplayText / _latestEditingText 仍指向构造时刻的初值，
+    //   后续 editing:exited 触发时 raw 已是新 text，diff 守卫错位 →
+    //   把"反向同步带来的 segments 变化"误判为"用户改了"，emit 一条 handleCanvasTextEdited
+    //   反向覆盖 store，形成与右侧 textarea watch 的回填竞争。
+    //   现在每次同步都更新基线，守卫始终指向"权威反向同步值"。
+    if (control.segments && control.segments.length) {
+      this._origDisplayText = this.text
+      this._latestEditingText = this.text
+    }
     // 非绑定文本允许直接改内容尺寸
     if (control.width) this.set('width', mm(control.width))
     this.setCoords()
