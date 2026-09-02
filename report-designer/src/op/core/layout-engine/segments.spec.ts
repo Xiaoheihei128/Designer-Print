@@ -253,10 +253,35 @@ describe('legacyToSegments 老 schema 兼容', () => {
     ])
   })
 
-  it('empty string value → 单 text 段空值', () => {
+  it('empty string value → null（无可迁移内容，让用户主动从 segments 模式清空才归零）', () => {
+    // ★ Bug 修复：原本生成 [{text:''}] 让 ensureSegments 把"已清空的控件"重新变成
+    //   "1 个空 text 段"，segments 标签显示"1 个片段"暴露脏数据。改为 null 让
+    //   ensureSegments 保持原状（segments 保持 undefined → 走 3 态模式 default 字段）。
     expect(
       legacyToSegments({ type: 'text', contentType: 'fixed', value: '' }),
-    ).toEqual([{ kind: 'text', value: '' }])
+    ).toBeNull()
+  })
+
+  it('纯空白 cell.text → null（与空字符串一致：用户已清空）', () => {
+    expect(
+      legacyToSegments({ type: 'cell', contentType: 'fixed', text: '   \n   ' }),
+    ).toBeNull()
+  })
+
+  it('cell ctor: contentType=fixed + 空 text + 无 field/expression → null（用户已清空）', () => {
+    // 现实场景：用户在 segments 模式清空 textarea 后，emit update:segments:[] + 同步清空 v1 字段。
+    // 此时 cell.text='' + 无任何绑定 → 无可迁移内容，ensureSegments 不应生成 [{text:''}]。
+    expect(
+      legacyToSegments({ type: 'cell', contentType: 'fixed', text: '' }),
+    ).toBeNull()
+  })
+
+  it('cell ctor: contentType=fixed + 空 text + 残留 field → 仍生成 field 段（field 绑定不能被清空破坏）', () => {
+    // 与上面配套：text 被清空但 field 残留（如 3 态模式变量模式下用户清 value 不影响 field），
+    // 应该继续保留 field 段，让画布/预览继续显示绑定占位符。
+    expect(
+      legacyToSegments({ type: 'cell', contentType: 'fixed', text: '', field: 'Header.Quantity' }),
+    ).toEqual([{ kind: 'field', path: 'Header.Quantity' }])
   })
 })
 

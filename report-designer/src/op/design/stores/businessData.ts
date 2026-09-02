@@ -13,15 +13,29 @@
  * - previewData 组合两者：本 store.data 为 null 时 fallback 到 catalog sample 合成
  */
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import type { FieldDef } from '@op/types/datasource'
 import { buildBusinessDataFromCatalog, mapDbRowsToBusinessData } from '@op/design/preview/preview-data'
+import { collectLeafPaths } from '@op/design/preview/collect-leaf-paths'
 
 export type BusinessDataSource = 'matcher' | 'sample-built' | 'db-rows' | 'manual' | null
 
 export const useBusinessDataStore = defineStore('businessData', () => {
   const data = ref<Record<string, unknown> | null>(null)
   const source = ref<BusinessDataSource>(null)
+
+  /**
+   * 当前 data 的 leaf path 集合（与 introspectJson 路径语义对齐）。
+   * 用途：fieldCatalog.diffCoverage 判断「目录有 / 数据无」（missingFromData），
+   *       DataSourceTree 「数据中的新字段」分组（数据有 / 目录无）。
+   *
+   * data=null 时返回空集合，UI 据此判断「无业务数据可对比」。
+   */
+  const dataPathSet = computed<ReadonlySet<string>>(() => {
+    if (!data.value) return new Set()
+    return collectLeafPaths(data.value)
+  })
+  const hasBusinessData = computed(() => data.value !== null)
 
   /** /matcher 跨页面真实业务数据 */
   function setFromMatcher(d: Record<string, unknown>): void {
@@ -51,5 +65,5 @@ export const useBusinessDataStore = defineStore('businessData', () => {
     source.value = null
   }
 
-  return { data, source, setFromMatcher, buildFromCatalog, setFromDbRows, clear }
+  return { data, source, dataPathSet, hasBusinessData, setFromMatcher, buildFromCatalog, setFromDbRows, clear }
 })

@@ -46,6 +46,13 @@ public static class Program
 {
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
 
+    /// <summary>
+    /// 文件层读写锁。LoadAll+SaveAll 必须串行 —— 否则两个并发请求会 LoadAll→List.Add→SaveAll
+    /// 互相覆盖（典型 lost update）。SemaphoreSlim 1 容许可让所有读路径也走同一把锁，
+    /// 避免读到写中途的脏文件。
+    /// </summary>
+    private static readonly SemaphoreSlim _ioLock = new(1, 1);
+
     private static string Now() => DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
     private static string GenId() => $"tpl_{Guid.NewGuid():N}";
 
@@ -59,8 +66,22 @@ public static class Program
         catch { return []; }
     }
 
-    private static void SaveAll(string indexFile, List<TemplateRecord> list) =>
-        File.WriteAllText(indexFile, JsonSerializer.Serialize(list, JsonOpts));
+    private static void SaveAll(string indexFile, List<TemplateRecord> list)
+    {
+        // 临时文件 + 原子重命名：写入失败也不会留下半截文件
+        var tmp = indexFile + ".tmp";
+        File.WriteAllText(tmp, JsonSerializer.Serialize(list, JsonOpts));
+        if (File.Exists(indexFile)) File.Replace(tmp, indexFile, null);
+        else File.Move(tmp, indexFile);
+    }
+
+    /// <summary>在锁内执行读-改-写事务（请求处理器调用）</summary>
+    private static async Task<T> WithFileLock<T>(Func<T> action)
+    {
+        await _ioLock.WaitAsync();
+        try { return action(); }
+        finally { _ioLock.Release(); }
+    }
 
     private static object ToSummary(TemplateRecord r) => new
     {
@@ -114,79 +135,84 @@ public static class Program
 
         // 列表
         app.MapGet("/api/print/templates", () =>
-        {
-            var list = LoadAll(indexFile);
-            return Results.Ok(new { items = list.Select(ToSummary).ToList(), total = list.Count });
-        });
+            WithFileLock(() =>
+            {
+                var list = LoadAll(indexFile);
+                return Results.Ok(new { items = list.Select(ToSummary).ToList(), total = list.Count });
+            }));
 
         // 详情
         app.MapGet("/api/print/templates/{id}", (string id) =>
-        {
-            var record = LoadAll(indexFile).FirstOrDefault(r => r.Id == id);
-            return record is null
-                ? Results.Json(new { code = "TEMPLATE_NOT_FOUND", message = $"模板 {id} 不存在" }, statusCode: 404)
-                : Results.Ok(ToDetail(record));
-        });
+            WithFileLock<IResult>(() =>
+            {
+                var record = LoadAll(indexFile).FirstOrDefault(r => r.Id == id);
+                return record is null
+                    ? Results.Json(new { code = "TEMPLATE_NOT_FOUND", message = $"模板 {id} 不存在" }, statusCode: 404)
+                    : Results.Ok(ToDetail(record));
+            }));
 
         // 创建
         app.MapPost("/api/print/templates", (TemplateUpsertRequest req) =>
-        {
-            var now = Now();
-            var record = new TemplateRecord(
-                Id: GenId(),
-                Name: req.Name?.Trim() ?? "未命名模板",
-                Code: req.Code?.Trim() ?? "",
-                Category: req.Category,
-                Visibility: req.Visibility ?? "private",
-                CreatedBy: "admin",
-                CreatedAt: now,
-                UpdatedBy: "admin",
-                UpdatedAt: now,
-                Content: req.Content ?? "{}",
-                MatchRules: req.MatchRules,
-                IsActive: req.IsActive ?? true);
+            WithFileLock<IResult>(() =>
+            {
+                var now = Now();
+                var record = new TemplateRecord(
+                    Id: GenId(),
+                    Name: req.Name?.Trim() ?? "未命名模板",
+                    Code: req.Code?.Trim() ?? "",
+                    Category: req.Category,
+                    Visibility: req.Visibility ?? "private",
+                    CreatedBy: "admin",
+                    CreatedAt: now,
+                    UpdatedBy: "admin",
+                    UpdatedAt: now,
+                    Content: req.Content ?? "{}",
+                    MatchRules: req.MatchRules,
+                    IsActive: req.IsActive ?? true);
 
-            var list = LoadAll(indexFile);
-            list.Add(record);
-            SaveAll(indexFile, list);
-            return Results.Json(ToDetail(record), statusCode: 201);
-        });
+                var list = LoadAll(indexFile);
+                list.Add(record);
+                SaveAll(indexFile, list);
+                return Results.Json(ToDetail(record), statusCode: 201);
+            }));
 
         // 全量更新
         app.MapPut("/api/print/templates/{id}", (string id, TemplateUpsertRequest req) =>
-        {
-            var list = LoadAll(indexFile);
-            var index = list.FindIndex(r => r.Id == id);
-            if (index < 0)
-                return Results.Json(new { code = "TEMPLATE_NOT_FOUND", message = $"模板 {id} 不存在" }, statusCode: 404);
-
-            var old = list[index];
-            var updated = old with
+            WithFileLock<IResult>(() =>
             {
-                Name = req.Name?.Trim() ?? old.Name,
-                Code = req.Code?.Trim() ?? old.Code,
-                Category = req.Category,
-                Visibility = req.Visibility,
-                UpdatedAt = Now(),
-                Content = req.Content ?? old.Content,
-                MatchRules = req.MatchRules ?? old.MatchRules,
-                IsActive = req.IsActive ?? old.IsActive,
-            };
-            list[index] = updated;
-            SaveAll(indexFile, list);
-            return Results.Ok(ToDetail(updated));
-        });
+                var list = LoadAll(indexFile);
+                var index = list.FindIndex(r => r.Id == id);
+                if (index < 0)
+                    return Results.Json(new { code = "TEMPLATE_NOT_FOUND", message = $"模板 {id} 不存在" }, statusCode: 404);
+
+                var old = list[index];
+                var updated = old with
+                {
+                    Name = req.Name?.Trim() ?? old.Name,
+                    Code = req.Code?.Trim() ?? old.Code,
+                    Category = req.Category,
+                    Visibility = req.Visibility,
+                    UpdatedAt = Now(),
+                    Content = req.Content ?? old.Content,
+                    MatchRules = req.MatchRules ?? old.MatchRules,
+                    IsActive = req.IsActive ?? old.IsActive,
+                };
+                list[index] = updated;
+                SaveAll(indexFile, list);
+                return Results.Ok(ToDetail(updated));
+            }));
 
         // 删除
         app.MapDelete("/api/print/templates/{id}", (string id) =>
-        {
-            var list = LoadAll(indexFile);
-            var removed = list.RemoveAll(r => r.Id == id);
-            if (removed == 0)
-                return Results.Json(new { code = "TEMPLATE_NOT_FOUND", message = $"模板 {id} 不存在" }, statusCode: 404);
-            SaveAll(indexFile, list);
-            return Results.NoContent();
-        });
+            WithFileLock<IResult>(() =>
+            {
+                var list = LoadAll(indexFile);
+                var removed = list.RemoveAll(r => r.Id == id);
+                if (removed == 0)
+                    return Results.Json(new { code = "TEMPLATE_NOT_FOUND", message = $"模板 {id} 不存在" }, statusCode: 404);
+                SaveAll(indexFile, list);
+                return Results.NoContent();
+            }));
 
         // ---- 数据源目录(OpenPrint《后端对接规范》§4.2, 只读) ----
         // 检验报告数据源: Header 主表 + ReportItems 明细(与老系统数据契约一致)

@@ -13,6 +13,7 @@ import type { PageSetup, WatermarkConfig } from '@op/types/template'
 import { MM_TO_PX, ZOOM_MAX, ZOOM_MIN } from '@op/utils/constants'
 import { toMm } from '@op/core/units'
 import { createFabricControl, isPrintObject, PrintText, PrintZone, type IPrintObject } from './controls'
+import type { PrintTextEditedPayload } from './controls/PrintText'
 import { SmartGuides } from './guides/SmartGuides'
 import { PrintTable } from './controls/PrintTable'
 import { ensureCells } from '@op/core/layout-engine/table-cells'
@@ -49,11 +50,12 @@ export interface CanvasDesignerEvents {
   /** 物理页数变化（内容推导或手动分页触发），驱动右侧页面面板刷新 */
   onPageCountChange?: (count: number) => void
   /**
-   * 文本控件退出 fabric 编辑态（双击进入后失焦/点别处/按 ESC），
-   * 携带反向解析后的 segments。store 据此把 fabric.text 同步到 control.segments。
-   * 这是 v2 segments 模式的关键回写通道（fabric → store）—— 见 PrintText._canvasTextListener。
+   * 画布上文本控件的 fabric 编辑退出（双击→blur）：携带 rawText + 已解析的 segments，
+   * 由 store 反向同步到 control.segments。修复"画布编辑后右侧 textarea 不刷新"：
+   * 此前 PrintText._canvasTextListener 永远是 undefined（attachCanvasTextListener 零调用方），
+   * editing:exited 触发时 raw 写不回 store，segments 没变 → 右侧 watch 不触发。
    */
-  onTextEdited?: (info: { controlId: string; rawText: string; segments: import('@op/types/control').Segment[] }) => void
+  onCanvasTextEdited?: (info: PrintTextEditedPayload) => void
 }
 
 type PrintFabricObject = FabricObject & IPrintObject
@@ -609,12 +611,11 @@ export class CanvasDesigner {
     this.applySectionOrigin(obj, control, opts.zoneHostId)
     // 镜像「常驻辅助线」开关到 Fabric 对象，供 SmartGuides 读取
     ;(obj as unknown as { showGuides: boolean }).showGuides = control.showGuides ?? false
-    // ★ v2 文本反向同步：把 store 写入路径桥接给 PrintText 实例，
-    // 编辑退出时 fabric.text → textToSegments → 透传到 events.onTextEdited
+    // ★ 文本控件：注入「编辑退出反向同步到 store」回调。Bug 修复：之前
+    //   attachCanvasTextListener 全局零调用方，editing:exited 时 raw 写不回 store，
+    //   右侧 textarea 看 store.segments 不变就不刷新，画布与右侧长期不一致。
     if (obj instanceof PrintText) {
-      obj.attachCanvasTextListener((info) => {
-        this.events.onTextEdited?.(info)
-      })
+      obj.attachCanvasTextListener((info) => this.events.onCanvasTextEdited?.(info))
     }
     this.canvas.add(obj)
     // 标签网格：首卡子组件以真实 Fabric 对象渲染（可选中/拖动/编辑，所见即所得）

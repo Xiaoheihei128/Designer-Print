@@ -46,8 +46,14 @@ describe('segmentsToText', () => {
 })
 
 describe('textToSegments', () => {
-  it('空字符串 → 单 text 段（value=""）', () => {
-    expect(textToSegments('')).toEqual([{ kind: 'text', value: '' }])
+  it('空字符串 → 空数组（与 segmentsToText([]) === "" 对称，让清空语义统一）', () => {
+    expect(textToSegments('')).toEqual([])
+  })
+
+  it('纯空白（空格/换行/制表） → 空数组', () => {
+    expect(textToSegments('   ')).toEqual([])
+    expect(textToSegments('\n')).toEqual([])
+    expect(textToSegments('\t')).toEqual([])
   })
 
   it('纯文本无 {{ → 单 text 段', () => {

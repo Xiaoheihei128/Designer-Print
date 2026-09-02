@@ -133,14 +133,24 @@ export function legacyToSegments(src: LegacySource): Segment[] | null {
   const isCode = src.type === 'barcode' || src.type === 'qrcode'
   const fixedText = isCell ? src.text : src.value
   const bindPath = isCell ? src.field : src.binding
+  // ★ 新增：空字符串或纯空白 → 视为"无内容"，返回 null 而不是生成 [{text:''}]
+  //   否则 ensureSegments 会把"用户主动清空"的控件迁移成"1 个空 text 段"，
+  //   ContentValueEditor 看到 segments.length=1 但 segmentsToText=''，出现
+  //   "1 个片段 + textarea 空 + 预览 (空)"的不一致状态，且后续画布走 segments 路径
+  //   显示空是巧合（resolveSegments([]) 与 resolveSegments([{text:''}]) 都返回 ''），
+  //   但 segment 标签"1 个片段"暴露了脏数据。
+  //   重要：保留对 '  {{#totalSum}}  '（含聚合 token 的带前后缀） 的支持 —— 聚合 token
+  //   整体保留为单 text 段，即使前后空白也算有效内容。
+  const hasMeaningfulFixedText =
+    typeof fixedText === 'string' && fixedText.trim() !== ''
 
   // ★ 0) text/value 含 {{...}} 混合内容 → 直接按文本切分（保留前后缀）
   // 优先级最高 —— 用户显式输入 {{...}}suffix 即表达"我要混合内容"意图，
   // 不能被 field 字段覆盖（field 通常是早期自动绑定残留，与用户最新输入不一致）。
   // 例：cell.text='{{ReportItems[].TestStandard}}kg' + cell.field='ReportItems[].TestStandard'
   //     → 必须拆成 [{expr, TestStandard}, {text, ' kg'}]，否则 "kg" 后缀丢失
-  if (typeof fixedText === 'string' && /\{\{[\s\S]+?\}\}/.test(fixedText)) {
-    return splitFixedText(fixedText)
+  if (hasMeaningfulFixedText && /\{\{[\s\S]+?\}\}/.test(fixedText!)) {
+    return splitFixedText(fixedText!)
   }
 
   // 1) 显式 contentType 优先
@@ -149,14 +159,14 @@ export function legacyToSegments(src: LegacySource): Segment[] | null {
     // variable 但无 binding —— 回落到 fixed
   } else if (ct === 'expression' && src.expression) {
     return [{ kind: 'expr', src: src.expression }]
-  } else if (ct === 'fixed' && typeof fixedText === 'string') {
-    return splitFixedText(fixedText)
+  } else if (ct === 'fixed' && hasMeaningfulFixedText) {
+    return splitFixedText(fixedText!)
   }
 
   // 2) 启发式回退
   if (isCode) {
     if (bindPath) return [{ kind: 'field', path: bindPath }]
-    if (typeof src.value === 'string') return splitFixedText(src.value)
+    if (typeof src.value === 'string' && src.value.trim() !== '') return splitFixedText(src.value)
     return null
   }
 
@@ -164,7 +174,7 @@ export function legacyToSegments(src: LegacySource): Segment[] | null {
   if (src.expression) return [{ kind: 'expr', src: src.expression }]
   if (src.binding) return [{ kind: 'field', path: src.binding }]
   if (src.field) return [{ kind: 'field', path: src.field }]
-  if (typeof fixedText === 'string') return splitFixedText(fixedText)
+  if (hasMeaningfulFixedText) return splitFixedText(fixedText!)
 
   return null
 }

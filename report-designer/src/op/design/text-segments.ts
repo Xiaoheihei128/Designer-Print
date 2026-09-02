@@ -30,9 +30,12 @@ export function segmentsToText(segs: Segment[]): string {
     .join('')
 }
 
-/** 占位符文本 → segments。永远返回非空数组。 */
+/** 占位符文本 → segments。空白输入返回空数组（让「清空」语义统一）。 */
 export function textToSegments(text: string): Segment[] {
-  if (!text) return [{ kind: 'text', value: '' }]
+  // ★ 空白-only 输入（含空格/换行/制表符）视为空：与 segmentsToText([]) === ''
+  //   对称；C 改动的 isEmpty 判定依赖 next.length === 0 与 every(text && 空) 两条
+  //   分支，空白输入走第二条分支仍可能漏触发，统一返回空数组让清空语义更可靠。
+  if (!text || !text.trim()) return []
   if (!text.includes('{{')) return [{ kind: 'text', value: text }]
 
   const parts: Segment[] = []

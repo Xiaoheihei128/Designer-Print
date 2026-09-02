@@ -23,7 +23,30 @@ function readIndex(): TemplateSummary[] {
 }
 
 function writeIndex(list: TemplateSummary[]): void {
-  localStorage.setItem(INDEX_KEY, JSON.stringify(list))
+  safeSetItem(INDEX_KEY, JSON.stringify(list))
+}
+
+/**
+ * localStorage 写入防护：浏览器默认配额 5MB（部分环境 10MB），大模板 content
+ * 序列化后可能超限，裸 setItem 会抛 QuotaExceededError 整调用栈炸掉。
+ * 错误封装到统一错误类型，让上层（saveTemplate 的 catch）能识别并提示用户清理。
+ */
+export class LocalStorageQuotaError extends Error {
+  constructor(public readonly key: string, public readonly bytes: number) {
+    super(`localStorage 配额不足：${key}（${bytes} bytes）。请删除大模板后重试。`)
+    this.name = 'LocalStorageQuotaError'
+  }
+}
+
+function safeSetItem(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value)
+  } catch (e) {
+    if (e instanceof DOMException && (e.name === 'QuotaExceededError' || e.code === 22)) {
+      throw new LocalStorageQuotaError(key, value.length)
+    }
+    throw e
+  }
 }
 
 export function createLocalRepository(): TemplateRepository {
@@ -49,7 +72,7 @@ export function createLocalRepository(): TemplateRepository {
         deletable: true,
         updatedAt: new Date().toISOString(),
       }
-      localStorage.setItem(RECORD_PREFIX + full.id, JSON.stringify(full))
+      safeSetItem(RECORD_PREFIX + full.id, JSON.stringify(full))
       const index = readIndex()
       index.push({
         id: full.id,
@@ -71,7 +94,7 @@ export function createLocalRepository(): TemplateRepository {
         id,
         updatedAt: new Date().toISOString(),
       }
-      localStorage.setItem(RECORD_PREFIX + id, JSON.stringify(merged))
+      safeSetItem(RECORD_PREFIX + id, JSON.stringify(merged))
       const index = readIndex().map((t) =>
         t.id === id ? { ...t, name: merged.name, updatedAt: merged.updatedAt } : t,
       )

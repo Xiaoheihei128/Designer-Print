@@ -18,6 +18,7 @@ import {
 import { isAggToken, parseAggToken, type AggKind } from '@op/core/layout-engine/aggregate'
 import { hasSummaryRow, summaryLabel } from '@op/core/layout-engine/group-engine'
 import { normalizeColumnWidths } from '@op/core/layout-engine/table-engine'
+import { segmentsToText } from '@op/design/text-segments'
 import { diagonalBackground } from '@op/core/renderer-html/css-generator'
 
 const PLACEHOLDER = '#9aa0a6'
@@ -109,11 +110,18 @@ function placeholderOf(cell: TableCell, col: TableColumn | undefined): string {
   // isBoundCell=true 拉到这里,如果不先识别就回退到 col.field,显示成 {{item.Header.ReportNo}}
   const tk = cellAggToken(cell)
   if (tk) return `{{#${tk}}}`
+  // ★ segments 优先：与 dataCellText / staticCellText 对齐。画布上显示 segmentsToText
+  //   的文本（即 {{Header.ReportNo}} 而非 {{item.Header.ReportNo}}）—— 与右侧 ContentValueEditor
+  //   textarea 完全一致；用户已绑定字段后再删除 textarea 内容时，画布也能跟着清空，
+  //   而不是继续读 cell.field 老字段显示成 {{item.X}}。
+  if (cell.segments && cell.segments.length) {
+    return segmentsToText(cell.segments)
+  }
+  // ★ 老 schema 兜底：仅在 segments 缺失时走（兼容旧模板）
   const mode = cell.contentType
   if (mode === 'expression') return cell.expression ?? ''
   if (mode === 'variable') return cell.field ? fieldPlaceholder(cell.field) : ''
   if (mode === 'fixed') return ''
-  // 老模板启发式（无 contentType）：expression > field > 列配置
   if (cell.expression) return cell.expression
   if (cell.field) return fieldPlaceholder(cell.field)
   if (col?.expression) return col.expression

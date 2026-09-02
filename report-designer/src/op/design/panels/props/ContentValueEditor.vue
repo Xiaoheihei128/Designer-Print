@@ -12,6 +12,11 @@
  * 引擎层（resolveSegments）保证老 schema 字段缺失 segments 时自动 fallback，
  * 所以 v1/v2 共存于同一渲染路径。父级 4 处共用此组件（TextProps / CodeProps /
  * CellToolbar 等），由 Properties Panel watch 时调 ensureSegments 触发 lazy 迁移。
+ *
+ * ★ Bug 修复：支持从左栏字段树直接拖到 textarea 插入 {{path}}。
+ *   老实现没有 drop handler，浏览器原生 drop 把裸字段名（如 Header.SupplierName）
+ *   插入 textarea，segments 模式 parse 失败 / 用户拿到裸字符串没 {{}} 包裹，
+ *   渲染层 resolveBinding 找不到 → 字段值丢了。
  */
 import { computed, ref, watch } from 'vue'
 import { NButton, NInput, NPopover, NRadioButton, NRadioGroup, NTag } from 'naive-ui'
@@ -23,6 +28,8 @@ import { segmentsToText, textToSegments } from '@op/design/text-segments'
 import VariableModal from './VariableModal.vue'
 import ExpressionModal from './ExpressionModal.vue'
 import { isAutoMigratedFieldOnly } from './content-value-helpers'
+import { insertFieldAt } from './content-value-insert'
+import { DRAG_BINDING_KEY } from '@op/design/hooks/useDragAdd'
 
 export type ContentMode = 'fixed' | 'variable' | 'expression'
 
@@ -122,8 +129,17 @@ function insertAggToken(snippet: string): void {
 
 /** segmentsToText / textToSegments 由 @op/design/text-segments 提供（共享给画布反向同步用） */
 
-/** 是否在 segments 模式：segments 字段存在且非空数组 */
-const isSegmentsMode = computed(() => Array.isArray(props.segments) && props.segments.length > 0)
+/**
+ * 是否在 segments 模式：segments 字段是数组（包含空数组）。
+ *
+ * ★ 关键修复：原本用 `length > 0` 判定，但用户清空 textarea 时 textToSegments('')
+ *   返回空数组 → isSegmentsMode 切回 false → UI 跳到 3 态模式 → 老字段残留
+ *   （cell.field / cell.binding）又显示出来，表现为"删除字段后再次点击
+ *   单元格字段又重新出现"。判定降级为"数组 vs undefined"：
+ *   - undefined → v1 老模板，3 态模式
+ *   - 数组（含 []）→ v2 segments 模式，空内容也是 segments 模式（用户主动清空后的合法状态）
+ */
+const isSegmentsMode = computed(() => Array.isArray(props.segments))
 
 const segmentsText = ref('')
 /**
@@ -142,12 +158,17 @@ const segmentsText = ref('')
  */
 const isUserEditing = ref(false)
 function onSegmentsFocus(): void {
+  console.log('[DBG onSegmentsFocus]')
   isUserEditing.value = true
 }
 watch(
   () => props.segments,
   (segs) => {
-    if (segs && segs.length && !isUserEditing.value) {
+    console.log('[DBG watch segments]', JSON.stringify(segs), 'isEditing=', isUserEditing.value)
+    // 同步回填条件：segments 模式（Array.isArray 为 true）且非编辑中
+    // 注意：包含空数组也要回填（让 segmentsText 同步到 ''，与 store 一致），
+    // 否则 segments 从 [...] 变 [] 时 textarea 残留旧文本。
+    if (Array.isArray(segs) && !isUserEditing.value) {
       segmentsText.value = segmentsToText(segs)
     }
   },
@@ -156,12 +177,59 @@ watch(
 
 /** textarea 内容变更：暂存本地，blur 时再 parse → emit update:segments */
 function onSegmentsInput(v: string): void {
+  console.log('[DBG onSegmentsInput]', JSON.stringify(v), 'was segmentsText=', JSON.stringify(segmentsText.value), 'isEditing=', isUserEditing.value)
   segmentsText.value = v
 }
 function onSegmentsBlur(): void {
   isUserEditing.value = false // ★ 守卫解除，下次 props.segments 变化允许 watch 回填
   const next = textToSegments(segmentsText.value)
   emit('update:segments', next)
+  // v1 老 schema 字段（value/binding/expression）的清空由各父组件在自己的
+  // onSegmentsChange / onCellSegments 中根据 segments 是否为空决定（合并到
+  // 同一份 patch 中），避免 ContentValueEditor 在一次 blur 内连发多次独立
+  // emit（segments + value + binding + expression），后者在 CellToolbar 中
+  // 会因为 props.control 是上一次响应式快照而被后续 emit 用旧 segments
+  // 覆盖，导致"清空 textarea 不生效"。
+}
+
+/* ----------------------------- 字段 drop 入口 ----------------------------- */
+
+/**
+ * 从左栏字段树拖到 segments textarea 的处理：识别 binding mime 后把 {{path}} 插入
+ * 当前光标位置（不是简单 append），保留光标位置让用户继续输入。
+ *
+ * 不影响"非 segments 模式"：v1 行为下用户的 binding 字段是单独的 input，dragstart
+ * 自带 select-list 拖出行为不进入此 textarea。
+ *
+ * 纯逻辑拆出到 ./content-value-insert.ts 便于测试；本函数负责 DOM 副作用：
+ * preventDefault、读写 textarea selectionStart/End、emit 写回 store。
+ */
+function onSegmentsTextareaDrop(e: DragEvent): void {
+  const path = e.dataTransfer?.getData(DRAG_BINDING_KEY)
+  if (!path) return // 不是字段拖拽，让浏览器原生处理（其他应用文本拖入场景）
+  e.preventDefault()
+  isUserEditing.value = true // 防止 watch 在 drop→blur 之间把权威值回填覆盖
+  const ta = e.currentTarget as HTMLTextAreaElement
+  const start = ta.selectionStart ?? segmentsText.value.length
+  const end = ta.selectionEnd ?? segmentsText.value.length
+  const { next, caret } = insertFieldAt(segmentsText.value, end, path, start)
+  segmentsText.value = next
+  // 失焦后回写到 store
+  onSegmentsBlur()
+  // 焦点留给用户（drop 后焦点仍在 textarea 上），调整光标到插入末尾
+  // 注意：下一帧执行，避免 textarea.value 还没 commit 的潜在时序问题
+  requestAnimationFrame(() => {
+    ta.focus()
+    ta.setSelectionRange(caret, caret)
+  })
+}
+
+/** dragover 必须 preventDefault 才能允许 drop，否则浏览器显示禁止"光标 */
+function onSegmentsTextareaDragOver(e: DragEvent): void {
+  if (e.dataTransfer?.types.includes(DRAG_BINDING_KEY)) {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+  }
 }
 
 /** 实时预览：用 sample ctx 调 resolveSegments。空字段段解为空是预期的。 */
@@ -175,10 +243,11 @@ const segmentsPreview = computed(() => {
 
 /** 用户点「类型」radio：通知父级切模式，并给新模式填充默认值（仅当该字段为空） */
 function onModeChange(m: ContentMode): void {
+  // ★ 不再自动 emit 默认值：用户主动切 mode 时不强制填第一个字段。
+  //   老的「自动回填 bindingDefault」会让用户删了 binding 后又被默认填回，
+  //   也让"右键表格左键单元格选变量"立刻绑上字段树第一个字段。改为只 emit mode，
+  //   由用户主动从字段树 / VariableModal 选字段。
   emit('update:mode', m)
-  if (m === 'fixed' && !props.value && props.fixedDefault) emit('update:value', props.fixedDefault)
-  else if (m === 'variable' && !props.binding && props.bindingDefault) emit('update:binding', props.bindingDefault)
-  else if (m === 'expression' && !props.expression && props.expressionDefault) emit('update:expression', props.expressionDefault)
 }
 
 /**
@@ -260,16 +329,28 @@ function onExprConfirm(snippet: string): void {
     <!-- segments 模式（v2）：textarea + 字段/函数插入按钮 + 实时预览 -->
     <template v-if="isSegmentsMode">
       <div class="props-row">
-        <NInput
-          type="textarea"
-          size="small"
-          :autosize="{ minRows: segmentsRows, maxRows: segmentsRows + 3 }"
-          :value="segmentsText"
-          :placeholder="placeholder || segmentsPlaceholder"
-          @update:value="onSegmentsInput"
-          @focus="onSegmentsFocus"
-          @blur="onSegmentsBlur"
-        />
+        <!--
+          ★ 拖字段插入 {{path}}：包一层让 dragover/drop 事件冒泡到当前节点
+          （naive-ui 内部 textarea 不暴露 ref；包 div 拦截更可靠）。
+          @dragover.prevent 是关键 —— 不 preventDefault 浏览器显示"禁止"光标、
+          drop 事件压根不会触发。普通文本拖入仍走原生 textarea 行为。
+        -->
+        <div
+          class="segments-drop-host"
+          @dragover="onSegmentsTextareaDragOver"
+          @drop="onSegmentsTextareaDrop"
+        >
+          <NInput
+            type="textarea"
+            size="small"
+            :autosize="{ minRows: segmentsRows, maxRows: segmentsRows + 3 }"
+            :value="segmentsText"
+            :placeholder="placeholder || segmentsPlaceholder"
+            @update:value="onSegmentsInput"
+            @focus="onSegmentsFocus"
+            @blur="onSegmentsBlur"
+          />
+        </div>
       </div>
       <div class="props-row content-value-row mt-1">
         <NTag :bordered="false" size="small" type="info">
@@ -391,6 +472,10 @@ function onExprConfirm(snippet: string): void {
 }
 .compact .content-value-row {
   margin-bottom: 0;
+}
+/* 拖拽宿主机：包一层让 dragover/drop 拦截生效，不影响内部 textarea 布局 */
+.segments-drop-host {
+  display: contents;
 }
 .props-tip {
   font-size: 12px;

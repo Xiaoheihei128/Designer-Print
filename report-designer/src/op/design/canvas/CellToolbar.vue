@@ -76,8 +76,18 @@ const ds = useFieldCatalogStore()
 
 const grid = computed(() => buildDesignGrid(props.control))
 const cell = computed<TableCell>(() => grid.value.cells[props.row]?.[props.col] ?? {})
+/**
+ * 同步派生 cell.segments —— 老 schema 的 cell 只写了 field/expression，segments 是 undefined；
+ * ensureSegments 是异步（emit migrate → store 写回 → 下一次响应才能读到），期间传给
+ * ContentValueEditor 的 segments 是 undefined，segmentsToText 返回空 → textarea 空白，
+ * 与画布 placeholderOf(cell.field) 显示的 {{item.X}} 不一致。
+ *
+ * 这里同步跑一次 ensureSegments，把"应渲染的 segments"在本次渲染就交给编辑器，
+ * 画布反向同步链路里的 watch(migrate) 继续负责把 segments 写回 store（保持单一数据源）。
+ */
+const effectiveCell = computed<TableCell>(() => ensureSegments(cell.value))
 const column = computed(() => props.control.columns[props.col])
-const style = computed<TableCellStyle>(() => resolveCellStyle(props.control, column.value, cell.value))
+const style = computed<TableCellStyle>(() => resolveCellStyle(props.control, column.value, effectiveCell.value))
 
 const sysFonts = useSystemFonts()
 
@@ -110,10 +120,19 @@ const detailFields = computed(() => {
   })
 })
 
-/** 变量模式默认路径：取该行语义下的第一个字段（数据行=明细字段，其余=标量字段） */
-const bindingDefault = computed(
-  () => detailFields.value[0]?.path ?? (props.rowKind === 'data' ? 'ReportItems[].AnalysisItem' : 'order.orderNo'),
-)
+/** 变量模式默认路径：取该行语义下的第一个字段（数据行=明细字段，其余=标量字段）。
+ * fallback 也跟随当前数据源走（首个明细/标量字段），不再硬编码"ReportItems[].AnalysisItem"/
+ * "order.orderNo"——切换数据源（销售订单、采购单等）时 fallback 不再产生误导路径。 */
+const bindingDefault = computed(() => {
+  const first = detailFields.value[0]?.path
+  if (first) return first
+  // 无字段目录注入时，flatFields 也为空；此时用 props.rowKind 推导的语义化默认值，
+  // 至少与原行为一致，等真正有字段注入后用户即可在面板下拉里换正确路径。
+  if (props.rowKind === 'data') {
+    return ds.flatFields.find((f) => f.path.includes('[]'))?.path ?? ''
+  }
+  return ds.flatFields.find((f) => !f.path.includes('[]'))?.path ?? ''
+})
 
 /** 表达式模式默认值
  * - 数据行保留 {{rowIndex + 1}}（序号列的双击便利）
@@ -129,8 +148,9 @@ const expressionDefault = computed(() =>
  *  v2: 已有 segments 时返回 undefined，让 ContentValueEditor 切到 segments 模式
  */
 const cellMode = computed<ContentMode | undefined>(() => {
-  const c = cell.value
-  if (c?.segments && c.segments.length) return undefined
+  const c = effectiveCell.value
+  // segments 模式（含空数组）→ 返回 undefined，让 ContentValueEditor 走 segments UI 分支
+  if (Array.isArray(c?.segments)) return undefined
   if (c?.contentType) return c.contentType
   return c?.expression ? 'expression' : c?.field ? 'variable' : 'fixed'
 })
@@ -153,13 +173,28 @@ function onCellValue(v: string): void {
   emit('apply', patchCell(props.control, props.row, props.col, { text: v }))
 }
 
-/** 变量模式：写 contentType + field 并清空 text/expression，保证 field 为唯一取值源 */
+/**
+ * 变量模式：写 field 并清空 text/expression。
+ * ★ 清空场景（path 为空）不写 contentType：让 segments 走自己的逻辑决定
+ *   contentType，老字段不被强制覆写成 'variable' 留下脏数据。
+ */
 function onCellBinding(path: string): void {
+  if (!path) {
+    emit(
+      'apply',
+      patchCell(props.control, props.row, props.col, {
+        field: undefined,
+        text: undefined,
+        expression: undefined,
+      }),
+    )
+    return
+  }
   emit(
     'apply',
     patchCell(props.control, props.row, props.col, {
       contentType: 'variable',
-      field: path || undefined,
+      field: path,
       text: undefined,
       expression: undefined,
     }),
@@ -167,19 +202,55 @@ function onCellBinding(path: string): void {
 }
 
 function onCellExpression(v: string): void {
+  if (!v) {
+    emit(
+      'apply',
+      patchCell(props.control, props.row, props.col, {
+        expression: undefined,
+        text: undefined,
+        field: undefined,
+      }),
+    )
+    return
+  }
   emit(
     'apply',
     patchCell(props.control, props.row, props.col, {
       contentType: 'expression',
-      expression: v || undefined,
+      expression: v,
       text: undefined,
       field: undefined,
     }),
   )
 }
 
-/** v2: segments 模式 textarea 内容变更时回写 */
+/** v2: segments 模式 textarea 内容变更时回写
+ *
+ * ★ 关键修复：segments 清空（length=0 或全部为空 text 段）时同步清除 v1 老字段
+ *   （field/text/expression），合并到同一份 patchCell —— 避免之前由
+ *   ContentValueEditor blur 连续 emit update:segments + update:value 等多次
+ *   事件，在 CellToolbar 内部因 props.control 是上一次响应式快照，导致后续
+ *   patchCell(props.control, ..., { text: undefined }) 用「旧 segments」覆盖
+ *   刚写入的「segments=[]」，表现为「清空 textarea 后字段又冒出来」。
+ *
+ *   把清理放在单一 patchCell 里同时清 v1 字段，后续 update:value 等 emit 即便
+ *   触发也只是把已是 undefined 的字段再次写为 undefined，不会回滚 segments。
+ */
 function onCellSegments(s: SegmentT[]): void {
+  const segsIsEmpty =
+    s.length === 0 || s.every((seg) => seg.kind === 'text' && !seg.value)
+  if (segsIsEmpty) {
+    emit(
+      'apply',
+      patchCell(props.control, props.row, props.col, {
+        segments: s,
+        field: undefined,
+        text: undefined,
+        expression: undefined,
+      }),
+    )
+    return
+  }
   emit('apply', patchCell(props.control, props.row, props.col, { segments: s }))
 }
 
@@ -199,14 +270,14 @@ watch(
 /** 仅绑定了字段/表达式（或显式 variable/expression 模式）的单元格才需要格式（纯静态文字格式无意义） */
 const canFormat = computed(
   () =>
-    cell.value.contentType === 'variable' ||
-    cell.value.contentType === 'expression' ||
-    Boolean(cell.value.field || cell.value.expression) ||
+    effectiveCell.value.contentType === 'variable' ||
+    effectiveCell.value.contentType === 'expression' ||
+    Boolean(effectiveCell.value.field || effectiveCell.value.expression) ||
     (props.rowKind === 'data' && Boolean(column.value?.field || column.value?.expression)),
 )
 
 /** 生效中的格式（单元格优先，回落列默认） */
-const cellFormat = computed<CellFormat | undefined>(() => cell.value.format ?? column.value?.format)
+const cellFormat = computed<CellFormat | undefined>(() => effectiveCell.value.format ?? column.value?.format)
 
 /* --------------------------------- 动作 -------------------------------- */
 
@@ -219,7 +290,7 @@ function toggle(key: 'bold' | 'italic' | 'underline'): void {
 }
 
 const spanMax = computed(() => grid.value.colCount - props.col)
-const currentSpan = computed(() => Math.min(cell.value.colSpan ?? 1, spanMax.value))
+const currentSpan = computed(() => Math.min(effectiveCell.value.colSpan ?? 1, spanMax.value))
 
 function setSpan(n: number | null): void {
   emit('apply', setCellSpan(props.control, props.row, props.col, n ?? 1))
@@ -232,7 +303,7 @@ function setSpan(n: number | null): void {
  */
 const canRowSpan = computed(() => props.rowKind !== 'data')
 const rowSpanMax = computed(() => grid.value.rowCount - props.row)
-const currentRowSpan = computed(() => Math.min(cell.value.rowSpan ?? 1, rowSpanMax.value))
+const currentRowSpan = computed(() => Math.min(effectiveCell.value.rowSpan ?? 1, rowSpanMax.value))
 
 function setRowSpan(n: number | null): void {
   if (!canRowSpan.value) return
@@ -249,7 +320,7 @@ const diagOptions = [
   { label: '↘ 右下', value: 'down' },
   { label: '↗ 右上', value: 'up' },
 ]
-const currentDiagonal = computed<'none' | 'down' | 'up'>(() => cell.value.style?.diagonal ?? 'none')
+const currentDiagonal = computed<'none' | 'down' | 'up'>(() => effectiveCell.value.style?.diagonal ?? 'none')
 function setDiagonal(v: 'none' | 'down' | 'up'): void {
   applyStyle({ diagonal: v === 'none' ? undefined : v })
 }
@@ -317,11 +388,11 @@ function deleteCol(): void {
           class="op-cell-content"
           compact
           :mode="cellMode"
-          :value="cell.text ?? ''"
-          :binding="cell.field ?? ''"
-          :expression="cell.expression ?? ''"
-          :segments="cell.segments"
-          :format="cell.format"
+          :value="effectiveCell.text ?? ''"
+          :binding="effectiveCell.field ?? ''"
+          :expression="effectiveCell.expression ?? ''"
+          :segments="effectiveCell.segments"
+          :format="effectiveCell.format"
           placeholder="单元格内容"
           :binding-default="bindingDefault"
           :expression-default="expressionDefault"

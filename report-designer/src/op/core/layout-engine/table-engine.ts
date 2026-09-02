@@ -34,6 +34,7 @@ import {
   parseAggToken,
   stripItems,
   toChineseCapitalRMB,
+  type AggKind,
   type FooterKind,
 } from './aggregate'
 import {

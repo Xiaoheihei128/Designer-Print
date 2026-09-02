@@ -62,6 +62,27 @@ const filteredGroups = computed(() => {
     .filter((t) => t.fields.length > 0)
 })
 
+/**
+ * 字段 vs 业务数据 的 diff（来自 fieldCatalog.diffCoverage）。
+ * - missingPathSet: 目录里有但数据里没有的字段 path 集合（用于灰色标记）
+ * - newFromData: 数据里有但目录里没有的路径（用于「数据中的新字段」分组）
+ *
+ * 设计决定：标记「缺失」不「隐藏」——老模板可能硬绑了路径，若隐藏则心智模型"突然消失"。
+ */
+const missingPathSet = computed<Set<string>>(() => {
+  const dc = catalog.diffCoverage
+  if (!dc.hasBusinessData) return new Set()
+  return new Set(dc.missingFromData.map((f) => f.path))
+})
+const newFromData = computed<string[]>(() => {
+  const dc = catalog.diffCoverage
+  if (!dc.hasBusinessData) return []
+  // 过滤掉搜索词不匹配的
+  const kw = keyword.value.trim().toLowerCase()
+  if (!kw) return dc.newFromData
+  return dc.newFromData.filter((p) => p.toLowerCase().includes(kw))
+})
+
 onMounted(() => {
   void catalog.init()
 })
@@ -154,6 +175,7 @@ const typeLabel = (type: string): string => {
                 v-for="field in group.fields"
                 :key="field.path"
                 class="field-item group"
+                :class="{ 'is-missing': missingPathSet.has(field.path) }"
                 draggable="true"
                 @dragstart="(e: DragEvent) => {
                   e.dataTransfer?.setData('application/x-openprint-binding', field.path)
@@ -172,9 +194,43 @@ const typeLabel = (type: string): string => {
                   {{ typeLabel(field.type) }}
                 </span>
                 <span class="ml-1 truncate text-9px text-brand-text-3">{{ field.path }}</span>
+                <NTooltip v-if="missingPathSet.has(field.path)" placement="top">
+                  <template #trigger>
+                    <span class="missing-mark" aria-label="数据中缺失">
+                      <div class="i-carbon-warning-alt text-12px" />
+                    </span>
+                  </template>
+                  数据中暂无该字段：{{ field.path }}
+                </NTooltip>
               </div>
             </div>
-            <div v-if="filteredGroups.length === 0" class="py-4 text-center text-12px text-brand-text-3">
+
+            <!-- 数据中的新字段：业务 JSON 有但目录没记录的路径（用户可一眼看到新数据） -->
+            <div
+              v-if="newFromData.length > 0"
+              class="new-from-data mt-2 border-t border-brand-border pt-2"
+            >
+              <div class="mb-1 flex items-center gap-1 text-11px font-medium text-brand-warning">
+                <div class="i-carbon-data-add text-12px" />
+                数据中的新字段
+                <span class="text-brand-text-3">({{ newFromData.length }})</span>
+              </div>
+              <div
+                v-for="path in newFromData"
+                :key="path"
+                class="field-item is-new group"
+                draggable="true"
+                @dragstart="(e: DragEvent) => {
+                  e.dataTransfer?.setData('application/x-openprint-binding', path)
+                  e.dataTransfer?.setData('text/plain', path)
+                }"
+              >
+                <span class="flex-1 truncate text-12px">{{ path }}</span>
+                <span class="text-9px text-brand-warning">新</span>
+              </div>
+            </div>
+
+            <div v-if="filteredGroups.length === 0 && newFromData.length === 0" class="py-4 text-center text-12px text-brand-text-3">
               暂无字段
             </div>
           </div>
@@ -196,5 +252,32 @@ const typeLabel = (type: string): string => {
 }
 .field-item:hover {
   background: color-mix(in srgb, var(--brand-primary) 6%, transparent);
+}
+/**
+ * ★ 数据缺失标记（设计器左栏字段 vs 业务数据 diff）：
+ * - is-missing：灰色 + 删除线，提示"目录有但运行时数据没值"
+ * - 不隐藏（用户硬绑路径可能在老模板里心智模型中有效），只标灰提示
+ * - missing-mark：右侧警告 icon（悬停 tooltip 显示具体路径）
+ */
+.field-item.is-missing {
+  opacity: 0.55;
+}
+.field-item.is-missing > span:not(.missing-mark) {
+  text-decoration: line-through;
+  text-decoration-color: var(--brand-text-3);
+  text-decoration-thickness: 1px;
+}
+.missing-mark {
+  flex-shrink: 0;
+  color: var(--brand-warning, #d97706);
+}
+/**
+ * 数据中的新字段分组：业务 JSON 有但目录没记录的路径
+ * - is-new：警告色（orange）左边细条
+ * - 与目录字段同样可拖（dragstart 写入 path，用户可直接拖到画布新建绑定）
+ */
+.field-item.is-new {
+  border-left: 2px solid var(--brand-warning, #d97706);
+  padding-left: 6px;
 }
 </style>

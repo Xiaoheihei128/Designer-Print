@@ -26,11 +26,13 @@ export default defineConfig({
   server: {
     port: 5173,
     host: true,
-    // 局域网访问: 浏览器同源请求 /api → 转发到 .NET 后端(5000)
+    // 局域网访问: 浏览器同源请求 /api → 转发到 .NET 后端
     // 前端各页面统一用相对路径 '/api/...', 局域网用户无需知道后端地址
+    // 目标地址优先级: VITE_OPENPRINT_API_BASE > 默认 localhost:5000(开发约定)
+    // 生产环境没有 vite proxy, 必须用 VITE_OPENPRINT_API_BASE 注入绝对 URL
     proxy: {
       '/api': {
-        target: 'http://localhost:5000',
+        target: process.env.VITE_OPENPRINT_API_BASE ?? 'http://localhost:5000',
         changeOrigin: true
       }
     }

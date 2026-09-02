@@ -23,8 +23,9 @@ function patch(p: Record<string, unknown>): void {
 const contentMode = computed<ContentMode | undefined>(() => {
   const c = control.value
   if (!c) return undefined
-  // v2: 已有 segments → 返回 undefined 让 ContentValueEditor 切到 segments 模式
-  if (c.segments && c.segments.length) return undefined
+  // v2: 已有 segments（含空数组） → 返回 undefined 让 ContentValueEditor 切到 segments 模式
+  // 含空数组：清空 textarea 后保持 segments 模式不切回 3 态（否则老字段残留又显示）
+  if (Array.isArray(c.segments)) return undefined
   if (c.contentType) return c.contentType
   // barcode/qrcode 三态不对称：不识别 expression 字段（与 legacyToSegments 对齐）
   return c.binding ? 'variable' : 'fixed'
@@ -38,8 +39,29 @@ function onModeChange(m: ContentMode): void {
   else patch({ contentType: 'expression', binding: undefined })
 }
 
-/** v2: segments 回写 */
+/** v2: segments 回写
+ *
+ * ★ 关键修复：segments 清空（length=0 或全部为空 text 段）时同步清除 v1 老字段
+ *   （value/binding/expression），合并到同一份 patch —— 避免之前由
+ *   ContentValueEditor blur 连续 emit update:segments + update:value 等多次
+ *   事件造成的多次独立 patch 之间出现「segments 已清但 v1 字段未清」的不一致
+ *   状态，legacy fallback 又把旧字段渲染出来。
+ *
+ *   注：barcode/qrcode 不识别 expression 字段（与 legacyToSegments 对齐），
+ *   但 patch 仍可写 expression:undefined 作为兜底，避免将来扩展时遗漏。
+ */
 function onSegmentsChange(s: SegmentT[]): void {
+  const segsIsEmpty =
+    s.length === 0 || s.every((seg) => seg.kind === 'text' && !seg.value)
+  if (segsIsEmpty) {
+    patch({
+      segments: s,
+      value: undefined,
+      binding: undefined,
+      expression: undefined,
+    })
+    return
+  }
   patch({ segments: s })
 }
 

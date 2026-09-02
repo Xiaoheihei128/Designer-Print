@@ -18,6 +18,7 @@ import { createDataSourceHttp } from '@op/repository/http-datasource'
 import { getBackendConfig, isBackendConfigured } from '@op/config/backend'
 import { isErpConfigured, loadDataSourcePersisted, saveDataSourcePersisted, type DataSourceKind } from '@op/config/data-source'
 import { introspectJson, type IntrospectOptions } from '@op/repository/introspect-json'
+import { useBusinessDataStore } from './businessData'
 
 const CACHE_TTL = 10 * 60 * 1000 // 10 分钟
 
@@ -157,6 +158,34 @@ export const useFieldCatalogStore = defineStore('fieldCatalog', () => {
     () => _injectedMeta.value.has(activeSourceId.value),
   )
 
+  /**
+   * 目录 vs 业务数据 的 diff 结果（设计器左栏标记 + 「数据中的新字段」分组使用）。
+   *
+   * - `missingFromData`: 目录里有但当前 businessData 缺失的字段（用户绑定路径，运行时数据没值）
+   *   —— UI 应该灰色标记（不要隐藏：老模板可能误绑，隐藏会"突然消失"破坏心智模型）
+   * - `newFromData`: 业务数据里有但目录里没有的路径（数据出现新字段，模板没绑）
+   *   —— UI 归到「数据中的新字段」分组，用户可一眼看到
+   * - `hasBusinessData`: 是否有可对比的数据（businessData.data === null 时整个 diff 不显示）
+   *
+   * 注意：late-bind useBusinessDataStore 避免 store 间循环依赖（businessData 不依赖 fieldCatalog，
+   *       但创建顺序由组件树决定）。
+   */
+  const diffCoverage = computed(() => {
+    const businessData = useBusinessDataStore()
+    const dataPaths = businessData.dataPathSet
+    if (businessData.data === null || dataPaths.size === 0) {
+      return { hasBusinessData: false, missingFromData: [] as FieldDef[], newFromData: [] as string[] }
+    }
+    const fields = activeFields.value
+    const missingFromData = fields.filter((f) => !dataPaths.has(f.path))
+    const fieldPaths = new Set(fields.map((f) => f.path))
+    const newFromData: string[] = []
+    for (const p of dataPaths) {
+      if (!fieldPaths.has(p)) newFromData.push(p)
+    }
+    return { hasBusinessData: true, missingFromData, newFromData }
+  })
+
   async function loadSources(): Promise<void> {
     sources.value = await _repo.value.listSources()
     // ★ 注入覆盖保护：如果当前 activeSourceId 已经映射到一份注入目录（matcher 路径），
@@ -230,6 +259,7 @@ export const useFieldCatalogStore = defineStore('fieldCatalog', () => {
     kind,
     erpAvailable,
     hasInjection,
+    diffCoverage,
     setRepository,
     loadSources,
     loadFields,

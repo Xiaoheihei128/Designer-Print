@@ -16,6 +16,7 @@ import type {
   TableCell,
   TableColumn,
   TableControl,
+  TextControl,
   ZoneControl,
 } from '@op/types/control'
 import type { GridConfig, PageSetup, TemplateData, WatermarkConfig } from '@op/types/template'
@@ -26,9 +27,7 @@ import { assertTemplate } from '@op/core/spec/validator'
 import { genId } from '@op/utils/id'
 import { useHistoryStore } from './history'
 import { type ImportColumn } from '@op/design/utils/data-import'
-import { seedSummaryTail, syncTableHeight, patchCell } from '@op/core/layout-engine/table-cells'
-import { isAutoMigratedFieldOnly } from '@op/design/panels/props/content-value-helpers'
-import { MM_TO_PX } from '@op/utils/constants'
+import { seedSummaryTail, syncTableHeight, patchCell, ensureCells } from '@op/core/layout-engine/table-cells'
 
 /** 水印默认配置（开启后居中单个、45°、浅灰） */
 export const DEFAULT_WATERMARK: WatermarkConfig = {
@@ -160,6 +159,23 @@ export const useDesignerStore = defineStore('designer', () => {
     canvasTick.value++
   }
 
+  /**
+   * 判定 store 中的 cells 是否需要用 Fabric 内存的 info.control 进行物化。
+   * 仅当 store 里 cells 缺失（老模板首次打开）或与 grid 维度不匹配时才需要；
+   * 否则 info.control 是从 Fabric.this.cells 浅引用读的，整张覆盖会把用户
+   * 刚刚在 textarea 里删掉的 segments/field 复活。
+   *
+   * 不在首次之外的 cell click 里反向覆盖 store，是修复"重新点击单元格复活旧字段"bug 的关键。
+   */
+  function needsCellsMaterialize(id: string, infoControl: TableControl): boolean {
+    const current = findControl(id) as TableControl | undefined
+    if (!current) return false
+    const ensured = ensureCells(current)
+    // ensureCells 在 cells 已匹配 grid 时返回与 current 不同引用的对象（重算 headerRows 等派生字段），
+    // 但 cells 引用不变。判断"是否需要替换 cells"要看 ensureCells 前后 cells 引用是否相同：
+    return ensured.cells !== current.cells || current.cells === undefined
+  }
+
   /** 打开手写签名弹窗 */
   function openSignaturePad(): void {
     signatureModalOpen.value = true
@@ -199,163 +215,6 @@ export const useDesignerStore = defineStore('designer', () => {
       if (child) return child
     }
     return undefined
-  }
-
-  /**
-   * 客户端坐标（clientX/Y）命中检测：返回该点下第一个文本控件的 id（body + zone + labelgrid 子组件）。
-   * 用于字段树拖到画布 → "已有文本控件"分支：
-   * 把字段直接绑到命中的文本控件，而不是新建。
-   *
-   * @param clientX 浏览器视口坐标 X
-   * @param clientY 浏览器视口坐标 Y
-   * @param stageEl 画布容器 DOM（用于换算 stage-relative px）
-   * @returns 命中的文本控件 id；未命中 → null
-   */
-  function hitTestTextControl(
-    clientX: number,
-    clientY: number,
-    stageEl: HTMLElement,
-  ): string | null {
-    const rect = stageEl.getBoundingClientRect()
-    const vp = viewport.value
-    // 客户端 px → 画布 mm（与 useDragAdd 一致）
-    const canvasX = clientX - rect.left
-    const canvasY = clientY - rect.top
-    const mmX = (canvasX - vp.offsetX) / (MM_TO_PX * vp.zoom)
-    const mmY = (canvasY - vp.offsetY) / (MM_TO_PX * vp.zoom)
-    const hit = (c: AnyControl): boolean => {
-      if (c.type !== 'text') return false
-      const left = c.left
-      const top = c.top
-      const width = (c as { width?: number }).width ?? 0
-      const height = (c as { height?: number }).height ?? 0
-      return mmX >= left && mmX <= left + width && mmY >= top && mmY <= top + height
-    }
-    // body 控件（含 labelgrid 子组件）
-    for (const c of controls.value) {
-      if (c.type === 'labelgrid') {
-        const grid = c as LabelGridControl
-        for (const child of grid.children ?? []) {
-          if (hit(child)) return child.id
-        }
-      } else if (hit(c)) {
-        return c.id
-      }
-    }
-    // zone 子控件（页眉 / 页脚）
-    for (const z of zones.value) {
-      for (const child of z.children) {
-        if (hit(child)) return child.id
-      }
-    }
-    return null
-  }
-
-  /**
-   * 把字段路径直接绑到已有文本控件（segments 模式）。
-   *
-   * 与属性面板 [字段] 按钮（ContentValueEditor.onVarConfirm）行为对齐：
-   *
-   * - 自动迁移态（segments 是从 cell.field 单点迁移来的，binding 匹配，无手写文本）
-   *   → 覆盖：用户意图是"换绑字段"，与 v1 行为一致
-   *     segs = [{field, path}], binding = path
-   *
-   * - 已有 segments（含多片段混合文本）→ 追加 field 段：保留原有文本/字段
-   *     segs = [...current.segments, {field, path}]
-   *     contentType = 'variable'（确保数据驱动渲染走变量分支）
-   *     binding 清空（多段时单 binding 语义失效，由 segments 接管）
-   *
-   * - 已有遗留文本（v1 schema 的 value/expression，但无 segments）→ 切到 segments 模式
-   *     segs = [{text, leftover}, {field, path}]
-   *     用户输入"合计："再拖字段 → 渲染为"合计：字段值"
-   *
-   * - 完全空白 → 单 field 段（最常见的落点场景）
-   *     segs = [{field, path}], binding = path
-   *
-   * 只对 type='text' 生效；非文本控件（图片/表格等）返回 false，调用方应降级到"新建文本控件"。
-   * silent：不进 undo 栈（与 [字段] 按钮一致；undo 语义为"操作语义步骤"而非"每次拖拽"）。
-   */
-  function applyFieldBindingToTextControl(controlId: string, path: string): boolean {
-    const current = findControl(controlId)
-    if (!current || current.type !== 'text') return false
-
-    const cur = current as AnyControl
-    const existingSegs = cur.segments as
-      | Array<{ kind: 'text'; value: string } | { kind: 'field'; path: string } | { kind: 'expr'; src: string }>
-      | undefined
-    const existingBinding = cur.binding as string | undefined
-    const existingValue = cur.value as string | undefined
-    const existingExpression = cur.expression as string | undefined
-
-    // 1) 自动迁移态：单 field 段 + binding 匹配 + 无手写文本 → 覆盖换绑
-    if (
-      isAutoMigratedFieldOnly({
-        segments: existingSegs,
-        field: existingBinding,
-        value: existingValue,
-        expression: existingExpression,
-      })
-    ) {
-      const next = {
-        ...current,
-        segments: [{ kind: 'field' as const, path }],
-        contentType: 'variable' as const,
-        binding: path,
-        expression: undefined,
-        value: undefined,
-      } as AnyControl
-      updateControlSilent(controlId, next)
-      selectControl(controlId)
-      return true
-    }
-
-    // 2) 已有 segments（含多片段混合）→ 追加
-    if (existingSegs && existingSegs.length > 0) {
-      const next = {
-        ...current,
-        segments: [...existingSegs, { kind: 'field' as const, path }],
-        contentType: 'variable' as const,
-        // 多段时单 binding 语义失效，由 segments 接管；保留 binding 反而会
-        // 让老 schema 兜底分支（legacyToSegments）拿到 stale 路径造成歧义。
-        binding: undefined,
-        expression: undefined,
-      } as AnyControl
-      updateControlSilent(controlId, next)
-      selectControl(controlId)
-      return true
-    }
-
-    // 3) v1 schema 遗留文本（value 或 expression）→ 切到 segments 模式
-    const leftover = ((existingValue ?? '') || (existingExpression ?? '')).trim()
-    if (leftover && leftover !== path) {
-      const next = {
-        ...current,
-        segments: [
-          { kind: 'text' as const, value: leftover },
-          { kind: 'field' as const, path },
-        ],
-        contentType: 'variable' as const,
-        binding: undefined,
-        expression: undefined,
-        value: undefined,
-      } as AnyControl
-      updateControlSilent(controlId, next)
-      selectControl(controlId)
-      return true
-    }
-
-    // 4) 空白或内容就是当前字段 → 单 field 段（最常见的落点 / 自身重绑场景）
-    const next = {
-      ...current,
-      segments: [{ kind: 'field' as const, path }],
-      contentType: 'variable' as const,
-      binding: path,
-      expression: undefined,
-      value: undefined,
-    } as AnyControl
-    updateControlSilent(controlId, next)
-    selectControl(controlId)
-    return true
   }
 
   function replaceControl(updated: AnyControl): void {
@@ -435,14 +294,48 @@ export const useDesignerStore = defineStore('designer', () => {
         if (activePage.value >= count) activePage.value = Math.max(0, count - 1)
       },
       onCellEdit: (info) => {
-        // 物化 cells 网格（旧模板首次编辑时自动迁移）：派生数据，不入撤销栈、不标脏
-        updateControlSilent(info.controlId, info.control as AnyControl)
+        // ★ 仅在 cells 缺失或与 grid 不匹配时物化（旧模板首次打开等场景）。
+        //   否则无条件 updateControlSilent 会把 Fabric 内存里的 this.cells
+        //   整张反向写回 store —— 即使用户刚刚在 textarea 里删了字段，
+        //   store.cell.segments=[] / cell.field=undefined 也会被 info.control
+        //   （来自 Fabric）覆盖，触发"重新点击单元格复活旧字段"的 bug。
+        //   派生数据，不入撤销栈、不标脏。
+        if (needsCellsMaterialize(info.controlId, info.control as TableControl)) {
+          updateControlSilent(info.controlId, info.control as AnyControl)
+        }
         openCellEditor(info.controlId, info.row, info.col)
       },
       onCellPendingBind: (info) => {
-        // 物化 cells 网格（同 onCellEdit 注释）
-        updateControlSilent(info.controlId, info.control as AnyControl)
+        // ★ 同 onCellEdit：仅物化时走 updateControlSilent
+        if (needsCellsMaterialize(info.controlId, info.control as TableControl)) {
+          updateControlSilent(info.controlId, info.control as AnyControl)
+        }
         setPendingBind(info.controlId, info.row, info.col)
+      },
+      onCanvasTextEdited: (info) => {
+        // ★ 画布文本编辑退出反向同步（修修复：attachCanvasTextListener 此前零调用方）
+        // store.segments 引用变 → 右侧 ContentValueEditor 的 watch(props.segments)
+        // 触发回填 textarea → 画布与右侧保持一致。
+        const cur = findControl(info.controlId) as TextControl | undefined
+        if (!cur) return
+        // 仅在 segments 真的变了时走 updateControl（避免画布 applyControlProps 触发
+        // 后续 watch 路径里的"反向同步"竞争：保留 _origDisplayText 基线）
+        const curSegs = cur.segments ?? []
+        if (
+          curSegs.length === info.segments.length &&
+          curSegs.every((s, i) => {
+            const n = info.segments[i]!
+            return (
+              s.kind === n.kind &&
+              (s.kind === 'text' ? s.value === (n as { value: string }).value : true) &&
+              (s.kind === 'field' ? s.path === (n as { path: string }).path : true) &&
+              (s.kind === 'expr' ? s.src === (n as { src: string }).src : true)
+            )
+          })
+        ) {
+          return
+        }
+        updateControl(info.controlId, { segments: info.segments } as Partial<AnyControl>)
       },
     })
     d.setPage(pageSetup.value)
@@ -1364,8 +1257,6 @@ export const useDesignerStore = defineStore('designer', () => {
     clearLabelGridChildren,
     updateControl,
     updateControlSilent,
-    hitTestTextControl,
-    applyFieldBindingToTextControl,
     reflowBody,
     removeControl,
     moveControl,

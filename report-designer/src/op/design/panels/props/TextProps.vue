@@ -79,12 +79,13 @@ function toggleUnderline(): void {
 }
 
 /** 内容类型：固定值 / 变量（字段绑定） / 表达式（显式 contentType 判别，兼容老模板回退）
- *  v2: 已有 segments 时返回 undefined，让 ContentValueEditor 切到 segments 模式
+ *  v2: 已有 segments（含空数组） 时返回 undefined，让 ContentValueEditor 切到 segments 模式
+ *  含空数组：清空 textarea 后保持 segments 模式不切回 3 态（否则老字段残留又显示）
  */
 const contentMode = computed<ContentMode | undefined>(() => {
   const c = control.value
   if (!c) return undefined
-  if (c.segments && c.segments.length) return undefined
+  if (Array.isArray(c.segments)) return undefined
   if (c.contentType) return c.contentType
   return c.expression ? 'expression' : c.binding ? 'variable' : 'fixed'
 })
@@ -140,8 +141,26 @@ function isPresetDatePattern(p?: string): boolean {
 
 /* -------------------------------- segments 适配 -------------------------------- */
 
-/** v2: textarea 内容变更时回写 segments（与老 3 态字段并存；segments 模式下老字段失效） */
+/** v2: textarea 内容变更时回写 segments（与老 3 态字段并存；segments 模式下老字段失效）
+ *
+ * ★ 关键修复：segments 清空（length=0 或全部为空 text 段）时同步清除 v1 老字段
+ *   （value/binding/expression），合并到同一份 patch —— 避免之前由
+ *   ContentValueEditor blur 连续 emit update:segments + update:value 等多次
+ *   事件，在父级多个独立 patch 之间出现「segments 已清但 v1 字段未清」的不一致
+ *   状态，legacy fallback 又把旧字段渲染出来。
+ */
 function onSegmentsChange(s: SegmentT[]): void {
+  const segsIsEmpty =
+    s.length === 0 || s.every((seg) => seg.kind === 'text' && !seg.value)
+  if (segsIsEmpty) {
+    patch({
+      segments: s,
+      value: undefined,
+      binding: undefined,
+      expression: undefined,
+    })
+    return
+  }
   patch({ segments: s })
 }
 

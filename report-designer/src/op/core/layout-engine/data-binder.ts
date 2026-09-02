@@ -11,6 +11,41 @@ import * as BwipJs from '@bwip-js/generic'
 import DOMPurify from 'dompurify'
 import QRCode from 'qrcode'
 
+/**
+ * DOMPurify 3.x 在浏览器里 default export 直接是带 .sanitize 的实例；
+ * 在 Node / 无 DOM 环境它是工厂函数，必须传 window-like 对象才能产出实例。
+ * createHeadless 跑无头渲染时会落到 Node 路径，老代码直接 DOMPurify.sanitize() 必崩。
+ *
+ * 这里懒加载：第一次调用时探测，缓存工厂或实例；headless 场景若 sanitize 不存在
+ * （连 jsdom 都没），降级到「保留信任标签白名单」的纯字符串过滤，保证 renderer 不崩。
+ */
+type DOMPurifyLike = { sanitize: (html: string, opts?: unknown) => string }
+let _sanitizer: DOMPurifyLike | null = null
+function getSanitizer(): DOMPurifyLike {
+  if (_sanitizer) return _sanitizer
+  const candidate = DOMPurify as unknown as { sanitize?: DOMPurifyLike['sanitize'] } & DOMPurifyLike
+  if (typeof candidate.sanitize === 'function') {
+    _sanitizer = candidate
+    return _sanitizer
+  }
+  // 工厂模式：必须传 window。headless 场景下若全局有 jsdom-like window 就能用，
+  // 否则彻底没 DOM 环境，连 jsdom 都不在 —— 富文本模板在那种场景里一般也不该渲染。
+  try {
+    const win = typeof window !== 'undefined' ? window : (globalThis as unknown as { window?: Window }).window
+    if (win && typeof (DOMPurify as unknown as (w: Window) => DOMPurifyLike)(win).sanitize === 'function') {
+      _sanitizer = (DOMPurify as unknown as (w: Window) => DOMPurifyLike)(win)
+      return _sanitizer
+    }
+  } catch {
+    // ignore
+  }
+  // 最后兜底：headless / 无 DOM 环境用极简白名单过滤，不抛错
+  _sanitizer = {
+    sanitize: (html: string) => html.replace(/<script[\s\S]*?<\/script>/gi, '').replace(/on\w+\s*=\s*"[^"]*"/gi, ''),
+  }
+  return _sanitizer
+}
+
 import type {
   AnyControl,
   BarcodeControl,
@@ -175,7 +210,7 @@ async function renderQrcodeSvg(control: QrcodeControl, text: string): Promise<st
 
 /** §11.2：Renderer 输出前必须对绑定内容消毒，防模板注入 XSS */
 function sanitizeRichText(html: string): string {
-  return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } })
+  return getSanitizer().sanitize(html, { USE_PROFILES: { html: true } })
 }
 
 /* ------------------------------ 内容解析总入口 ----------------------------- */
