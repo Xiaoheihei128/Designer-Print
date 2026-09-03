@@ -79,13 +79,13 @@ function toggleUnderline(): void {
 }
 
 /** 内容类型：固定值 / 变量（字段绑定） / 表达式（显式 contentType 判别，兼容老模板回退）
- *  v2: 已有 segments（含空数组） 时返回 undefined，让 ContentValueEditor 切到 segments 模式
- *  含空数组：清空 textarea 后保持 segments 模式不切回 3 态（否则老字段残留又显示）
+ *  v2: 已有非空 segments 时返回 undefined，让 ContentValueEditor 切到 segments 模式
+ *  注：segments=[] 视为"用户刚清空"——回退到 3 态模式让 radio 重新可见
  */
 const contentMode = computed<ContentMode | undefined>(() => {
   const c = control.value
   if (!c) return undefined
-  if (Array.isArray(c.segments)) return undefined
+  if (Array.isArray(c.segments) && c.segments.length > 0) return undefined
   if (c.contentType) return c.contentType
   return c.expression ? 'expression' : c.binding ? 'variable' : 'fixed'
 })

@@ -392,3 +392,98 @@ describe('layout —— fixBottomRows 按纸张补空行（跨页 + 末页不补
     expect(blankCountOf(0, rOff)).toBe(0)
   })
 })
+
+/* ============= fixBottomRows='fill' × 下方控件 回归 ============= */
+
+describe('layout —— fixBottomRows="fill" + 下方控件回归（fill 让位不丢数据、不多空白页）', () => {
+  const measurer = createCjkMeasurer()
+
+  /**
+   * 模板构造：fill 模式触发让位 while 的窄预算场景。
+   * 设计要点：trial.avail = availFull - reserveBelow 恰好略大于「数据+合计+大写」总高，
+   * 让 fixBottomActive 让位 while 触发（remain ∈ (0, blankH)）。
+   *
+   * 修复前（fill 让位 i++）：
+   *   - trial.isLast=false → fallback availFull → 补空到页底 → 控件被挤到下一页 → 多出空白页
+   *
+   * 修复后（fill 让位就地替换 blank 行）：
+   *   - trial.isLast=true → slice=trial（窄预算）→ 控件放得下 → 单页
+   */
+  function fillBelowTemplate(): TemplateData<AnyControl> {
+    const table = seedSummaryTail(
+      {
+        id: 'fb',
+        type: 'table',
+        left: 0,
+        top: 0,
+        width: 100,
+        height: 40,
+        dataSource: 'items',
+        columns: [
+          { title: '名称', field: 'items[].name', width: 70, headerAlign: 'center' },
+          { title: '金额', field: 'items[].amount', width: 30, headerAlign: 'center' },
+        ],
+        data: Array.from({ length: 5 }, (_, i) => ({ name: `n${i}`, amount: i + 1 })),
+        options: { repeatHeader: true, repeatFooter: false, borders: 'all', fixBottomRows: 'fill' },
+      } as unknown as TableControl,
+      { numericColumns: [1], moneyColumn: 1, capital: true },
+    )
+    return {
+      version: '1',
+      document: {
+        type: 'report',
+        page: {
+          width: 110,
+          height: 297,
+          unit: 'mm',
+          orientation: 'portrait',
+          margin: { top: 10, right: 10, bottom: 10, left: 10 },
+        },
+        sections: [
+          {
+            type: 'body',
+            components: [
+              table,
+              // reserveBelow ≈ 183mm：trial.avail ≈ 94mm 略 > 数据总高(~84) → 触发 fill 让位
+              { id: 'sign', type: 'text', left: 0, top: 215, width: 100, height: 10, value: '签章' } as AnyControl,
+            ],
+          },
+        ],
+      },
+    }
+  }
+
+  const blankCountOf = (pageNo: number, result: LayoutResult): number =>
+    result.pages[pageNo]!.body.filter((n): n is PlacedTable => n.kind === 'table')
+      .reduce((sum, t) => sum + t.rows.filter((r) => r.kind === 'blank').length, 0)
+  const controlNodesOf = (pageNo: number, result: LayoutResult): number =>
+    result.pages[pageNo]!.body.filter((n) => n.kind === 'control').length
+
+  it('fill 让位 + 下方控件：单页完成，不多出空白页', async () => {
+    const result = await layout(fillBelowTemplate(), {}, { measurer })
+    // 修复前：trial.isLast=false → fallback availFull → 补空到页底 → 控件被挤掉 → 2 页
+    // 修复后：trial.isLast=true → slice=trial（窄）→ 控件放得下 → 1 页
+    expect(
+      result.pages.length,
+      'pages=' +
+        result.pages.length +
+        ' warns=' +
+        JSON.stringify(result.warnings.map((w) => w.code)),
+    ).toBe(1)
+    // 第 1 页同时含表格（含 fill 补空行）+ 文本控件
+    expect(blankCountOf(0, result)).toBeGreaterThan(0)
+    expect(controlNodesOf(0, result)).toBeGreaterThan(0)
+  })
+
+  it('fill 让位：单页 fill 模式下保留所有数据行（不丢数据）', async () => {
+    const result = await layout(fillBelowTemplate(), {}, { measurer })
+    // 修复前：fill 让位让 1 数据行归到下一页 → 末片数据少 1 行
+    // 修复后：fill 让位就地替换 blank 行 → 数据完整保留
+    const totalDataRows = result.pages
+      .flatMap((p) => p.body)
+      .filter((n): n is PlacedTable => n.kind === 'table')
+      .flatMap((t) => t.rows)
+      .filter((r) => r.kind === 'data').length
+    expect(totalDataRows).toBe(5) // 5 数据行完整保留，无丢失
+  })
+})

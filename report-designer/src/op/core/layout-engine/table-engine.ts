@@ -1044,9 +1044,18 @@ export function sliceTable(model: TableModel, req: SliceRequest): SliceResult {
     // blank 行高：取「MIN_ROW_HEIGHT」与「已 picked 数据行均高」中较大者，保证视觉与数据行一致
     let blankH = Math.max(MIN_ROW_HEIGHT, avgDataRowHeight(picked))
     // { min: N }：min 模式下不能把数据行让到 min 以下
-    const minDataKeep = typeof fixBottomMode === 'object' ? fixBottomMode.min : 0
+    // fill 模式额外强制保留 1 行数据，避免让光 picked 出"全 blank 无数据"退化页
+    const minDataKeep =
+      typeof fixBottomMode === 'object'
+        ? fixBottomMode.min
+        : fixBottomMode === 'fill'
+          ? 1
+          : 0
     // 关键：while 循环把数据行塞满后，remain 常远小于 blankH（即使 remain > 0），
-    // 导致 0 个 blank 行、页面未填满。让出最后若干个数据行（归到下一页），腾出至少 1 个 blank 的位置。
+    // 导致 0 个 blank 行、页面未填满。让出最后若干个数据行腾位置。
+    // - fill 模式：让出的数据行原地替换为同高 blank 行（视觉填满，数据完整保留，
+    //   不修改 i —— 让位不是"数据分页"，不会丢行也不会导致 isLast 变 false 把 trial 让掉）
+    // - { min: N } 模式：让出的数据行真的归到下一页（i++）
     while (
       remainBudget > 0 &&
       remainBudget < blankH &&
@@ -1056,7 +1065,17 @@ export function sliceTable(model: TableModel, req: SliceRequest): SliceResult {
     ) {
       const last = picked.pop()!
       used -= last.height + rowBorder
-      i++ // 让出的数据行归到下一页
+      if (fixBottomMode === 'fill') {
+        // fill：就地替换为同高 blank 行，picked 长度不变、dataCount 不变、isLast 不变
+        const replacement = buildBlankPlans(1, last.height, model.columnWidths)
+        picked.push(...replacement)
+        // 与补空 n>0 分支一致：blank 行需把 height+border 计回 used，
+        // 否则末尾 height 字段少算让位替换行的占用
+        used += replacement.reduce((s, r) => s + r.height + rowBorder, 0)
+      } else {
+        // { min: N }：让出的数据行真的归到下一页
+        i++
+      }
       remainBudget += last.height + rowBorder
       blankH = Math.max(MIN_ROW_HEIGHT, avgDataRowHeight(picked))
     }

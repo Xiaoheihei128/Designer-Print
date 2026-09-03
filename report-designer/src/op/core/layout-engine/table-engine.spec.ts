@@ -765,6 +765,73 @@ describe('sliceTable —— P0-2 fixBottomRows 按纸张补空行', () => {
     const slice = sliceTable(model, { avail: 100, start: 0 })
     expect(slice.rows.filter((r) => r.kind === 'blank').length).toBe(0)
   })
+
+  // ★ 修复回归：fill 让位不能让数据行归到下一页（这是与 { min: N } 模式的关键差异）。
+  // 之前 fill 让位会让 picked.pop() + i++，把让出行推到下一页，
+  // 触发 paginateFlowTable 的 trial.isLast=false → fallback → 补空到页底，
+  // 把下方控件挤出本页产生空白页。现在 fill 让位改为就地替换为同高 blank 行。
+  it('fill 让位：让出数据行就地替换为 blank 行（不丢数据、isLast 不变、nextStart 不变）', () => {
+    const control = baseControl({ fixBottomRows: 'fill' })
+    const items = Array.from({ length: 3 }, (_, i) => ({ amount: i, name: `n${i}` }))
+    const ctx: EvalContext = {
+      rows: items,
+      data: { items },
+      pageIndex: 1,
+      pageCount: 1,
+      measure: { width: 80, text: () => ({ width: 0, height: 8 }) },
+    }
+    const model = buildTableModel({ control, ctx, measurer: createCjkMeasurer() })
+    // 实测行高 6.69mm。avail=30mm：3 数据(≈23) + header(≈5) = ≈28，remain ≈ 2 < blankH(6.69)
+    // → 触发 fill 让位 while（minDataKeep=1，dataCount=3>1）
+    const slice = sliceTable(model, { avail: 30, start: 0 })
+    // ★ 关键不变量：
+    expect(slice.isLast).toBe(true)             // 让位没改 i（fill 模式），isLast 不变 false
+    expect(slice.nextStart).toBe(3)             // 不让到下一页
+    const dataCount = slice.rows.filter((r) => r.kind === 'data').length
+    const blankCount = slice.rows.filter((r) => r.kind === 'blank').length
+    expect(dataCount).toBeGreaterThanOrEqual(1) // fill minDataKeep=1：至少保留 1 行（实测剩 2）
+    expect(blankCount).toBeGreaterThan(0)       // 让位替换 + 补空（实测 2 blank）
+  })
+
+  it('fill 让位：2 数据行 + 紧 avail，触发让位后保留 ≥1 数据行', () => {
+    const control = baseControl({ fixBottomRows: 'fill' })
+    const items = Array.from({ length: 2 }, (_, i) => ({ amount: i, name: `n${i}` }))
+    const ctx: EvalContext = {
+      rows: items,
+      data: { items },
+      pageIndex: 1,
+      pageCount: 1,
+      measure: { width: 80, text: () => ({ width: 0, height: 8 }) },
+    }
+    const model = buildTableModel({ control, ctx, measurer: createCjkMeasurer() })
+    // 实测行高 6.69mm。avail=26mm：header(≈5) + 2 数据(≈15) = ≈20，remain ≈ 6 < blankH(6.69)
+    // → 触发 fill 让位：dataCount=2>minDataKeep(1) → pop 1，dataCount=1，minDataKeep=1 → 终止
+    const slice = sliceTable(model, { avail: 26, start: 0 })
+    // fill minDataKeep=1 兜底：保留 1 数据行，避免出"全 blank 无数据"退化页
+    expect(slice.rows.filter((r) => r.kind === 'data').length).toBeGreaterThanOrEqual(1)
+    expect(slice.rows.filter((r) => r.kind === 'blank').length).toBeGreaterThan(0)
+  })
+
+  // 回归：{ min: N } 模式让位仍走原 i++ 路径（让出行真的归到下一页）
+  it('{ min: 2 } 让位：让出的数据行归到下一页（nextStart > 本片数据行数）', () => {
+    const control = baseControl({ fixBottomRows: { min: 2 } })
+    const items = Array.from({ length: 3 }, (_, i) => ({ amount: i, name: `n${i}` }))
+    const ctx: EvalContext = {
+      rows: items,
+      data: { items },
+      pageIndex: 1,
+      pageCount: 1,
+      measure: { width: 80, text: () => ({ width: 0, height: 8 }) },
+    }
+    const model = buildTableModel({ control, ctx, measurer: createCjkMeasurer() })
+    // 行高实测 6.69mm。avail=30mm：3 数据(≈23) + header(≈5) = ≈28，remain ≈ 2 < blankH(6.69)
+    // → 触发 fixBottom 让位（{ min:2 }：minDataKeep=2，dataCount=3>2 → pop 1, i++ → nextStart=4）
+    const slice = sliceTable(model, { avail: 30, start: 0 })
+    const dataInSlice = slice.rows.filter((r) => r.kind === 'data').length
+    expect(slice.rows.filter((r) => r.kind === 'blank').length).toBeGreaterThan(0)
+    // { min: N } 让位语义：让出行归到下一页 → nextStart > 本片数据行数
+    expect(slice.nextStart).toBeGreaterThan(dataInSlice)
+  })
 })
 
 describe('buildBlankPlans —— 补空行生成', () => {

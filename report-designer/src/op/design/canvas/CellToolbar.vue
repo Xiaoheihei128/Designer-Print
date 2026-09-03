@@ -149,8 +149,10 @@ const expressionDefault = computed(() =>
  */
 const cellMode = computed<ContentMode | undefined>(() => {
   const c = effectiveCell.value
-  // segments 模式（含空数组）→ 返回 undefined，让 ContentValueEditor 走 segments UI 分支
-  if (Array.isArray(c?.segments)) return undefined
+  // segments 模式（非空数组）→ 返回 undefined，让 ContentValueEditor 走 segments UI 分支
+  // 注：segments=[] 视为"用户刚清空"——回退到 3 态模式让 radio 重新可见，
+  // 否则用户永远困在 segments=[] 死锁状态无法切回 fixed/variable/expression。
+  if (Array.isArray(c?.segments) && c.segments.length > 0) return undefined
   if (c?.contentType) return c.contentType
   return c?.expression ? 'expression' : c?.field ? 'variable' : 'fixed'
 })

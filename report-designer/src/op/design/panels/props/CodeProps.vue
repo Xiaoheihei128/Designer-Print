@@ -23,9 +23,9 @@ function patch(p: Record<string, unknown>): void {
 const contentMode = computed<ContentMode | undefined>(() => {
   const c = control.value
   if (!c) return undefined
-  // v2: 已有 segments（含空数组） → 返回 undefined 让 ContentValueEditor 切到 segments 模式
-  // 含空数组：清空 textarea 后保持 segments 模式不切回 3 态（否则老字段残留又显示）
-  if (Array.isArray(c.segments)) return undefined
+  // v2: 已有非空 segments → 返回 undefined 让 ContentValueEditor 切到 segments 模式
+  // 注：segments=[] 视为"用户刚清空"——回退到 3 态模式让 radio 重新可见
+  if (Array.isArray(c.segments) && c.segments.length > 0) return undefined
   if (c.contentType) return c.contentType
   // barcode/qrcode 三态不对称：不识别 expression 字段（与 legacyToSegments 对齐）
   return c.binding ? 'variable' : 'fixed'

@@ -79,9 +79,16 @@ export class PrintText extends Textbox implements IPrintObject {
     // v2 segments 模式：双击进入 fabric 编辑态、失焦退出时把 fabric.text 反向解析
     // 为 segments，回写到 store（CanvasDesigner 注入的 listener）。否则 fabric.text
     // 改了 store 完全不知道 → 预览丢失 + 右侧 ContentValueEditor 不同步。
-    // 仅 segments 模式需要监听，老 schema（contentType=value 自由编辑）由 fabric 原生
-    // object:modified 走 toControl 回写 value，已经工作。
-    if (control.segments && control.segments.length) {
+    //
+    // 关键修复：判定从 `control.segments && control.segments.length` 改为
+    // `control.segments !== undefined` —— 包含空数组也要注册。原因：
+    // 1. textToSegments('') 现在统一返回 []（空白输入归零），所以 segments 数组
+    //    一旦被设过就是 v2 模型；用户清空后 segments=[] 是合法中间状态。
+    // 2. 若 listener 不注册，segments=[] 时画布编辑 raw 写不回 store，画布与右侧
+    //    长期不一致；老 schema（contentType=value 自由编辑）的判定仍走
+    //    `control.segments === undefined`，由 fabric 原生 object:modified 路径
+    //    走 toControl 回写 value（不影响）。
+    if (control.segments !== undefined) {
       this._origDisplayText = this.text
       this._latestEditingText = this.text
       // ★ 关键：hiddenTextarea 是 fabric 内部的 IME 桥接 <textarea>，
@@ -164,7 +171,8 @@ export class PrintText extends Textbox implements IPrintObject {
     //   把"反向同步带来的 segments 变化"误判为"用户改了"，emit 一条 handleCanvasTextEdited
     //   反向覆盖 store，形成与右侧 textarea watch 的回填竞争。
     //   现在每次同步都更新基线，守卫始终指向"权威反向同步值"。
-    if (control.segments && control.segments.length) {
+    if (control.segments !== undefined) {
+      // segments 数组（含空）→ 同步基线；老 schema（undefined）→ 不动
       this._origDisplayText = this.text
       this._latestEditingText = this.text
     }

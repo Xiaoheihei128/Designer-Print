@@ -130,16 +130,23 @@ function insertAggToken(snippet: string): void {
 /** segmentsToText / textToSegments 由 @op/design/text-segments 提供（共享给画布反向同步用） */
 
 /**
- * 是否在 segments 模式：segments 字段是数组（包含空数组）。
+ * 是否在 segments 模式：segments 字段存在且非空数组。
  *
- * ★ 关键修复：原本用 `length > 0` 判定，但用户清空 textarea 时 textToSegments('')
- *   返回空数组 → isSegmentsMode 切回 false → UI 跳到 3 态模式 → 老字段残留
- *   （cell.field / cell.binding）又显示出来，表现为"删除字段后再次点击
- *   单元格字段又重新出现"。判定降级为"数组 vs undefined"：
- *   - undefined → v1 老模板，3 态模式
- *   - 数组（含 []）→ v2 segments 模式，空内容也是 segments 模式（用户主动清空后的合法状态）
+ * 判定：length > 0 优先（不要 Array.isArray）。理由：
+ * - textToSegments('') 在 text-segments.ts 已统一返回 []（空白输入归零），
+ *   legacyToSegments 在 segments.ts 对空/纯空白 text 也返回 null（不再生成 [{text:""}]）
+ *   —— 因此 cell.segments 不会留下 [{text:""}] 这种脏数据，可以安全地让 length=0
+ *   视为"已退出 segments 模式"。
+ * - 旧版"Array.isArray 包含空数组"的判定会卡死用户：segments=[] 时 cellMode 永远返回
+ *   undefined → 3 态 radio 不渲染 → 用户无法切回 fixed/variable/expression。
+ *   这是 mode 切换死锁的真因。回退到 length > 0 让用户清空后能正常切回 3 态模式。
+ *
+ * 状态机：
+ * - undefined → v1 老模板（未迁移到 v2），3 态模式
+ * - [] → 用户刚清空，3 态模式（contentType 保留）
+ * - [...] → v2 segments 模式
  */
-const isSegmentsMode = computed(() => Array.isArray(props.segments))
+const isSegmentsMode = computed(() => Array.isArray(props.segments) && props.segments.length > 0)
 
 const segmentsText = ref('')
 /**
@@ -158,17 +165,14 @@ const segmentsText = ref('')
  */
 const isUserEditing = ref(false)
 function onSegmentsFocus(): void {
-  console.log('[DBG onSegmentsFocus]')
   isUserEditing.value = true
 }
 watch(
   () => props.segments,
   (segs) => {
-    console.log('[DBG watch segments]', JSON.stringify(segs), 'isEditing=', isUserEditing.value)
-    // 同步回填条件：segments 模式（Array.isArray 为 true）且非编辑中
-    // 注意：包含空数组也要回填（让 segmentsText 同步到 ''，与 store 一致），
-    // 否则 segments 从 [...] 变 [] 时 textarea 残留旧文本。
-    if (Array.isArray(segs) && !isUserEditing.value) {
+    // 同步回填条件：segments 模式（非空数组）且非编辑中
+    // 注：segments=[] 时 UI 走 3 态模式（radio 重新出现），textarea 不渲染，回填无意义
+    if (Array.isArray(segs) && segs.length > 0 && !isUserEditing.value) {
       segmentsText.value = segmentsToText(segs)
     }
   },
@@ -177,7 +181,6 @@ watch(
 
 /** textarea 内容变更：暂存本地，blur 时再 parse → emit update:segments */
 function onSegmentsInput(v: string): void {
-  console.log('[DBG onSegmentsInput]', JSON.stringify(v), 'was segmentsText=', JSON.stringify(segmentsText.value), 'isEditing=', isUserEditing.value)
   segmentsText.value = v
 }
 function onSegmentsBlur(): void {
@@ -203,13 +206,32 @@ function onSegmentsBlur(): void {
  *
  * 纯逻辑拆出到 ./content-value-insert.ts 便于测试；本函数负责 DOM 副作用：
  * preventDefault、读写 textarea selectionStart/End、emit 写回 store。
+ *
+ * ★ Bug 修复：监听器挂在 wrap `<div class="segments-drop-host">` 上（@drop 冒泡），
+ *   `e.currentTarget` 是 div，没有 selectionStart/End —— 旧版 `?? segmentsText.value.length`
+ *   fallback 让 start/end 永远是字符串末尾，drop 字段总被 append 而不是插入光标位置。
+ *   修复：从 `e.target` 反查最近的 `<textarea>` DOM 节点（drop event 实际落点是 textarea）；
+ *   找不到时退回 `document.activeElement`（drop 命中时焦点元素通常就是 textarea）。
  */
+function findTextarea(e: DragEvent): HTMLTextAreaElement | null {
+  const target = e.target as HTMLElement | null
+  // 1) 从 drop event target 向上找
+  if (target) {
+    const ta = target.closest?.('textarea') as HTMLTextAreaElement | null
+    if (ta) return ta
+  }
+  // 2) 回退到 document.activeElement（drag-and-drop 时焦点通常在 textarea 上）
+  const active = document.activeElement
+  if (active && active.tagName === 'TEXTAREA') return active as HTMLTextAreaElement
+  return null
+}
 function onSegmentsTextareaDrop(e: DragEvent): void {
   const path = e.dataTransfer?.getData(DRAG_BINDING_KEY)
   if (!path) return // 不是字段拖拽，让浏览器原生处理（其他应用文本拖入场景）
   e.preventDefault()
+  const ta = findTextarea(e)
+  if (!ta) return // 没有 textarea 目标 → 不处理
   isUserEditing.value = true // 防止 watch 在 drop→blur 之间把权威值回填覆盖
-  const ta = e.currentTarget as HTMLTextAreaElement
   const start = ta.selectionStart ?? segmentsText.value.length
   const end = ta.selectionEnd ?? segmentsText.value.length
   const { next, caret } = insertFieldAt(segmentsText.value, end, path, start)
