@@ -60,7 +60,7 @@
               <p class="desc">{{ matchResult.template.description || '无描述' }}</p>
             </div>
             <div class="card-footer">
-              <el-button type="primary" size="small" @click="handleUseTemplate">使用此模板</el-button>
+              <el-button type="primary" size="small" @click="handleUseTemplate()">使用此模板</el-button>
             </div>
           </div>
 
