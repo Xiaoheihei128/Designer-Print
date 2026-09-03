@@ -188,6 +188,40 @@ describe('renderer-html —— HTML 输出', () => {
       // 空白单元格：内容用 <br> 占位，确保 cell 有最小高度（即使 padding:0 也能撑开行高）
       expect(blankTr).toContain('<br>')
     })
+
+    it('blank 行最右一格：CSS 必须输出 border-right 兜底（5 列表格补空行最右侧边线缺失回归）', () => {
+      // 复现：5 列表格 fill 模式补空 → 末页 blank 行的第 5 列右侧边线在某些浏览器里不渲染。
+      // 修复：不再把 padding:0 写进 tr.is-blank td（避免 padding:0 + overflow:hidden + 空内容塌陷），
+      // 同时加一条高优先级 .b-all tr.is-blank td:last-child { border-right } 兜底。
+      const html = blankTableHtml([
+        { kind: 'blank', height: 8, cells: [
+          { text: '', align: 'left' },
+          { text: '', align: 'left' },
+          { text: '', align: 'left' },
+          { text: '', align: 'left' },
+          { text: '', align: 'left' },
+        ] },
+      ])
+      // 用 renderStyle 取 CSS（不是 renderPage —— renderPage 只输出 HTML body）
+      const layoutResult = {
+        metrics: { width: 40, height: 60, pageHeight: 297, pageWidth: 210, margin: { top: 0, right: 0, bottom: 0, left: 0 }, headerHeight: 0, footerHeight: 0, bodyHeight: 60 },
+        pages: [],
+        warnings: [],
+      } as any
+      const css = renderStyle(layoutResult, { screen: false })
+
+      // 关键：CSS 里必须出现"blank 行最后 td 的 border-right 兜底规则"
+      expect(css).toMatch(/\.op-table\.b-all\s+tr\.is-blank\s+td:last-child[^}]*border-right/)
+      // 兜底：即使其他规则被清掉,base 的 :last-child 规则也得在
+      expect(css).toMatch(/\.op-table\.b-all\s+td:last-child[^}]*border-right/)
+      // 不应再把 padding:0 写进 blank td（避免塌陷）
+      expect(css).not.toMatch(/tr\.is-blank\s+td\s*\{[^}]*padding:\s*0/)
+      // HTML 部分: 5 个 td 都有 br（确保行高）
+      const blankTr = html.match(/<tr class="is-blank"[\s\S]*?<\/tr>/)![0]!
+      const blankTdMatches = blankTr.match(/<td[^>]*>/g)
+      expect(blankTdMatches).toHaveLength(5)
+      expect(blankTr.match(/<br>/g)).toHaveLength(5)
+    })
   })
 
   /* ============= M3 P0-1 vMerge 同值纵向合并（运行期 HTML 输出） ============= */

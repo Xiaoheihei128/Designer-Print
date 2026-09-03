@@ -152,8 +152,14 @@ ${s}.op-table tr.is-striped td { background: ${TABLE_STRIPE_BG}; }
    单元格视觉以内联样式为准（与设计期 overlay 同一套 resolveCellStyleFor 取值） */
 ${s}.op-table tr.is-static td { /* 占位：保持类名与设计期对齐，避免样式遗漏 */ }
 /* 补空白行（P0-2 按纸张填满）：无内容、无背景，但保留上下边框横线，
-   让补空行视觉上"是表格的一行"（供手写 / 签字栏留白用），仅去掉内边距避免撑高 */
-${s}.op-table tr.is-blank td { padding: 0; background: transparent; }
+   让补空行视觉上"是表格的一行"（供手写 / 签字栏留白用）。
+   ★ 不覆盖 padding（用默认内边距）：padding:0 + overflow:hidden + 空内容
+   的组合在某些浏览器里会导致 cell 内容区塌陷，:last-child 上的 border-right
+   渲染失败（实测 5 列表格补空行最右列右侧边线缺失）。
+   ★ 显式补 border-right：高优先级兜底，万一 :last-child 规则因空白 td
+   渲染异常没命中，blank 行视觉仍是完整的"表格一列"。 */
+${s}.op-table tr.is-blank td { background: transparent; }
+${s}.op-table.b-all tr.is-blank td:last-child { border-right: 0.2mm solid var(--op-table-border); }
 
 /* ---------- 表格样式预设（Excel 式快速切换；class 由渲染端挂在 table 元素上） ---------- */
 /* 默认（none）：仅表头加粗，无任何背景色（含标题行）。无需规则，class 仅作占位。 */
