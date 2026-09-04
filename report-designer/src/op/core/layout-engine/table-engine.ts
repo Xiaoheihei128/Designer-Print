@@ -237,20 +237,13 @@ function interp(src: string, ctx: EvalContext, errors: string[]): string {
 }
 
 /**
- * 单元格内容模式（显式 contentType；老模板按 expression > field > text 启发式回退，
- * 与文本控件 resolveTextValue 的回退语义一致）。
- */
-function cellTextMode(cell: TableCell): 'fixed' | 'variable' | 'expression' {
-  if (cell.contentType) return cell.contentType
-  return cell.expression ? 'expression' : cell.field ? 'variable' : 'fixed'
-}
-
-/**
- * 数据行单元格取值。优先级：单元格 expression > 单元格 field > 单元格固定文字 > 列 expression > 列 field。
- * （单元格未设置任何内容时回落到列配置，既兼容老模板，也让"新增列"立刻可用。）
+ * 数据行单元格取值。
  *
- * v2 segments 分支：cell.segments 命中优先于 legacy 链路；legacy 链路不变（>80% 老模板依赖列回退）。
- * 聚合 token 短路：cell.text 为 `{{#xxx}}` 时返回 '' 让 buildFooterRow 单独处理（line 660 直接读 cell.text）。
+ * Plan B 步骤 3/5：仅走 v2 segments。cell.segments 由 buildDesignGrid 在出口处
+ * 走 migrateCell 兜底派生（老 schema text/field/expression 残留 → segments 单源），
+ * 故本函数可安全**只读 segments** 无需双链路口令。
+ *
+ * 聚合 token 短路：单 text 段且值为 `{{#xxx}}` 时返回 '' 让 buildFooterRow 接管。
  */
 function dataCellText(
   cell: TableCell,
@@ -258,10 +251,8 @@ function dataCellText(
   ctx: EvalContext,
   errors: string[],
 ): string {
-  // v2: cell.segments 优先
   if (cell.segments && cell.segments.length) {
     // ★ Bug7 修复：单 text 段且为聚合 token → 短路返回 ''，让 buildFooterRow 接管
-    // 否则 resolveSegments 会把 '{{#totalCap}}' 当字面字符串返回，画布显示字面 token
     if (
       cell.segments.length === 1 &&
       cell.segments[0]!.kind === 'text' &&
@@ -273,25 +264,7 @@ function dataCellText(
     errors.push(...r.errors)
     return r.text
   }
-  const mode = cellTextMode(cell)
-  // 显式模式且字段非空：按模式取值；字段为空则回落老链路（列配置兜底，保证显式 variable 空路径不打断整列）
-  if (mode === 'expression' && cell.expression) return interp(cell.expression, ctx, errors)
-  if (mode === 'variable' && cell.field) {
-    return formatCellValue(resolveBinding(cell.field, ctx), cell.format ?? col?.format)
-  }
-  if (mode === 'fixed' && cell.text !== undefined) {
-    if (isAggToken(cell.text)) return '' // buildFooterRow 直接读 cell.text 接管
-    return interp(cell.text, ctx, errors)
-  }
-  // 老模板 / 显式模式字段为空：expression > field > text > 列 expression > 列 field
-  if (cell.expression) return interp(cell.expression, ctx, errors)
-  if (cell.field) return formatCellValue(resolveBinding(cell.field, ctx), cell.format ?? col?.format)
-  if (cell.text !== undefined) {
-    if (isAggToken(cell.text)) return ''
-    return interp(cell.text, ctx, errors)
-  }
-  if (col?.expression) return interp(col.expression, ctx, errors)
-  if (col?.field) return formatCellValue(resolveBinding(col.field, ctx), col?.format)
+  // 无 segments = 用户主动清空（buildDesignGrid 已跑过 migrateCell），按空串返回
   return ''
 }
 
@@ -308,7 +281,7 @@ function staticCellText(
   ctx: EvalContext,
   errors: string[],
 ): string {
-  // v2: cell.segments 优先
+  // Plan B 步骤 3/5：仅走 v2 segments（cell.segments 由 buildDesignGrid migrateCell 兜底派生）
   if (cell.segments && cell.segments.length) {
     // ★ Bug7 修复：单 text 段且为聚合 token → 短路返回 ''，让 buildFooterRow 接管
     if (
@@ -322,24 +295,11 @@ function staticCellText(
     errors.push(...r.errors)
     return r.text
   }
-  const mode = cellTextMode(cell)
-  // 显式模式且字段非空：按模式取值；字段为空则回落老链路
-  if (mode === 'expression' && cell.expression) return interp(cell.expression, ctx, errors)
-  if (mode === 'variable' && cell.field) {
-    return formatCellValue(resolveBinding(cell.field, ctx), cell.format ?? col?.format)
+  // 布局网格正文行（emptyRow）→ 用列配置派生单段，让 col.field / col.expression 仍生效
+  if (col?.field) {
+    return formatCellValue(resolveBinding(col.field, ctx), col?.format)
   }
-  if (mode === 'fixed' && cell.text !== undefined) {
-    if (isAggToken(cell.text)) return ''
-    return interp(cell.text, ctx, errors)
-  }
-  // 老模板 / 显式模式字段为空：expression > field > text > 列 field > fallback
-  if (cell.expression) return interp(cell.expression, ctx, errors)
-  if (cell.field) return formatCellValue(resolveBinding(cell.field, ctx), cell.format ?? col?.format)
-  if (cell.text !== undefined) {
-    if (isAggToken(cell.text)) return ''
-    return interp(cell.text, ctx, errors)
-  }
-  if (col?.field) return formatCellValue(resolveBinding(col.field, ctx), col?.format)
+  if (col?.expression) return interp(col.expression, ctx, errors)
   if (!fallback) return ''
   return interp(fallback, ctx, errors)
 }
@@ -693,12 +653,16 @@ export function buildTableModel({
    * 首列的行名标签（"本页合计"/"总计"/"大写金额"）按普通静态文本处理。
    */
   /**
- * Bug7 修复：从 cell 提取聚合 token（兼容 cell.text 老路径 + cell.segments 单 text 段 v2 路径）。
- * v2 模型下用户用 ContentValueEditor「聚合」按钮插入 → textToSegments 把 {{#totalCap}}
- * 整体保留为单 text 段 → cell.text 为空，cell.segments 才是真相源。
+ * 从 cell 提取聚合 token（Plan B 步骤 3/5：仅走 v2 segments）。
+ *
+ * 老路径 cell.text 由 buildDesignGrid 的 migrateCell 兜底（聚合 token 跳过迁移，
+ * cell.text 保留为 token 字符串）。但本函数仍只读 segments：seedSummaryTail 在
+ * Commit 2 同时写 text + segments 保持双轨；为收口单源链路，parseAggTokenFromCell
+ * 改为只走 segments。cell.text 字段保留在 schema（不进 undo / 不归一化），仅
+ * 作为未来回退路径。
  */
 function parseAggTokenFromCell(cell: TableCell): AggKind | null {
-  return parseAggToken(cell.text) ?? parseAggTokenFromSegments(cell.segments)
+  return parseAggTokenFromSegments(cell.segments)
 }
 
 /** 单 text 段且值为聚合 token → 识别为该 token；其它形态返回 null */
@@ -1043,11 +1007,12 @@ export function sliceTable(model: TableModel, req: SliceRequest): SliceResult {
       req.avail - headerH - used - pageFooterH - footerSum - (opts.fixBottomMargin ?? 0)
     // blank 行高：取「MIN_ROW_HEIGHT」与「已 picked 数据行均高」中较大者，保证视觉与数据行一致
     let blankH = Math.max(MIN_ROW_HEIGHT, avgDataRowHeight(picked))
-    // { min: N }：min 模式下不能把数据行让到 min 以下
-    // fill 模式额外强制保留 1 行数据，避免让光 picked 出"全 blank 无数据"退化页
+    // { count: N }：count 模式不走让位（按用户期望"严格 N 行，超出可用则裁剪"）；
+    //   minDataKeep = Infinity 让让位 while 永远不触发，数据行原样保留。
+    // fill 模式额外强制保留 1 行数据，避免让光 picked 出"全 blank 无数据"退化页。
     const minDataKeep =
       typeof fixBottomMode === 'object'
-        ? fixBottomMode.min
+        ? Number.POSITIVE_INFINITY // count 模式：永不让位
         : fixBottomMode === 'fill'
           ? 1
           : 0
@@ -1055,7 +1020,7 @@ export function sliceTable(model: TableModel, req: SliceRequest): SliceResult {
     // 导致 0 个 blank 行、页面未填满。让出最后若干个数据行腾位置。
     // - fill 模式：让出的数据行原地替换为同高 blank 行（视觉填满，数据完整保留，
     //   不修改 i —— 让位不是"数据分页"，不会丢行也不会导致 isLast 变 false 把 trial 让掉）
-    // - { min: N } 模式：让出的数据行真的归到下一页（i++）
+    // - { count: N } 模式：minDataKeep=∞ 永远不让位（数据完整保留，由"超出可用则裁剪"兜底）
     while (
       remainBudget > 0 &&
       remainBudget < blankH &&
@@ -1072,10 +1037,8 @@ export function sliceTable(model: TableModel, req: SliceRequest): SliceResult {
         // 与补空 n>0 分支一致：blank 行需把 height+border 计回 used，
         // 否则末尾 height 字段少算让位替换行的占用
         used += replacement.reduce((s, r) => s + r.height + rowBorder, 0)
-      } else {
-        // { min: N }：让出的数据行真的归到下一页
-        i++
       }
+      // count 模式：minDataKeep=∞ → 此分支不会进入
       remainBudget += last.height + rowBorder
       blankH = Math.max(MIN_ROW_HEIGHT, avgDataRowHeight(picked))
     }
@@ -1083,11 +1046,9 @@ export function sliceTable(model: TableModel, req: SliceRequest): SliceResult {
       let n = 0
       if (fixBottomMode === 'fill') {
         n = Math.floor(remainBudget / blankH)
-      } else {
-        // { min: N }：每页至少 N 个数据行；当前数据行不足则补到 N
-        const dataCount = picked.filter((r) => r.kind === 'data').length
-        const needByMin = Math.max(0, fixBottomMode.min - dataCount)
-        n = Math.max(Math.floor(remainBudget / blankH), needByMin)
+      } else if (typeof fixBottomMode === 'object') {
+        // { count: N }：严格 N 行，超出可用则裁剪到能放下的最多行数
+        n = Math.min(fixBottomMode.count, Math.floor(remainBudget / blankH))
       }
       if (n > 0) {
         const blanks = buildBlankPlans(n, blankH, model.columnWidths)

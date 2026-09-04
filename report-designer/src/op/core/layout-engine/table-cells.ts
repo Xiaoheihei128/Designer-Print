@@ -19,7 +19,7 @@ import { isAggToken, parseAggToken, stripItems } from './aggregate'
 import { ptToMm } from '@op/core/units'
 import { getSharedMeasurer } from '@op/core/layout-engine/measure'
 import { genId } from '@op/utils/id'
-import { splitFixedText } from './segments'
+import { splitFixedText, legacyToSegments } from './segments'
 
 export const DEFAULT_HEADER_ROWS = 1
 
@@ -159,6 +159,30 @@ function cellMeasurementInfo(cell: TableCell): { isPlaceholder: boolean; measure
 }
 
 /**
+ * Lazy migrate 老 schema cell → segments（Plan B 步骤 3/5 读路径清理用）
+ *
+ * - 已有 segments → 原值返回（idempotent）
+ * - cell.text 是聚合 token（`{{#xxx}}`）→ 不迁移（buildFooterRow 仍需 cell.text 识别），
+ *   兼容老 template 同时把 cell.text 也复制到 segments 让单源链路后续可统一
+ * - 否则调 legacyToSegments 派生 segments；派生失败（无任何内容）→ 原值
+ * - 派生成功 → 返回新 cell，**保留原 cell 的所有其它字段**（style/colSpan/rowSpan/format 等）
+ *
+ * 注意：本函数只读 cell，不读列；列兜底由 caller（buildDesignGrid 调 cellFromColumn）负责。
+ */
+function migrateCell(cell: TableCell): TableCell {
+  if (Array.isArray(cell.segments) && cell.segments.length) return cell
+  const segs = legacyToSegments({
+    type: 'cell',
+    text: cell.text,
+    field: cell.field,
+    expression: cell.expression,
+    contentType: cell.contentType,
+  })
+  if (!segs) return cell
+  return { ...cell, segments: segs }
+}
+
+/**
  * 从列配置推导单元格（用于无 cells 时的瞬时渲染 / 首次初始化）
  *
  * Plan B 步骤 2/5：统一写 segments 字段。
@@ -266,6 +290,12 @@ export function buildDesignGrid(control: TableControl): DesignGrid {
       if (cells[r]!.every(isBlankCell)) cells[r] = derived[r]!
     }
   }
+  // Plan B 步骤 3/5：buildDesignGrid 出口对每一格做 lazy migration
+  // - 老 schema 模板（cell.text/field/expression 残留）→ 派生 segments 单源
+  // - 已经是 segments 的格子 → migrateCell 幂等返回原值
+  // 目的：让下游 dataCellText / staticCellText / placeholderOf 可以安全地**只读 segments**，
+  // 无需各自维护老字段兜底（避免双源漂移）。
+  cells = cells.map((row) => row.map(migrateCell))
 
   return {
     isData: data,
@@ -480,7 +510,17 @@ export function rowRoleLabel(grid: DesignGrid, r: number): string {
   if (info.kind === 'header') return grid.headerRows > 1 ? `标题行 ${r + 1}` : '标题行'
   if (info.isDataTemplate) return '数据行'
   const row = grid.cells[r] ?? []
-  const tokens = row.map((c) => parseAggToken(c.text))
+  // Plan B 步骤 3/5：聚合 token 单源在 segments 单 text 段（cell.text 已不再写）
+  // 兼容老 cell.text 残留（migrateCell 跳过聚合 token 保留 text）—— parseAggToken
+  // 同时读 text / segments 的首个 text 段，避免边界 case 把聚合行误认成"静态行"
+  const tokens = row.map((c) => {
+    const segs = c.segments
+    const segTk =
+      segs && segs.length === 1 && segs[0]!.kind === 'text'
+        ? parseAggToken(segs[0]!.value)
+        : null
+    return segTk ?? parseAggToken(c.text)
+  })
   if (tokens.some((t) => t === 'pageCap' || t === 'totalCap')) return '大写金额行'
   if (tokens.some((t) => t === 'totalSum' || t === 'totalAvg' || t === 'totalCount')) return '总计行'
   if (tokens.some((t) => t === 'pageSum' || t === 'pageAvg' || t === 'pageCount')) return '本页合计行'
@@ -1187,13 +1227,12 @@ export function seedSummaryTail(control: TableControl, opts: SeedTailOptions = {
   const makeRow = (label: string, token: string | null): TableCell[] =>
     Array.from({ length: colCount }, (_, c) => {
       if (c === 0) {
-        // 第一列：行标签。segments 写单 text 段；老字段 text 同步保留让老读取路径仍能识别
-        return { text: label, segments: [{ kind: 'text', value: label }], style: { bold: true, align: 'center' } }
+        // 第一列：行标签。segments 写单 text 段（Plan B 步骤 3/5：移除老字段 text 同步）
+        return { segments: [{ kind: 'text', value: label }], style: { bold: true, align: 'center' } }
       }
       if (token && numeric.has(c)) {
-        // 聚合 token：保持单 text 段（buildFooterRow / parseAggTokenFromCell 识别）。
-        // 老字段 text 同步保留，Commit 3 切换到 segments 单源后移除。
-        return { text: token, segments: [{ kind: 'text', value: token }], style: { bold: true, align: 'center' } }
+        // 聚合 token：保持单 text 段，由 parseAggTokenFromCell 走 segments 识别
+        return { segments: [{ kind: 'text', value: token }], style: { bold: true, align: 'center' } }
       }
       return {}
     })
@@ -1201,8 +1240,8 @@ export function seedSummaryTail(control: TableControl, opts: SeedTailOptions = {
   const totalRow = makeRow('总计', '{{#totalSum}}')
   const withCap = opts.capital ?? true
   const capRow: TableCell[] = Array.from({ length: colCount }, (_, c) => {
-    if (c === 0) return { text: '大写金额', segments: [{ kind: 'text', value: '大写金额' }], style: { bold: true, align: 'center' } }
-    if (c === money) return { text: '{{#totalCap}}', segments: [{ kind: 'text', value: '{{#totalCap}}' }], style: { bold: true, align: 'center' } }
+    if (c === 0) return { segments: [{ kind: 'text', value: '大写金额' }], style: { bold: true, align: 'center' } }
+    if (c === money) return { segments: [{ kind: 'text', value: '{{#totalCap}}' }], style: { bold: true, align: 'center' } }
     return {}
   })
 

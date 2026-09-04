@@ -59,11 +59,15 @@ describe('Bug9 修复：editing 态改字段 → frozenHtml → items 重算 →
     frozenHtml.value = renderTableGridHtml(store.controls.find((c) => c.id === 'tbl-1') as TableControl)
     await nextTick()
 
-    expect(items.value).toContain('{{item.order.orderNo}}')
+    expect(items.value).toContain('{{order.orderNo}}')
 
     // 2. 用户改 cell.field → emit apply → updateControl + refreshFrozen
+    // Plan B 步骤 3/5：patchCell 现在只写 segments（单源），老字段 field 写入不会生效
     const current = store.controls.find((c) => c.id === 'tbl-1') as TableControl
-    const next = patchCell(current, 1, 0, { field: 'order.total' })
+    const next = patchCell(current, 1, 0, {
+      segments: [{ kind: 'field', path: 'order.total' }],
+      field: undefined,
+    })
     store.updateControl('tbl-1', next)
     // refreshFrozen: frozenHtml 写新值 + bump canvasTick
     frozenHtml.value = renderTableGridHtml(next)
@@ -71,8 +75,8 @@ describe('Bug9 修复：editing 态改字段 → frozenHtml → items 重算 →
     await nextTick()
 
     // 3. 验证：items 应输出新字段，不应再含旧字段
-    expect(items.value).toContain('{{item.order.total}}')
-    expect(items.value).not.toContain('{{item.order.orderNo}}')
+    expect(items.value).toContain('{{order.total}}')
+    expect(items.value).not.toContain('{{order.orderNo}}')
   })
 
   /**
@@ -94,7 +98,7 @@ describe('Bug9 修复：editing 态改字段 → frozenHtml → items 重算 →
     store.openCellEditor('tbl-1', 1, 0)
     frozenHtml.value = renderTableGridHtml(store.controls.find((c) => c.id === 'tbl-1') as TableControl)
     await nextTick()
-    expect(items.value).toContain('{{item.order.orderNo}}')
+    expect(items.value).toContain('{{order.orderNo}}')
 
     // 改字段：只调 store，不动 frozenHtml（模拟"忘了 refresh"的 bug 情形）
     const current = store.controls.find((c) => c.id === 'tbl-1') as TableControl
@@ -103,6 +107,6 @@ describe('Bug9 修复：editing 态改字段 → frozenHtml → items 重算 →
     await nextTick()
 
     // 行为：items 仍用旧 frozenHtml → 看到旧字段（这正是用户报告的 bug）
-    expect(items.value).toContain('{{item.order.orderNo}}')
+    expect(items.value).toContain('{{order.orderNo}}')
   })
 })

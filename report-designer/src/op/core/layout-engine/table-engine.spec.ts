@@ -114,64 +114,67 @@ describe('buildTableModel —— 表格建模', () => {
     expect(dataCellText(c, { data: { items: [{ qty: 1234.5 }] } }, 0)).toBe('1,235')
   })
 
-  it('单元格显式三态：variable / expression / fixed 各按模式取值', () => {
-    // variable：cell.field 优先（即使列也有 field，也以单元格为准）
+  it('单元格显式三态：variable / expression / fixed 各按模式取值（segments 单源）', () => {
+    // variable：cell 单 field 段优先（即使列也有 field，也以单元格为准）
     const c1 = {
       ...control,
       columns: [{ field: 'name', title: '名称', width: 60 }],
       cells: [
-        [{ text: '名称' }],
-        [{ contentType: 'variable', field: 'qty' }],
+        [{ segments: [{ kind: 'text', value: '名称' }] }],
+        [{ segments: [{ kind: 'field', path: 'qty' }] }],
       ],
     } as unknown as Parameters<typeof buildTableModel>[0]['control']
     expect(dataCellText(c1, { data: { items: [{ name: 'A', qty: 7 }] } }, 0)).toBe('7')
 
-    // expression：行表达式求值（作用域含 row / rowIndex）
+    // expression：单 expr 段，scope 含 row / rowIndex
     const c2 = {
       ...control,
       columns: [{ field: 'name', title: '名称', width: 60 }],
       cells: [
-        [{ text: '名称' }],
-        [{ contentType: 'expression', expression: '{{row.qty * 2}}' }],
+        [{ segments: [{ kind: 'text', value: '名称' }] }],
+        [{ segments: [{ kind: 'expr', src: 'row.qty * 2' }] }],
       ],
     } as unknown as Parameters<typeof buildTableModel>[0]['control']
     expect(dataCellText(c2, { data: { items: [{ qty: 3 }] } }, 0)).toBe('6')
 
-    // fixed：固定文字（即使列有 field 也不走绑定）
+    // fixed：单 text 段（即使列有 field 也不走绑定）
     const c3 = {
       ...control,
       columns: [{ field: 'name', title: '名称', width: 60 }],
       cells: [
-        [{ text: '名称' }],
-        [{ contentType: 'fixed', text: 'N/A' }],
+        [{ segments: [{ kind: 'text', value: '名称' }] }],
+        [{ segments: [{ kind: 'text', value: 'N/A' }] }],
       ],
     } as unknown as Parameters<typeof buildTableModel>[0]['control']
     expect(dataCellText(c3, { data: { items: [{ name: 'A' }] } }, 0)).toBe('N/A')
   })
 
-  it('显式 fixed 模式 text 为空时回落列 field（不打断整列）', () => {
+  it('空 segments 数据样例行回落到列 field（不打断整列）', () => {
+    // 单元格 segments=[] → dataCellText 返回 ''，列 field 在 cellFromColumn 已落到 cells[1]
+    // 本用例验证：把 cells[1] 清空（segments=[]）后，dataCellText 不再兜底列
+    // —— 列回退仅 staticCellText 负责（布局网格的 emptyRow 场景）
     const c = {
       ...control,
       columns: [{ field: 'qty', title: '数量', width: 60 }],
       cells: [
-        [{ text: '数量' }],
-        [{ contentType: 'fixed' }],
+        [{ segments: [{ kind: 'text', value: '数量' }] }],
+        [{ segments: [] }],
       ],
     } as unknown as Parameters<typeof buildTableModel>[0]['control']
-    expect(dataCellText(c, { data: { items: [{ qty: 5 }] } }, 0)).toBe('5')
+    expect(dataCellText(c, { data: { items: [{ qty: 5 }] } }, 0)).toBe('')
   })
 
-  it('表头/静态行显式三态：variable 绑字段 / expression 插值', () => {
+  it('表头/静态行三态：field 段 / expr 段（segments 单源）', () => {
     const c = {
       ...control,
       dataSource: '',
       headerRows: 1,
       staticRows: 1,
       cells: [
-        // 表头：variable 模式绑 order.no
-        [{ contentType: 'variable', field: 'order.no' }, { text: '数量' }],
-        // 静态尾行：expression 模式插值合计
-        [{ contentType: 'expression', expression: '{{order.total}}' }, { text: '' }],
+        // 表头：field 段绑 order.no
+        [{ segments: [{ kind: 'field', path: 'order.no' }] }, { segments: [{ kind: 'text', value: '数量' }] }],
+        // 静态尾行：expr 段插值合计
+        [{ segments: [{ kind: 'expr', src: 'order.total' }] }, { segments: [{ kind: 'text', value: '' }] }],
       ],
     } as unknown as Parameters<typeof buildTableModel>[0]['control']
     const ctx = { data: { order: { no: 'NO-001', total: 5 } } }
@@ -695,8 +698,8 @@ describe('sliceTable —— P0-2 fixBottomRows 按纸张补空行', () => {
     expect(slice.rows.filter((r) => r.kind === 'blank').length).toBeGreaterThan(0)
   })
 
-  it('{ min: 5 }：每页至少 N 个数据行；不足时补空到 N', () => {
-    const control = baseControl({ fixBottomRows: { min: 5 } })
+  it('{ count: 5 }：固定补空 5 行 blank（数据行原样保留，不让位）', () => {
+    const control = baseControl({ fixBottomRows: { count: 5 } })
     const items = Array.from({ length: 20 }, (_, i) => ({ amount: i, name: `n${i}` }))
     const ctx: EvalContext = {
       rows: items,
@@ -706,9 +709,44 @@ describe('sliceTable —— P0-2 fixBottomRows 按纸张补空行', () => {
       measure: { width: 80, text: () => ({ width: 0, height: 8 }) },
     }
     const model = buildTableModel({ control, ctx, measurer: createCjkMeasurer() })
-    const slice = sliceTable(model, { avail: 100, start: 0 })
+    // avail 设大一些，让 picked 数据行（≈ 20×6.69+5=138.8）后还能放下 5 个 blank
+    const slice = sliceTable(model, { avail: 300, start: 0 })
+    const blankCount = slice.rows.filter((r) => r.kind === 'blank').length
+    // count 模式：每片都补 N=5 行 blank（只要 N ≤ floor(remainBudget/blankH)）
+    expect(blankCount).toBe(5)
+  })
+
+  it('{ count: 100 } 超出可用：裁剪到能放下的最多行数（不丢数据）', () => {
+    const control = baseControl({ fixBottomRows: { count: 100 } })
+    const items = Array.from({ length: 20 }, (_, i) => ({ amount: i, name: `n${i}` }))
+    const ctx: EvalContext = {
+      rows: items,
+      data: { items },
+      pageIndex: 1,
+      pageCount: 3,
+      measure: { width: 80, text: () => ({ width: 0, height: 8 }) },
+    }
+    const model = buildTableModel({ control, ctx, measurer: createCjkMeasurer() })
+    const slice = sliceTable(model, { avail: 300, start: 0 })
+    const blankCount = slice.rows.filter((r) => r.kind === 'blank').length
     const dataCount = slice.rows.filter((r) => r.kind === 'data').length
-    expect(dataCount).toBeGreaterThanOrEqual(5)
+    expect(blankCount).toBeLessThan(100) // 100 放不下，被裁剪
+    expect(dataCount).toBeGreaterThan(0) // 数据行不丢
+  })
+
+  it('{ count: 0 }：0 行 blank（合法，验证 picked 中无 blank）', () => {
+    const control = baseControl({ fixBottomRows: { count: 0 } })
+    const items = Array.from({ length: 10 }, (_, i) => ({ amount: i, name: `n${i}` }))
+    const ctx: EvalContext = {
+      rows: items,
+      data: { items },
+      pageIndex: 1,
+      pageCount: 3,
+      measure: { width: 80, text: () => ({ width: 0, height: 8 }) },
+    }
+    const model = buildTableModel({ control, ctx, measurer: createCjkMeasurer() })
+    const slice = sliceTable(model, { avail: 300, start: 0 })
+    expect(slice.rows.filter((r) => r.kind === 'blank').length).toBe(0)
   })
 
   it('fixBottomMargin：减量补空（mm 留白预留）', () => {
@@ -812,9 +850,10 @@ describe('sliceTable —— P0-2 fixBottomRows 按纸张补空行', () => {
     expect(slice.rows.filter((r) => r.kind === 'blank').length).toBeGreaterThan(0)
   })
 
-  // 回归：{ min: N } 模式让位仍走原 i++ 路径（让出行真的归到下一页）
-  it('{ min: 2 } 让位：让出的数据行归到下一页（nextStart > 本片数据行数）', () => {
-    const control = baseControl({ fixBottomRows: { min: 2 } })
+  // 回归：{ count: N } 模式不走让位（minDataKeep=∞）—— 即使 remainBudget < blankH，
+//   数据行原样保留，只把 blank 裁剪到能放下的最多行数；不触发让位 i++ 路径。
+  it('{ count: 2 } 不让位：紧 avail 时数据行原样保留（nextStart === 数据行数）', () => {
+    const control = baseControl({ fixBottomRows: { count: 2 } })
     const items = Array.from({ length: 3 }, (_, i) => ({ amount: i, name: `n${i}` }))
     const ctx: EvalContext = {
       rows: items,
@@ -825,12 +864,14 @@ describe('sliceTable —— P0-2 fixBottomRows 按纸张补空行', () => {
     }
     const model = buildTableModel({ control, ctx, measurer: createCjkMeasurer() })
     // 行高实测 6.69mm。avail=30mm：3 数据(≈23) + header(≈5) = ≈28，remain ≈ 2 < blankH(6.69)
-    // → 触发 fixBottom 让位（{ min:2 }：minDataKeep=2，dataCount=3>2 → pop 1, i++ → nextStart=4）
+    // → count 模式：minDataKeep=∞ → 让位 while 不触发，数据行不归到下一页
     const slice = sliceTable(model, { avail: 30, start: 0 })
     const dataInSlice = slice.rows.filter((r) => r.kind === 'data').length
-    expect(slice.rows.filter((r) => r.kind === 'blank').length).toBeGreaterThan(0)
-    // { min: N } 让位语义：让出行归到下一页 → nextStart > 本片数据行数
-    expect(slice.nextStart).toBeGreaterThan(dataInSlice)
+    // 数据行不丢：nextStart 与数据行数一致（不向下一页让位）
+    expect(slice.nextStart).toBe(dataInSlice)
+    // remainBudget 太小放不下 N=2 行 blank → 裁剪到 0（仍是合法输出）
+    const blankCount = slice.rows.filter((r) => r.kind === 'blank').length
+    expect(blankCount).toBeLessThanOrEqual(2)
   })
 })
 

@@ -34,13 +34,14 @@ const baseTable: TableControl = {
 }
 
 describe('Bug9 复现：renderTableGridHtml 在 cell.field 变更后输出新字段占位符', () => {
-  it('初始：cell.field=order.orderNo → HTML 包含 {{item.order.orderNo}}', () => {
+  it('初始：cell.field=order.orderNo → HTML 包含 {{order.orderNo}}', () => {
     const html = renderTableGridHtml(baseTable)
-    expect(html).toContain('{{item.order.orderNo}}')
-    expect(html).toContain('{{item.order.total}}')
+    // Plan B 步骤 3/5：placeholder 走 segments 单源 → {{order.orderNo}}（去掉老模板 item. 前缀）
+    expect(html).toContain('{{order.orderNo}}')
+    expect(html).toContain('{{order.total}}')
   })
 
-  it('Bug9 假设：cell.field 改为 order.total → HTML 应包含 {{item.order.total}}', () => {
+  it('Bug9 假设：cell.field 改为 order.total → HTML 应包含 {{order.total}}', () => {
     const updated: TableControl = {
       ...baseTable,
       cells: baseTable.cells.map((row, ri) =>
@@ -50,8 +51,8 @@ describe('Bug9 复现：renderTableGridHtml 在 cell.field 变更后输出新字
       ) as TableControl['cells'],
     }
     const html = renderTableGridHtml(updated)
-    expect(html).toContain('{{item.order.total}}')
+    expect(html).toContain('{{order.total}}')
     // 数据样例行第 1 列原本是 order.orderNo，改后应该不再出现
-    expect(html).not.toContain('{{item.order.orderNo}}')
+    expect(html).not.toContain('{{order.orderNo}}')
   })
 })
