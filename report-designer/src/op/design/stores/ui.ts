@@ -62,6 +62,37 @@ export const useUiStore = defineStore('ui', () => {
     showMarginGuides.value = !showMarginGuides.value
   }
 
+  /** 画布平移模式：开启后任意拖动都平移画布（无需按空格）；再点一次按钮 / 按 Esc /
+   *  选中控件即退出。空格 + 拖动作为熟手快捷方式始终可用，与本模式并存。 */
+  const panMode = ref(false)
+  function togglePanMode(): void {
+    panMode.value = !panMode.value
+  }
+  function setPanMode(on: boolean): void {
+    panMode.value = on
+  }
+
+  /* --------------------- 表格属性快速面板（替代 RightPanel） --------------------- */
+  /**
+   * 右栏属性面板模式：
+   *   - 'normal'    → 原属性长列表（默认）
+   *   - 'tableQuick'→ 表格属性快速面板，由 CellToolbar 上的"表格属性"按钮触发
+   */
+  const rightPanelMode = ref<'normal' | 'tableQuick'>('normal')
+  /** 快速面板当前激活的 tab */
+  const tableQuickPanelActiveTab = ref<'columns' | 'cellStyle' | 'advanced' | 'common'>(
+    'columns',
+  )
+  function openTableQuickPanel(
+    tab?: typeof tableQuickPanelActiveTab.value,
+  ): void {
+    rightPanelMode.value = 'tableQuick'
+    if (tab) tableQuickPanelActiveTab.value = tab
+  }
+  function closeTableQuickPanel(): void {
+    rightPanelMode.value = 'normal'
+  }
+
   /** 实际生效主题（system 下解析出的 light/dark；svip 直通不解析） */
   const effectiveTheme = computed<EffectiveTheme>(() => {
     if (themePreference.value === 'svip') return 'svip'
@@ -155,5 +186,14 @@ export const useUiStore = defineStore('ui', () => {
     locale,
     showMarginGuides,
     toggleMarginGuides,
+    // 平移画布模式
+    panMode,
+    togglePanMode,
+    setPanMode,
+    // 表格属性快速面板
+    rightPanelMode,
+    tableQuickPanelActiveTab,
+    openTableQuickPanel,
+    closeTableQuickPanel,
   }
 })

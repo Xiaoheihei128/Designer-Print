@@ -4,6 +4,7 @@
  */
 import { onBeforeUnmount, onMounted } from 'vue'
 import { useDesignerStore } from '@op/design/stores/designer'
+import { useUiStore } from '@op/design/stores/ui'
 import type { AnyControl } from '@op/types/control'
 import { genId } from '@op/utils/id'
 
@@ -11,6 +12,7 @@ const MAC = /Mac|iPhone|iPad/.test(navigator.platform)
 
 export function useHotkey(): void {
   const store = useDesignerStore()
+  const uiStore = useUiStore()
 
   function onKeyDown(e: KeyboardEvent): void {
     // 忽略输入框内按键
@@ -58,8 +60,12 @@ export function useHotkey(): void {
       }
       return
     }
-    // Escape = 取消选中
+    // Escape = 退出平移模式（优先）/ 取消选中
     if (e.key === 'Escape') {
+      if (uiStore.panMode) {
+        uiStore.setPanMode(false)
+        return
+      }
       store.selectControl(null)
       return
     }

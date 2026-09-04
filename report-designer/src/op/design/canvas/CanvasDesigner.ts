@@ -35,6 +35,12 @@ export interface CanvasDesignerEvents {
   onObjectModified?: (control: AnyControl) => void
   /** 视口变化（缩放/平移），驱动标尺重绘 */
   onViewportChange?: (vp: ViewportState) => void
+  /**
+   * 平移模式状态变化（开启 / 关闭）。
+   * 退出场景：用户按 Esc / 选中控件 / 切换工具栏按钮。CanvasStage 监听后
+   * 同步回 uiStore.panMode，让顶栏按钮 `:type` 高亮与真实状态一致。
+   */
+  onPanModeChange?: (on: boolean) => void
   /** 双击表格单元格进入编辑：返回物化了 cells 的控件与命中行列 */
   onCellEdit?: (info: { controlId: string; control: AnyControl; row: number; col: number }) => void
   /**
@@ -93,6 +99,12 @@ export class CanvasDesigner {
   private lastWatermark?: WatermarkConfig
   private events: CanvasDesignerEvents = {}
   private spacePanning = false
+  /** 持久平移模式：顶栏按钮 / Esc / 选中控件 触发切换；开启时空格仍可叠加。 */
+  private panMode = false
+  /** 外部只读：让 store 暴露出去，CanvasStage 监听后同步到 uiStore.panMode。 */
+  get panModeState(): boolean {
+    return this.panMode
+  }
   /** 用户手动缩放后置 true，窗口 resize 不再自动 refit */
   private userZoomed = false
   /** 页边距锁定：默认开启，正文控件移动被钳制在内容区内（边距内=设计安全区，辅助设计）；关闭后自由移动 */
@@ -401,6 +413,40 @@ export class CanvasDesigner {
     this.marginGuidesVisible = visible
     for (const g of this.pageGuides) g.visible = visible
     this.canvas.requestRenderAll()
+  }
+
+  /* -------------------------- 平移画布（持久模式） -------------------------- */
+
+  /** 切换持久平移模式。开启后任意鼠标拖动都平移画布（无需按空格）。 */
+  togglePanMode(): void {
+    this.setPanMode(!this.panMode)
+  }
+
+  /**
+  设置持久平移模式。幂等：相同状态不再触发 applyPanMode 与 onPanModeChange 回调。
+  退出触发：调用方（按钮 / Esc / 选中控件 → emitSelection）显式 setPanMode(false)。
+  */
+  setPanMode(on: boolean): void {
+    if (this.panMode === on) return
+    this.panMode = on
+    this.applyPanMode()
+    this.events.onPanModeChange?.(on)
+  }
+
+  /** 把 panMode 同步到 Fabric 画布视觉态（selection + 光标）。 */
+  private applyPanMode(): void {
+    const c = this.canvas
+    if (!c) return
+    if (this.panMode) {
+      c.selection = false
+      c.defaultCursor = 'grab'
+      c.hoverCursor = 'grab'
+    } else {
+      c.selection = true
+      c.defaultCursor = 'default'
+      c.hoverCursor = 'default'
+    }
+    c.requestRenderAll()
   }
 
   /**
@@ -970,6 +1016,8 @@ export class CanvasDesigner {
 
     const emitSelection = () => {
       const active = c.getActiveObjects().filter(isPrintObject) as PrintFabricObject[]
+      // ★ 用户在平移模式下点了某个控件 → 意图明确是选中而非平移，自动退出平移模式
+      if (active.length > 0 && this.panMode) this.setPanMode(false)
       this.events.onSelectionChange?.(active.map((o) => o.controlId))
     }
     c.on('selection:created', emitSelection)
@@ -1110,33 +1158,40 @@ export class CanvasDesigner {
       }
     })
 
-    // 空格 + 拖拽 = 平移
+    // 平移画布：空格（瞬时）+ 拖动，或 panMode（持久）+ 拖动
+    // 两种入口共用同一份 move/up 监听器；差异在鼠标抬起后的状态还原
     c.on('mouse:down', (opt) => {
-      if (this.spacePanning) {
-        const e = opt.e as MouseEvent
+      const panActive = this.spacePanning || this.panMode
+      if (!panActive) return
+      const e = opt.e as MouseEvent
+      // 持久模式已在 applyPanMode() 设过 selection / cursor；瞬时空格路径在此补设
+      if (!this.panMode) {
         c.selection = false
         c.defaultCursor = 'grab'
-        let lastX = e.clientX
-        let lastY = e.clientY
-        const move = (ev: MouseEvent) => {
-          const vt = c.viewportTransform
-          vt[4] = (vt[4] ?? 0) + (ev.clientX - lastX)
-          vt[5] = (vt[5] ?? 0) + (ev.clientY - lastY)
-          lastX = ev.clientX
-          lastY = ev.clientY
-          c.setViewportTransform(vt)
-          c.requestRenderAll()
-          this.emitViewport()
-        }
-        const up = () => {
-          window.removeEventListener('mousemove', move)
-          window.removeEventListener('mouseup', up)
+      }
+      let lastX = e.clientX
+      let lastY = e.clientY
+      const move = (ev: MouseEvent) => {
+        const vt = c.viewportTransform
+        vt[4] = (vt[4] ?? 0) + (ev.clientX - lastX)
+        vt[5] = (vt[5] ?? 0) + (ev.clientY - lastY)
+        lastX = ev.clientX
+        lastY = ev.clientY
+        c.setViewportTransform(vt)
+        c.requestRenderAll()
+        this.emitViewport()
+      }
+      const up = () => {
+        window.removeEventListener('mousemove', move)
+        window.removeEventListener('mouseup', up)
+        // 空格路径：松开后立刻还原；持久模式：保留 grab 状态等下次按下继续平移
+        if (!this.panMode) {
           c.selection = true
           c.defaultCursor = 'default'
         }
-        window.addEventListener('mousemove', move)
-        window.addEventListener('mouseup', up)
       }
+      window.addEventListener('mousemove', move)
+      window.addEventListener('mouseup', up)
     })
 
     window.addEventListener('keydown', this.onKeyDown)

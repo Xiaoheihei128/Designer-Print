@@ -75,6 +75,10 @@ export const useDesignerStore = defineStore('designer', () => {
   const designer = shallowRef<CanvasDesigner | null>(null)
   const viewport = ref<ViewportState>({ zoom: 1, offsetX: 0, offsetY: 0 })
 
+  /** 平移模式只读镜像：CanvasDesigner 内部 panMode 的 Vue 化。CanvasStage 监听后
+   *  同步回 uiStore.panMode，让按钮高亮态与画布真实状态一致（用户选中控件退出平移）。 */
+  const panMode = computed(() => designer.value?.panModeState ?? false)
+
   /**
    * 模板仓库：未配置后端时默认 localStorage（主任 2026-08-08 定：
    * 一切编辑纯本地，仅手动保存才持久化；后端 http-repo 经 setRepository 注入）。
@@ -1220,6 +1224,7 @@ export const useDesignerStore = defineStore('designer', () => {
     saveStateText,
     designer,
     viewport,
+    panMode,
     repository,
     backendMode,
     gridConfig,

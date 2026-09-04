@@ -78,7 +78,8 @@ const shortcutGroups = computed(() => [
   {
     title: '画布视图',
     items: [
-      { keys: ['Space', '拖拽'], desc: '按住空格拖拽平移画布' },
+      { keys: ['平移按钮'], desc: '顶栏切换平移模式，任意拖动平移画布' },
+      { keys: ['Space', '拖拽'], desc: '快捷方式：按住空格拖拽平移画布' },
       { keys: [MOD.value, '滚轮'], desc: '缩放画布' },
       { keys: ['滚轮'], desc: '垂直平移；Shift + 滚轮水平平移' },
     ],
@@ -447,6 +448,22 @@ const IconChevronDown: Component = () =>
           </NButton>
         </template>
         页边距参考线：{{ uiStore.showMarginGuides ? '显示中' : '已隐藏' }}
+      </NTooltip>
+
+      <!-- 平移画布开关（持久模式：开启后任意拖动都平移，无需按空格；再点按钮 / Esc / 选中控件退出） -->
+      <NTooltip>
+        <template #trigger>
+          <NButton
+            quaternary
+            size="small"
+            class="toolbar-icon-btn"
+            :type="uiStore.panMode ? 'primary' : 'default'"
+            @click="uiStore.togglePanMode()"
+          >
+            <div class="i-carbon-cursor-2 text-16px" />
+          </NButton>
+        </template>
+        平移画布：{{ uiStore.panMode ? '已开启（拖动即可平移）' : '点击进入平移模式' }}
       </NTooltip>
 
       <div class="toolbar-sep" />

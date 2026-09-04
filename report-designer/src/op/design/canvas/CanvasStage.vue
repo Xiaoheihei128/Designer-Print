@@ -40,6 +40,19 @@ watch(
   (v) => store.designer?.setMarginGuidesVisible(v),
 )
 
+// 平移模式双向同步：uiStore.panMode → designer.setPanMode（按钮 / Esc 触发）
+watch(
+  () => uiStore.panMode,
+  (v) => store.designer?.setPanMode(v),
+)
+// designer.panMode → uiStore.setPanMode（用户在画布上选中控件自动退出平移）
+watch(
+  () => store.panMode,
+  (v) => {
+    if (uiStore.panMode !== v) uiStore.setPanMode(v)
+  },
+)
+
 // 网格显隐/间距/颜色随 gridConfig 联动（仅视觉参考，不吸附元素）
 watch(
   () => store.gridConfig.visible,
