@@ -129,13 +129,25 @@ function placeholderOf(cell: TableCell, col: TableColumn | undefined): string {
   return ''
 }
 
-/** 单元格是否按"绑定占位"显示（variable / expression 显式模式，或老模板启发式命中字段） */
+/** 单元格是否按"绑定占位"显示（variable / expression 显式模式，或老模板启发式命中字段）
+ *
+ * ★ Plan B 关键修复：把「有非空 segments」也视为 bound。
+ *   背景：用户场景"画布上键入文字 → commitTd 写入 segments + 清空 cell.text"。
+ *   老逻辑里 cell.text 是显示权威，patchCellText 清掉它后渲染只剩空字符串。
+ *   现在 segments 是 v2 单源——只要 cell.segments 有非空段，渲染就走 placeholderOf
+ *   读 segmentsToText(cell.segments)，与右侧 ContentValueEditor 完全一致。
+ *   没有 segments 时回退到 cell.text（兼容老模板）。
+ */
 function isBoundCell(cell: TableCell, col: TableColumn | undefined, isDataRow: boolean): boolean {
   const mode = cell.contentType
   if (mode === 'variable' || mode === 'expression') return true
   if (mode === 'fixed') return false
   return Boolean(
-    cell.field || cell.expression || (isDataRow && col?.field) || (isDataRow && col?.expression),
+    cell.field ||
+      cell.expression ||
+      (cell.segments && cell.segments.length > 0) ||
+      (isDataRow && col?.field) ||
+      (isDataRow && col?.expression),
   )
 }
 

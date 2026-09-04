@@ -201,6 +201,29 @@ describe('反向同步端到端：画布 contentEditable 改 td → ContentValue
     // 未改 → 返回原 control（不进 undo 栈）
     expect(next).toBe(control)
   })
+
+  /**
+   * ★ Bug 场景：用户在画布表头键入文字 → commitTd 写入 segments + 清 cell.text
+   *   → 渲染端 isBoundCell 必须把「有非空 segments」也视作 bound，
+   *     让 placeholderOf 走 segmentsToText 读出文本，而不是回退到 cell.text=undefined。
+   *   验证：renderTableGridHtml 输出包含用户键入的文本。
+   */
+  it('★ Bug 场景：表头键入 → segments + 清 text → renderTableGridHtml 仍显示', async () => {
+    const { renderTableGridHtml } = await import('@op/design/canvas/table-design-render')
+    // 模拟用户在画布上键入"你好吗" + 点表格外的最终态
+    let control = baseTable([
+      [{ text: '商品名' }, { text: '金额' }],
+      [{ field: 'order.orderNo' }, { field: 'order.total' }],
+    ])
+    // commitTd 路径：patchCellText 写入 segments=[{text:'你好吗'}] + text=undefined
+    const next = patchCellText(control, 0, 0, '你好吗')
+    expect(next).not.toBe(control)
+    control = next as TableControl
+
+    // 渲染时 isBoundCell 现在考虑 segments → bound=true → placeholderOf 读 segments
+    const html = renderTableGridHtml(control)
+    expect(html).toContain('>你好吗<')
+  })
 })
 
 describe('反向同步回归保护：segments 单源一致性', () => {

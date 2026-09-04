@@ -188,6 +188,7 @@ watch(
   async (id) => {
     if (!id) {
       frozenHtml.value = ''
+      cleanupLiveInput()
       toolbarPos.value = null
       rowLabelPos.value = null
       return
@@ -196,6 +197,7 @@ watch(
     frozenHtml.value = control ? renderTableGridHtml(control) : ''
     await nextTick()
     enableEditing(id)
+    installLiveInput(id)
     focusCell()
   },
 )
@@ -251,7 +253,14 @@ function syncToolbarPos(): void {
 
 /* ------------------------------ 内容写回 ------------------------------ */
 
-/** 把某个 td 的文本提交到模型（未变化则不入撤销栈） */
+/** 把某个 td 的文本提交到模型（未变化则不入撤销栈）
+ *
+ * ★ 守卫：blur / click-outside 链路里浏览器可能把 contenteditable td 的
+ *   innerText 清成空（focus 离开且无选区时部分浏览器自动清理 <br> 占位符），
+ *   此时若 cell 已有非空 segments，再调 patchCellText 写入 segments=[]
+ *   就会把用户已键入的内容覆盖为空。store 在 input 监听阶段已同步过
+ *   最新值，这里直接跳过 commit，由 closeCellEditor 后 items 用 store
+ *   当前 cell 自然渲染最新 segments。 */
 function commitTd(td: HTMLElement): void {
   const id = td.closest<HTMLElement>('[data-table-id]')?.dataset.tableId
   if (!id) return
@@ -260,9 +269,49 @@ function commitTd(td: HTMLElement): void {
   const row = Number(td.dataset.row)
   const col = Number(td.dataset.col)
   if (!Number.isFinite(row) || !Number.isFinite(col)) return
-  const next = patchCellText(control, row, col, td.innerText)
+  const raw = td.innerText ?? ''
+  const text = raw.replace(/ /g, ' ').trim()
+  // ★ 守卫：DOM 为空但 cell 已有 segments → 不覆盖（可能是 blur 副作用）
+  if (!text) {
+    const grid = buildDesignGrid(control)
+    const cell = grid.cells[row]?.[col]
+    if (cell?.segments?.length) return
+  }
+  const next = patchCellText(control, row, col, text)
   if (next === control) return
   store.updateControl(id, next)
+}
+
+/** editing 期 input 监听器：把用户在画布上的键入实时同步到 store，
+ *  避免 blur/click-outside 链路里 td.innerText 被浏览器擦空后覆盖 store。 */
+let liveInputCleanup: (() => void) | null = null
+function installLiveInput(id: string): void {
+  cleanupLiveInput()
+  const wrap = wrapperOf(id)
+  if (!wrap) return
+  const handler = (e: Event): void => {
+    const td = (e.target as HTMLElement | null)?.closest<HTMLElement>('td[data-row]')
+    if (!td) return
+    const row = Number(td.dataset.row)
+    const col = Number(td.dataset.col)
+    if (!Number.isFinite(row) || !Number.isFinite(col)) return
+    const cur = controlById(id)
+    if (!cur) return
+    const raw = td.innerText ?? ''
+    const text = raw.replace(/ /g, ' ').trim()
+    if (!text) return  // 空内容不写，避免覆盖已存在 segments
+    const next = patchCellText(cur, row, col, text)
+    if (next === cur) return
+    store.updateControlSilent(id, next)
+  }
+  wrap.addEventListener('input', handler, true)
+  liveInputCleanup = () => wrap.removeEventListener('input', handler, true)
+}
+function cleanupLiveInput(): void {
+  if (liveInputCleanup) {
+    liveInputCleanup()
+    liveInputCleanup = null
+  }
 }
 
 function onFocusIn(e: FocusEvent): void {
@@ -384,6 +433,8 @@ function exitEditing(): void {
   }
   ;(document.activeElement as HTMLElement | null)?.blur?.()
   store.closeCellEditor()
+  // 不联动关闭快速面板：用户决策——CellToolbar 与快速面板关闭独立，
+  // 关闭工具栏后用户仍可在快速面板上调整列配置，避免点击右栏误触发工具栏关闭。
 }
 
 /**
@@ -482,6 +533,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   document.removeEventListener('mousedown', onDocMouseDown, true)
   document.removeEventListener('keydown', onDocKeyDown, true)
+  cleanupLiveInput()
 })
 
 /* ------------------------------ 工具栏动作 ------------------------------ */

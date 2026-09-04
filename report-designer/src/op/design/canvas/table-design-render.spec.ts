@@ -154,6 +154,49 @@ describe('renderTableGridHtml', () => {
     expect(b).toContain('>总金额<')
     expect(b).not.toContain('>合计<')
   })
+
+  /**
+   * ★ Bug 修复：表头 cell 经用户在画布上键入文字 + 退出编辑后，patchCellText 会把
+   *   内容写到 cell.segments 并清空 cell.text。渲染端必须能从 segments 单源读出
+   *   文本，而不是回退到空 cell.text 导致画布变空。
+   *   修复前：bound=false（无 contentType/field/expression）+ cell.text=undefined → 显示空。
+   *   修复后：bound 判定把「segments 非空」也算上 → 走 placeholderOf → segmentsToText。
+   */
+  it('★ Bug：表头 cell 有 segments 但 cell.text=undefined → 显示 segments 文本（不再为空）', () => {
+    // 模拟「用户在画布上键入"你好吗"后点表格外」的最终态：cell.segments 有内容，cell.text 已被 patchCellText 清空
+    const cells = [
+      [{ segments: [{ kind: 'text', value: '你好吗' }] }, { text: '标题' }],
+    ]
+    const html = renderTableGridHtml(
+      baseTable({
+        designRows: 1,
+        cells,
+        columns: [
+          { title: '列1', width: 60 },
+          { title: '列2', width: 60 },
+        ],
+      }),
+    )
+    // 关键：表头 td 必须包含「你好吗」，而不是空 <br>
+    expect(html).toContain('>你好吗<')
+    // 表头另一列保持原文本
+    expect(html).toContain('>标题<')
+  })
+
+  /**
+   * 回归：cell 完全没有 segments、cell.text 有值 → 仍走 cell.text 老路径（兼容老模板）
+   */
+  it('★ 回归：cell 无 segments + cell.text 有值 → 走 cell.text 老路径', () => {
+    const cells = [[{ text: '老模板文本' }]]
+    const html = renderTableGridHtml(
+      baseTable({
+        designRows: 1,
+        cells,
+        columns: [{ title: '列', width: 60 }],
+      }),
+    )
+    expect(html).toContain('>老模板文本<')
+  })
 })
 
 describe('几何布局', () => {
