@@ -14,11 +14,12 @@
  *
  * ⚠️ `designRows` 语义 = **正文行数（不含表头）**；可视行总数一律取 `grid.rowCount`。
  */
-import type { TableCell, TableCellStyle, TableColumn, TableControl } from '@op/types/control'
+import type { TableCell, TableCellStyle, TableColumn, TableControl, Segment } from '@op/types/control'
 import { isAggToken, parseAggToken, stripItems } from './aggregate'
 import { ptToMm } from '@op/core/units'
 import { getSharedMeasurer } from '@op/core/layout-engine/measure'
 import { genId } from '@op/utils/id'
+import { splitFixedText } from './segments'
 
 export const DEFAULT_HEADER_ROWS = 1
 
@@ -116,11 +117,60 @@ function emptyRow(colCount: number): TableCell[] {
   return Array.from({ length: colCount }, () => ({}))
 }
 
-/** 从列配置推导单元格（用于无 cells 时的瞬时渲染 / 首次初始化） */
+/**
+ * 设计期行高测量：返回 cell 的"显示文本"与"是否占位符"判定。
+ *
+ * Plan B 步骤 2/5：segments 单源化后，cellFromColumn / patchCellText / seedSummaryTail
+ * 都只写 segments，老字段保留作为兼容入口。测量代码必须先看 segments，否则 v2
+ * 单元格会被判定为空白（cell.text/field/expression 全部 undefined），行高塌掉。
+ *
+ * 显示文本规则（与 table-design-render placeholderOf 一致）：
+ * - segments 有内容 → segmentsToText 拼接
+ * - segments 缺失（老 schema） → text/field/expression 兜底
+ *
+ * 占位符判定：
+ * - segments 含 field/expr 段 → true
+ * - 聚合 token {{#xxx}} → true
+ * - 老字段 field/expression → true
+ */
+function cellMeasurementInfo(cell: TableCell): { isPlaceholder: boolean; measured: string } {
+  if (Array.isArray(cell.segments) && cell.segments.length) {
+    const segs = cell.segments
+    let measured = ''
+    let isPlaceholder = false
+    for (const s of segs) {
+      if (s.kind === 'text') {
+        // 聚合 token 整段保留为单 text 段 → 视作占位符
+        if (isAggToken(s.value)) isPlaceholder = true
+        measured += s.value
+      } else {
+        isPlaceholder = true
+        measured += `{{${s.kind === 'field' ? s.path : s.src}}}`
+      }
+    }
+    return { isPlaceholder, measured }
+  }
+  // 老 schema 兜底
+  const isPlaceholder = Boolean(cell.field || cell.expression || isAggToken(cell.text ?? ''))
+  const measured = isPlaceholder
+    ? cell.text || cell.field || cell.expression || ' '
+    : (cell.text ?? '')
+  return { isPlaceholder, measured }
+}
+
+/**
+ * 从列配置推导单元格（用于无 cells 时的瞬时渲染 / 首次初始化）
+ *
+ * Plan B 步骤 2/5：统一写 segments 字段。
+ * - 表头：col.title → 单 text 段
+ * - 数据行：col.field → field 段；col.expression → expr 段
+ * 老字段（text/field/expression）保留在 schema 中（仅供 lazy migration），
+ * 但本函数返回的对象不再写这些字段，确保新建 cell 始终走 v2 segments 单源。
+ */
 function cellFromColumn(col: TableColumn, role: 'header' | 'data'): TableCell {
   if (role === 'header') {
     return {
-      text: col.title,
+      segments: col.title ? [{ kind: 'text', value: col.title }] : [],
       style: {
         backgroundColor: col.headerBackgroundColor,
         // 与运行期 table-engine 表头默认一致：headerAlign → align → center
@@ -129,9 +179,11 @@ function cellFromColumn(col: TableColumn, role: 'header' | 'data'): TableCell {
       },
     }
   }
+  const segs: Segment[] = []
+  if (col.field) segs.push({ kind: 'field', path: col.field })
+  else if (col.expression) segs.push(...splitFixedText(col.expression))
   return {
-    field: col.field,
-    expression: col.expression,
+    segments: segs,
     style: {
       backgroundColor: col.cellBackgroundColor,
       align: col.align,
@@ -166,9 +218,15 @@ function layoutBodyRows(control: TableControl, headerRows: number): number {
   return Math.max(1, Math.floor(bodyH / rowH) || 1)
 }
 
-/** 该单元格是否"从未被写过内容"（用于表头兜底判定；显式清空写入的 `text: ''` 不算空） */
+/** 该单元格是否"从未被写过内容"（用于表头兜底判定；显式清空写入的 `text: ''` 不算空）
+ *
+ * Plan B：segments 单源化后，cellFromColumn 也会写出 segments（如 [{text:''}] 或 []）。
+ * 因此"空白"判定改为 segments 为空数组或缺失 + 老字段均空 + 无 segments。
+ */
 function isBlankCell(cell: TableCell | undefined): boolean {
-  return !cell || (cell.text === undefined && !cell.field && !cell.expression)
+  if (!cell) return true
+  const segsEmpty = !cell.segments || cell.segments.length === 0
+  return segsEmpty && cell.text === undefined && !cell.field && !cell.expression
 }
 
 /**
@@ -346,9 +404,10 @@ function designRowContentHeight(row: TableCell[], colWidths: number[]): number {
   for (let c = 0; c < row.length; c++) {
     const cell = row[c]
     if (!cell) continue
-    if (cell.field || cell.expression || isAggToken(cell.text)) continue // nowrap 单行
-    const text = cell.text ?? ''
-    if (!text) continue
+    const { isPlaceholder, measured } = cellMeasurementInfo(cell)
+    if (isPlaceholder) continue // nowrap 单行
+    if (!measured) continue
+    const text = measured
     const avail = Math.max(1, (colWidths[c] ?? 0) - 2 * _CELL_PADDING_X)
     lines = Math.max(lines, ceilCharLines(text, avail))
   }
@@ -513,35 +572,109 @@ export function patchCell(
 /* ----------------------------- 网格结构变更 ----------------------------- */
 
 /**
- * 设定表格的语义行数并物化 cells（保留已有内容，按需补空 / 截断）。
- * 同时回写 headerRows / designRows / staticRows 元数据，使与设计期网格 1:1 对齐。
+ * 设定表格的语义行数并物化 cells。
  *
- * 参数按控件类型生效：
- * - 布局网格（无 dataSource）：designRows = 正文行数；staticRows 恒为 0。
- * - 数据表：固定 1 行数据样例行（模板），staticRows = 静态尾行（备注 / 签字栏）。
- * 未传的维度沿用当前值，便于只改某一维。
+ * 关键（Bug 修复）：按 OLD 语义切片、按 NEW 目标重组，
+ * 避免 `normalizeCellRows` 的"按位置补齐"把数据样例行挤到错误位置——
+ * 历史上点表头行数 +1 后数据表"变成文本表"就是由此触发。
  *
- * ⚠️ 不能走 ensureCells：它按"cells 长度优先推导 designRows"，会无视显式 designRows。
- * 这里以"目标维度"为准直接归一 cells。
+ * - 数据表：cells = [header(0..h-1), dataSample(h), static(h+1..)]
+ *   → 增/减 h 只动头区与静态尾区，dataSample 恒保留在 cells[h]
+ * - 布局网格：cells = [header(0..h-1), design(h..h+d-1)]
+ *   → 增/减 h 只动头区；增/减 d 只动主体区
+ *
+ * 头区新行用列标题（cellFromColumn header）兜底；主体区新行留空。
+ * 不修改 columns / options / dataSource，仅重排 cells。
  */
 export function setGridRows(
   control: TableControl,
   rows: { headerRows?: number; designRows?: number; staticRows?: number },
 ): TableControl {
-  const headerRows = Math.max(0, rows.headerRows ?? headerRowsOf(control))
   const isData = isDataTable(control)
-  const staticRows = isData ? Math.max(0, rows.staticRows ?? staticRowsOf(control)) : 0
-  const designRows = isData ? 0 : Math.max(0, rows.designRows ?? layoutBodyRows(control, headerRows))
-  const colCount = Math.max(1, control.columns?.length ?? 0)
-  const rowCount = headerRows + (isData ? 1 : designRows) + staticRows
+  const cols = control.columns ?? []
+  const colCount = Math.max(1, cols.length)
 
-  // 已有 cells → 按目标维度直接归一（保留内容）；无 cells → 先按新语义推导再取
+  // ── 1. 解析 NEW 目标维度 ──
+  const newHeaderRows = Math.max(0, rows.headerRows ?? headerRowsOf(control))
+  const newStaticRows = isData
+    ? Math.max(0, rows.staticRows ?? staticRowsOf(control))
+    : 0
+  const newDesignRows = isData
+    ? 0
+    : Math.max(0, rows.designRows ?? layoutBodyRows(control, newHeaderRows))
+
+  // ── 2. 解析 OLD 语义快照（cells 当前的索引基准）──
+  const oldHeaderRows = headerRowsOf(control)
+  const oldStaticRows = isData ? staticRowsOf(control) : 0
+  const oldDesignRows = isData ? 0 : layoutBodyRows(control, oldHeaderRows)
+
+  // ── 3. 准备 base cells（按 OLD 语义物化，保证索引可预测）──
   const base =
     control.cells && control.cells.length > 0
       ? control.cells
-      : buildDesignGrid({ ...control, headerRows, designRows, staticRows }).cells
-  const cells = normalizeCellRows(base, rowCount, colCount)
-  return { ...control, headerRows, designRows, staticRows, cells }
+      : buildDesignGrid({
+          ...control,
+          headerRows: oldHeaderRows,
+          designRows: oldDesignRows,
+          staticRows: oldStaticRows,
+        }).cells
+
+  // ── 4. 按 OLD 语义拆段 ──
+  const oldHeader = base.slice(0, oldHeaderRows)
+  const oldDataSample: TableCell[] | null = isData
+    ? (base[oldHeaderRows] ?? cols.map((c) => cellFromColumn(c, 'data')))
+    : null
+  const oldBody: TableCell[][] = isData
+    ? base.slice(oldHeaderRows + 1) // 跳过 dataSample
+    : base.slice(oldHeaderRows)
+
+  // ── 5. 头区：保留前 min(oldH, newH)；新行用列标题兜底 ──
+  const newHeader: TableCell[][] = []
+  for (let r = 0; r < newHeaderRows; r++) {
+    if (r < oldHeader.length) {
+      newHeader.push(cloneRowToColCount(oldHeader[r], colCount))
+    } else {
+      newHeader.push(cols.map((c) => cellFromColumn(c, 'header')))
+    }
+  }
+
+  // ── 6. 数据样例行（数据表专属）：原样保留到 cells[newHeaderRows] ──
+  const newDataSample: TableCell[] | null = isData
+    ? cloneRowToColCount(oldDataSample!, colCount)
+    : null
+
+  // ── 7. 主体区：保留前 min(oldBody, newBody)；新行空 ──
+  const newBody: TableCell[][] = []
+  const bodyTarget = isData ? newStaticRows : newDesignRows
+  for (let r = 0; r < bodyTarget; r++) {
+    if (r < oldBody.length) {
+      newBody.push(cloneRowToColCount(oldBody[r], colCount))
+    } else {
+      newBody.push(emptyRow(colCount))
+    }
+  }
+
+  // ── 8. 组合 ──
+  const cells: TableCell[][] = isData
+    ? [...newHeader, newDataSample!, ...newBody]
+    : [...newHeader, ...newBody]
+
+  return {
+    ...control,
+    headerRows: newHeaderRows,
+    designRows: isData ? 0 : newDesignRows,
+    staticRows: isData ? newStaticRows : 0,
+    cells,
+  }
+}
+
+/** 把任意行补齐到 colCount（不足补空、超出截断），每格浅拷贝以保持不可变 */
+function cloneRowToColCount(row: TableCell[] | undefined, colCount: number): TableCell[] {
+  const out: TableCell[] = []
+  for (let c = 0; c < colCount; c++) {
+    out.push(row?.[c] ? { ...row[c] } : {})
+  }
+  return out
 }
 
 /**
@@ -604,8 +737,10 @@ export function addTableColumn(control: TableControl, col?: Partial<TableColumn>
   const grid = buildDesignGrid(control) // 当前规范矩阵
   const cells = grid.cells.map((row, r) => {
     const row2 = [...row, {}]
-    // 新列表头单元格默认填入列标题（与设计期"列标题推导表头"一致）
-    if (r < grid.headerRows && newCol.title) row2[row2.length - 1] = { text: newCol.title }
+    // 新列表头单元格默认填入列标题（与设计期"列标题推导表头"一致）—— 走 segments 单源
+    if (r < grid.headerRows && newCol.title) {
+      row2[row2.length - 1] = { segments: [{ kind: 'text', value: newCol.title }] }
+    }
     return row2
   })
   return {
@@ -691,11 +826,14 @@ export function moveTableColumn(control: TableControl, from: number, to: number)
 
 /**
  * 单元格文本写回（把"用户在 DOM 里敲的字"翻译成协议语义）：
- * - 表头 / 静态行：写 `text`（纯字面量）
- * - 数据样例行：写 `expression`（模板串——含 `{{}}` 则运行期插值，纯文字则原样输出），
- *   并清空 `field`，避免 field/expression 双写时语义打架
+ * - 表头 / 静态行：写 `segments: [{text}]`（纯字面量）
+ * - 数据样例行：识别 `{{item.xxx}}` / `{{items[].xxx}}` → field 段；其余走 splitFixedText
+ *   切分成 text / expr 段。所有老字段（text/field/expression）同步清空，避免双源并存。
  *
  * 若文本与"当前占位符"完全一致，视为未改动，直接返回原控件（避免把占位符固化成表达式）。
+ *
+ * Plan B 步骤 2/5：单元格内容统一走 segments 单一源，老字段作为 lazy migration 入口保留，
+ * 写操作始终清空老字段，让 segments 字段与老字段永远不会同时存在有效内容。
  */
 export function patchCellText(
   control: TableControl,
@@ -709,26 +847,78 @@ export function patchCellText(
   const cell = grid.cells[r]?.[c] ?? {}
   const col = control.columns[c]
 
-  if (info.isDataTemplate) {
-    // 占位符显示与 table-design-render 的 fieldPlaceholder 严格对齐，确保"未改动即不写回"
-    const fieldPh = (f: string): string => (f.includes('[]') ? `{{${f}}}` : `{{item.${f}}}`)
-    const current = cell.expression
-      ?? (cell.field ? fieldPh(cell.field) : col?.field ? fieldPh(col.field) : '')
-    if (text === current) return control
-    if (!text) return patchCell(control, r, c, { expression: undefined, field: undefined })
-    // "{{item.xxx}}" 单一普通字段引用 → 回写为 field，保持模型最简
-    const single = /^\{\{\s*item\.([A-Za-z0-9_$.]+)\s*\}\}$/.exec(text)
-    if (single) return patchCell(control, r, c, { field: single[1], expression: undefined })
-    // "{{items[].xxx}}" 含数组标记的单一字段引用 → 同样回写为 field（运行期 resolveBinding 会去前缀取值）
-    const singleArr = /^\{\{\s*([A-Za-z0-9_$\u4e00-\u9fa5][A-Za-z0-9_$\u4e00-\u9fa5.\[\]]*\[\]\.[A-Za-z0-9_$\u4e00-\u9fa5.\[\]]*)\s*\}\}$/.exec(text)
-    if (singleArr) return patchCell(control, r, c, { field: singleArr[1], expression: undefined })
-    return patchCell(control, r, c, { expression: text, field: undefined })
+  // 占位符显示规则（与 table-design-render placeholderOf 严格对齐）：
+  // - 含 [] 的路径 → `{{path}}`（直接用）
+  // - 数据样例行不含 [] 的字段 → `{{item.path}}`（运行时由 resolveBinding 去前缀）
+  // - 表头 / 静态行字段 → `{{path}}`
+  const ph = (f: string): string =>
+    f.includes('[]') ? `{{${f}}}` : info.isDataTemplate ? `{{item.${f}}}` : `{{${f}}}`
+
+  // 当前 cell 应当显示的占位符文本（用于"未改动即不写回"判定）。
+  // 优先级：segments > 老字段 > 列默认（与 buildDesignGrid 派生顺序一致）
+  const currentPlaceholder = (() => {
+    if (cell.segments && cell.segments.length) {
+      return cell.segments.map((s) =>
+        s.kind === 'text' ? s.value : s.kind === 'field' ? ph(s.path) : `{{${s.src}}}`,
+      ).join('')
+    }
+    if (cell.expression) return cell.expression
+    if (cell.field) return ph(cell.field)
+    if (col?.field) return ph(col.field)
+    return ''
+  })()
+
+  if (!info.isDataTemplate) {
+    // 表头 / 静态行：纯字面量，单 text 段
+    if (text === currentPlaceholder) return control
+    return patchCell(control, r, c, {
+      segments: text ? [{ kind: 'text', value: text }] : [],
+      text: undefined,
+      field: undefined,
+      expression: undefined,
+    })
   }
 
-  if ((cell.text ?? '') === text) return control
-  return patchCell(control, r, c, { text })
+  // 数据样例行
+  if (!text) {
+    return patchCell(control, r, c, {
+      segments: [],
+      text: undefined,
+      field: undefined,
+      expression: undefined,
+    })
+  }
+  // "{{item.xxx}}" 单一普通字段引用 → 回写为 field 段
+  const single = /^\{\{\s*item\.([A-Za-z0-9_$.]+)\s*\}\}$/.exec(text)
+  if (single) {
+    if (text === currentPlaceholder) return control
+    return patchCell(control, r, c, {
+      segments: [{ kind: 'field', path: single[1]! }],
+      text: undefined,
+      field: undefined,
+      expression: undefined,
+    })
+  }
+  // "{{items[].xxx}}" 含数组标记的单一字段引用 → 同样回写为 field 段
+  const singleArr = /^\{\{\s*([A-Za-z0-9_$\u4e00-\u9fa5][A-Za-z0-9_$\u4e00-\u9fa5.\[\]]*\[\]\.[A-Za-z0-9_$\u4e00-\u9fa5.\[\]]*)\s*\}\}$/.exec(text)
+  if (singleArr) {
+    if (text === currentPlaceholder) return control
+    return patchCell(control, r, c, {
+      segments: [{ kind: 'field', path: singleArr[1]! }],
+      text: undefined,
+      field: undefined,
+      expression: undefined,
+    })
+  }
+  // 其�Y（混合 {{expr}} + 字面量后缀等）→ splitFixedText 切分成 expr/text 段
+  if (text === currentPlaceholder) return control
+  return patchCell(control, r, c, {
+    segments: splitFixedText(text),
+    text: undefined,
+    field: undefined,
+    expression: undefined,
+  })
 }
-
 /** 不可变合并某单元格样式（只覆盖传入的键，undefined 表示"清除该项"） */
 export function patchCellStyle(
   control: TableControl,
@@ -749,6 +939,8 @@ export function patchCellStyle(
 /**
  * 设置单元格横向合并跨度。
  * 合并 = 本格 colSpan=n，被吞掉的右侧格清空（渲染时按 span 跳过，模型仍留位保证矩阵规整）。
+ *
+ * Plan B：被吞掉的格子同步清空 segments 字段，避免 segments 与合并标记共存导致"幽灵内容"。
  */
 export function setCellSpan(control: TableControl, r: number, c: number, span: number): TableControl {
   const grid = buildDesignGrid(control)
@@ -756,7 +948,13 @@ export function setCellSpan(control: TableControl, r: number, c: number, span: n
   const n = Math.max(1, Math.min(Math.floor(span), max))
   let next = patchCell(control, r, c, { colSpan: n > 1 ? n : undefined })
   for (let i = 1; i < n; i++) {
-    next = patchCell(next, r, c + i, { text: undefined, field: undefined, expression: undefined, colSpan: undefined })
+    next = patchCell(next, r, c + i, {
+      text: undefined,
+      field: undefined,
+      expression: undefined,
+      segments: undefined,
+      colSpan: undefined,
+    })
   }
   return next
 }
@@ -765,6 +963,8 @@ export function setCellSpan(control: TableControl, r: number, c: number, span: n
  * 设置单元格纵向合并跨度。
  * 合并 = 本格 rowSpan=m，被吞掉的下方同列格清空（渲染时按 span 跳过，模型仍留位保持矩阵规整）。
  * 超界自动收敛到网格底边，故改行数 / 删行不会产生非法合并。
+ *
+ * Plan B：被吞掉的格子同步清空 segments 字段。
  */
 export function setCellRowSpan(control: TableControl, r: number, c: number, span: number): TableControl {
   const grid = buildDesignGrid(control)
@@ -776,6 +976,7 @@ export function setCellRowSpan(control: TableControl, r: number, c: number, span
       text: undefined,
       field: undefined,
       expression: undefined,
+      segments: undefined,
       colSpan: undefined,
       rowSpan: undefined,
     })
@@ -850,27 +1051,51 @@ export function patchColumnStyle(
 /* ----------------------------- 行 / 列插入 ----------------------------- */
 
 /**
- * 在 `atRow` 处插入一空行（原行下移）。
- * - 布局网格：直接插入正文区，designRows+1。
- * - 数据表：数据样例行固定在 headerRows，任何插入都落在静态尾行区（避免破坏"单数据样例行"不变量），
- *   故 atRow 被收敛到 headerRows+1 之后；staticRows+1。
+ * 在 cells 矩阵的 `atRow` 处插入一行（原行下移）。
+ *
+ * 按 `atRow` 与 headerRows 的相对位置决定语义（数据表下）：
+ *   - atRow ≤ headerRows：插入到表头区，headerRows+=1，新行用列标题兜底
+ *     （覆盖三种 UI 调用：上方插入表头行 / 下方插入表头行 / 上方插入数据样例行）
+ *   - atRow > headerRows：插入到静态尾行区，staticRows+=1，新行留空
+ *     （覆盖两种 UI 调用：下方插入数据样例行 / 上下插入静态尾行）
+ *
+ * 这样既保护了"单数据样例行"不变量（永远不会插入到 dataSample 位置），
+ * 又让"右键表头单元格→上下插入行"的 UI 行为符合直觉（在表头区插入，不是数据样例行下方）。
+ *
+ * 布局网格：直接插入正文区，designRows+1。
+ * 不动 columns / options / dataSource；dataSample 的字段绑定不会因为表头区插入而被破坏。
  */
 export function insertTableRow(control: TableControl, atRow: number): TableControl {
   const grid = buildDesignGrid(control)
   const colCount = grid.colCount
-  const cells = grid.cells.map((row) => row.map((c) => ({ ...c })))
-  const newRow: TableCell[] = Array.from({ length: colCount }, () => ({}))
+  const cols = control.columns ?? []
+
   let insertAt = atRow
   let headerRows = grid.headerRows
   let designRows = grid.designRows
   let staticRows = grid.staticRows
+  let newRow: TableCell[]
+
   if (grid.isData) {
-    const minStatic = grid.headerRows + 1
-    insertAt = Math.max(minStatic, atRow)
-    staticRows += 1
+    if (atRow <= grid.headerRows) {
+      // 表头区或边界（atRow === headerRows 即"下方插入最后一行表头"）：
+      // 一律视为表头区插入，新行用列标题兜底
+      insertAt = Math.max(0, atRow)
+      newRow = cols.map((c) => cellFromColumn(c, 'header'))
+      headerRows += 1
+    } else {
+      // atRow > headerRows：静态尾行区插入
+      insertAt = atRow
+      newRow = Array.from({ length: colCount }, () => ({}))
+      staticRows += 1
+    }
   } else {
+    // 布局网格：直接插入正文区
+    newRow = Array.from({ length: colCount }, () => ({}))
     designRows += 1
   }
+
+  const cells = grid.cells.map((row) => row.map((c) => ({ ...c })))
   cells.splice(insertAt, 0, newRow)
   return { ...control, headerRows, designRows, staticRows, cells }
 }
@@ -885,6 +1110,8 @@ export function insertTableColumn(control: TableControl, atCol: number): TableCo
   })
   const idx = (control.columns?.length ?? 0) + 1
   const newCol: TableColumn = {
+    // 稳定列 id：vMerge（同值合并）等按列引用功能依赖 id；与 addTableColumn 行为对齐
+    id: genId('col'),
     title: `列${idx}`,
     width: 30,
     align: 'left',
@@ -928,8 +1155,15 @@ export function seedSummaryTail(control: TableControl, opts: SeedTailOptions = {
   const tailLabels = new Set(['本页合计', '总计', '大写金额'])
   const seeded = grid.cells.slice(grid.headerRows + 1).some(
     (row) =>
-      row.some((c) => isAggToken(c.text)) ||
-      (row[0] != null && tailLabels.has(row[0]!.text ?? '')),
+      // 聚合 token：segments 单 text 段优先；老字段 text 保留作为兼容入口
+      row.some((c) =>
+        isAggToken(c.text)
+        || (Array.isArray(c.segments) && c.segments.length === 1 && c.segments[0]!.kind === 'text' && isAggToken(c.segments[0]!.value))
+      )
+      || (row[0] != null && (
+        tailLabels.has(row[0]!.text ?? '')
+        || (Array.isArray(row[0]!.segments) && row[0]!.segments.some((s) => s.kind === 'text' && tailLabels.has(s.value)))
+      )),
   )
   if (seeded) return control
   const cols = control.columns ?? []
@@ -952,16 +1186,23 @@ export function seedSummaryTail(control: TableControl, opts: SeedTailOptions = {
 
   const makeRow = (label: string, token: string | null): TableCell[] =>
     Array.from({ length: colCount }, (_, c) => {
-      if (c === 0) return { text: label, style: { bold: true, align: 'center' } }
-      if (token && numeric.has(c)) return { text: token, style: { bold: true, align: 'center' } }
+      if (c === 0) {
+        // 第一列：行标签。segments 写单 text 段；老字段 text 同步保留让老读取路径仍能识别
+        return { text: label, segments: [{ kind: 'text', value: label }], style: { bold: true, align: 'center' } }
+      }
+      if (token && numeric.has(c)) {
+        // 聚合 token：保持单 text 段（buildFooterRow / parseAggTokenFromCell 识别）。
+        // 老字段 text 同步保留，Commit 3 切换到 segments 单源后移除。
+        return { text: token, segments: [{ kind: 'text', value: token }], style: { bold: true, align: 'center' } }
+      }
       return {}
     })
   const pageRow = makeRow('本页合计', '{{#pageSum}}')
   const totalRow = makeRow('总计', '{{#totalSum}}')
   const withCap = opts.capital ?? true
   const capRow: TableCell[] = Array.from({ length: colCount }, (_, c) => {
-    if (c === 0) return { text: '大写金额', style: { bold: true, align: 'center' } }
-    if (c === money) return { text: '{{#totalCap}}', style: { bold: true, align: 'center' } }
+    if (c === 0) return { text: '大写金额', segments: [{ kind: 'text', value: '大写金额' }], style: { bold: true, align: 'center' } }
+    if (c === money) return { text: '{{#totalCap}}', segments: [{ kind: 'text', value: '{{#totalCap}}' }], style: { bold: true, align: 'center' } }
     return {}
   })
 

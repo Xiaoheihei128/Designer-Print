@@ -192,56 +192,49 @@ function onCellMode(m: ContentMode): void {
 }
 
 function onCellValue(v: string): void {
-  emit('apply', patchCell(props.control, props.row, props.col, { text: v }))
-}
-
-/**
- * 变量模式：写 field 并清空 text/expression。
- * ★ 清空场景（path 为空）不写 contentType：让 segments 走自己的逻辑决定
- *   contentType，老字段不被强制覆写成 'variable' 留下脏数据。
- */
-function onCellBinding(path: string): void {
-  if (!path) {
-    emit(
-      'apply',
-      patchCell(props.control, props.row, props.col, {
-        field: undefined,
-        text: undefined,
-        expression: undefined,
-      }),
-    )
-    return
-  }
+  // Plan B 步骤 2/5：三态 emit 全部写 segments + 清老字段
+  // segments 单 text 段（或 [] 表示空）替代老 {text:v}
   emit(
     'apply',
     patchCell(props.control, props.row, props.col, {
-      contentType: 'variable',
-      field: path,
+      segments: v ? [{ kind: 'text', value: v }] : [],
       text: undefined,
+      field: undefined,
       expression: undefined,
+      binding: undefined,
+      value: undefined,
+    }),
+  )
+}
+
+/**
+ * 变量模式：写 segments 单 field 段 + 清空老字段。
+ * ★ 清空场景（path 为空）→ segments=[]，不再留任何老字段。
+ */
+function onCellBinding(path: string): void {
+  emit(
+    'apply',
+    patchCell(props.control, props.row, props.col, {
+      segments: path ? [{ kind: 'field', path }] : [],
+      text: undefined,
+      field: undefined,
+      expression: undefined,
+      binding: undefined,
+      value: undefined,
     }),
   )
 }
 
 function onCellExpression(v: string): void {
-  if (!v) {
-    emit(
-      'apply',
-      patchCell(props.control, props.row, props.col, {
-        expression: undefined,
-        text: undefined,
-        field: undefined,
-      }),
-    )
-    return
-  }
   emit(
     'apply',
     patchCell(props.control, props.row, props.col, {
-      contentType: 'expression',
-      expression: v,
+      segments: v ? [{ kind: 'expr', src: v }] : [],
       text: undefined,
       field: undefined,
+      expression: undefined,
+      binding: undefined,
+      value: undefined,
     }),
   )
 }

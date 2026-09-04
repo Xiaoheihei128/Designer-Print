@@ -75,14 +75,15 @@ describe('pendingBindCell 维护', () => {
 })
 
 describe('bindFieldToCell 写入链路', () => {
-  it('字段路径写入指定单元格：contentType=variable + field 路径 + 清 text/expression', () => {
+  it('字段路径写入指定单元格：segments 单 field 段 + 清老字段', () => {
     const store = useDesignerStore()
     store.controls.push(makeTable())
     store.bindFieldToCell('tbl-1', 1, 1, 'items[].qty')
     const tbl = store.controls.find((c) => c.id === 'tbl-1') as TableControl
     const cell = tbl.cells![1]![1] as TableCell
-    expect(cell.contentType).toBe('variable')
-    expect(cell.field).toBe('items[].qty')
+    // Plan B 步骤 2/5：bindFieldToCell 单源 segments；老字段（field/expression/text）被清
+    expect(cell.segments).toEqual([{ kind: 'field', path: 'items[].qty' }])
+    expect(cell.field).toBeUndefined()
     expect(cell.text).toBeUndefined()
     expect(cell.expression).toBeUndefined()
     // 绑完即退出待绑态
@@ -107,8 +108,8 @@ describe('bindFieldToCell 写入链路', () => {
     store.bindFieldToCell('tbl-1', 1, 1, 'items[].qty')
     const tbl = store.controls.find((c) => c.id === 'tbl-1') as TableControl
     const cell = tbl.cells![1]![1] as TableCell
-    expect(cell.contentType).toBe('variable')
-    expect(cell.field).toBe('items[].qty')
+    // 旧 expression / contentType 全部清空；segments 是唯一新源
+    expect(cell.segments).toEqual([{ kind: 'field', path: 'items[].qty' }])
     expect(cell.expression).toBeUndefined()
   })
 

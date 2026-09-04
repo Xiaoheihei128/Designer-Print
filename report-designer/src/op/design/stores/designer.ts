@@ -142,13 +142,15 @@ export const useDesignerStore = defineStore('designer', () => {
     const table = current as TableControl
     const grid = (table as unknown as { cells?: TableCell[][] }).cells
     if (!Array.isArray(grid) || row < 0 || col < 0 || row >= grid.length || col >= (grid[0]?.length ?? 0)) return
-    // v2: 拖字段绑到单元格同时写 segments 镜像（与老 field 字段并存，渲染层优先 segments）
+    // Plan B 步骤 2/5：拖字段绑到单元格**只写 segments**（单源） + 清老字段
+    // 老 contentType/field 字段保留作为 v1 UI 状态（cellMode 派生用），但 segments 是唯一真源
     const next = patchCell(table, row, col, {
-      contentType: 'variable',
-      field: path,
-      text: undefined,
-      expression: undefined,
       segments: [{ kind: 'field', path }],
+      text: undefined,
+      field: undefined,
+      expression: undefined,
+      binding: undefined,
+      value: undefined,
     } as Partial<TableCell>)
     // 走 updateControl：自带 history.push + 画布同步
     updateControl(controlId, next)

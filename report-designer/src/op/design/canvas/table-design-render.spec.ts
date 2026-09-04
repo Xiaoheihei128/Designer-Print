@@ -87,9 +87,10 @@ describe('renderTableGridHtml', () => {
 
   it('绑定的数据样例行：渲染为字段占位符而非空', () => {
     const html = renderTableGridHtml(baseTable({ dataSource: 'items' }))
-    expect(html).toContain('{{item.name}}')
-    expect(html).toContain('{{item.qty}}')
-    // 表头占位符走 expression
+    // Plan B：字段段 placeholder 走 segments 单源 → {{name}}（去掉老模板的 item. 前缀）
+    expect(html).toContain('{{name}}')
+    expect(html).toContain('{{qty}}')
+    // 表头占位符走 expression（splitFixedText 已剥 {{}} → rowIndex + 1）
     expect(html).toContain('{{rowIndex + 1}}')
   })
 

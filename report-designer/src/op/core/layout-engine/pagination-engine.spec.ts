@@ -253,7 +253,7 @@ describe('layout —— fixBottomRows 按纸张补空行（跨页 + 末页不补
   const measurer = createCjkMeasurer()
 
   /** 100 行数据、A4 纵向、无上下边距 → 必跨多页 */
-  function fixBottomTemplate(opts: { fixBottomRows: 'fill' | { min: number }; fixBottomMargin?: number }): TemplateData<AnyControl> {
+  function fixBottomTemplate(opts: { fixBottomRows: 'fill' | { count: number }; fixBottomMargin?: number }): TemplateData<AnyControl> {
     const table = {
       id: 'fb',
       type: 'table',
@@ -358,18 +358,26 @@ describe('layout —— fixBottomRows 按纸张补空行（跨页 + 末页不补
     expect(blankCountOf(0, result), '第 1 页应有补空行').toBeGreaterThan(0)
   })
 
-  it('{ min: N } 模式：中间页数据行 ≥ N；不足时补 blank 行到 N（末页自然结束）', async () => {
-    const result = await layout(fixBottomTemplate({ fixBottomRows: { min: 30 } }), {}, { measurer })
-    const last = result.pages.length - 1
+  it('{ count: N } 模式：每页 blank ≤ N（不让位，超出可用则裁剪）', async () => {
+    const result = await layout(fixBottomTemplate({ fixBottomRows: { count: 5 } }), {}, { measurer })
+    expect(result.pages.length, '应当跨多页').toBeGreaterThanOrEqual(2)
     for (let p = 0; p < result.pages.length; p++) {
+      const blank = blankCountOf(p, result)
       const data = dataCountOf(p, result)
-      if (p < last) {
-        // 中间页：必须 ≥ N（min 模式保证）
-        expect(data, `第 ${p + 1} 页数据行数`).toBeGreaterThanOrEqual(30)
-      } else {
-        // 末页：剩余数据行自然结束即可（可能 < min）
-        expect(data, `末页数据行数`).toBeGreaterThan(0)
-      }
+      // count 模式：每页 blank 数量 ≤ N（裁剪上限，不让位）
+      expect(blank, `第 ${p + 1} 页 blank 行数 ≤ N`).toBeLessThanOrEqual(5)
+      // 数据行原样保留（不让位，不丢数据）
+      expect(data, `第 ${p + 1} 页数据行保留`).toBeGreaterThan(0)
+    }
+  })
+
+  it('{ count: 100 } 超大值：被裁剪到剩余预算能放下的最多行数（不丢数据）', async () => {
+    const result = await layout(fixBottomTemplate({ fixBottomRows: { count: 100 } }), {}, { measurer })
+    for (let p = 0; p < result.pages.length; p++) {
+      const blank = blankCountOf(p, result)
+      // 100 行极不可能放下，应被裁剪；数据行不变
+      expect(blank, `第 ${p + 1} 页 blank 行数`).toBeLessThan(100)
+      expect(dataCountOf(p, result), `第 ${p + 1} 页数据行应保留`).toBeGreaterThan(0)
     }
   })
 

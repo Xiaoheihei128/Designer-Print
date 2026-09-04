@@ -189,8 +189,10 @@ export function legacyToSegments(src: LegacySource): Segment[] | null {
  *
  * 注：本函数不区分纯 path 与含运算/管道 —— 都归为 expr。
  * 真正"现代化"的纯 path 翻译由 Properties Panel lazy migration（ensureSegments）负责。
+ *
+ * 导出供 patchCellText / write 路径复用，避免在 design 层反向依赖 core 层。
  */
-function splitFixedText(text: string): Segment[] {
+export function splitFixedText(text: string): Segment[] {
   if (!text) return [{ kind: 'text', value: '' }]
   if (isAggToken(text)) return [{ kind: 'text', value: text }]
   if (!text.includes('{{')) return [{ kind: 'text', value: text }]

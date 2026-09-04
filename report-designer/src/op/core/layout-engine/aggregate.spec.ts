@@ -290,10 +290,18 @@ describe('seedSummaryTail', () => {
     expect(grid.rowCount).toBe(5) // 1 表头 + 1 数据 + 3 尾
     // 金额列（index2）被标记 aggregate
     expect(seeded.columns[2]!.aggregate).toBe(true)
-    // 尾行含 token
+    // 尾行含 token（Plan B 步骤 2/5：token 现在写在 segments 单 text 段，老字段 text 同步保留）
     const lastRows = grid.cells.slice(grid.headerRows + 1)
     expect(lastRows.some((r) => r.some((c) => c.text === '{{#pageSum}}'))).toBe(true)
     expect(lastRows.some((r) => r.some((c) => c.text === '{{#totalCap}}'))).toBe(true)
+    expect(lastRows.some((r) => r.some((c) =>
+      Array.isArray(c.segments) && c.segments.length === 1
+      && c.segments[0]!.kind === 'text' && c.segments[0]!.value === '{{#pageSum}}'
+    ))).toBe(true)
+    expect(lastRows.some((r) => r.some((c) =>
+      Array.isArray(c.segments) && c.segments.length === 1
+      && c.segments[0]!.kind === 'text' && c.segments[0]!.value === '{{#totalCap}}'
+    ))).toBe(true)
   })
 
   it('幂等：已植入则不重复', () => {

@@ -15,6 +15,8 @@ import {
   designRowInfo,
   ensureCells,
   ensureColumnIds,
+  insertTableColumn,
+  insertTableRow,
   moveTableColumn,
   normalizeCellRows,
   patchCell,
@@ -57,12 +59,12 @@ describe('buildDesignGrid', () => {
     expect(g.rowCount).toBe(1 + 1 + 1) // header + data template + 1 static
     expect(g.colCount).toBe(3)
     // 表头第 1 行：文本=列标题、加粗、对齐跟随 headerAlign
-    expect(g.cells[0]![0]!.text).toBe('序号')
+    expect(g.cells[0]![0]!.segments).toEqual([{ kind: 'text', value: '序号' }])
     expect(g.cells[0]![0]!.style?.bold).toBe(true)
     expect(g.cells[0]![0]!.style?.align).toBe('center')
-    // 数据样例行第 2 行：带 field（来自列配置的 field）
-    expect(g.cells[1]![1]!.field).toBe('name')
-    expect(g.cells[1]![2]!.field).toBe('qty')
+    // 数据样例行第 2 行：带 field 段（来自列配置的 field，Plan B 步骤 2/5）
+    expect(g.cells[1]![1]!.segments).toEqual([{ kind: 'field', path: 'name' }])
+    expect(g.cells[1]![2]!.segments).toEqual([{ kind: 'field', path: 'qty' }])
     // 静态尾行：空
     expect(g.cells[2]![0]).toEqual({})
   })
@@ -78,14 +80,14 @@ describe('buildDesignGrid', () => {
 
   it('已有 cells：按语义行数归一化（列数补齐到当前列数）', () => {
     const cells = [
-      [{ text: 'A' }, { text: 'B' }, { text: 'C' }, { text: '多余列应被丢弃' }],
-      [{ text: 'x' }, { text: 'y' }, { text: 'z' }],
+      [{ segments: [{ kind: 'text', value: 'A' }] }, { segments: [{ kind: 'text', value: 'B' }] }, { segments: [{ kind: 'text', value: 'C' }] }, { segments: [{ kind: 'text', value: '多余列应被丢弃' }] }],
+      [{ segments: [{ kind: 'text', value: 'x' }] }, { segments: [{ kind: 'text', value: 'y' }] }, { segments: [{ kind: 'text', value: 'z' }] }],
     ]
     const g = buildDesignGrid(baseTable({ dataSource: 'items', cells, staticRows: 0 }))
     expect(g.rowCount).toBe(2) // header(1) + data(1) + 0
     expect(g.colCount).toBe(3)
     expect(g.cells[0]![3]).toBeUndefined()
-    expect(g.cells[0]![0]!.text).toBe('A')
+    expect(g.cells[0]![0]!.segments).toEqual([{ kind: 'text', value: 'A' }])
   })
 
   it('列数为 0 时兜底为 1 列，不崩溃', () => {
@@ -107,8 +109,8 @@ describe('ensureCells', () => {
 
   it('已存在且尺寸匹配则返回结构（不重建，保持既有内容）', () => {
     const cells = [
-      [{ text: 'H1' }, { text: 'H2' }, { text: 'H3' }],
-      [{ field: 'a' }, { field: 'b' }, { field: 'c' }],
+      [{ segments: [{ kind: 'text', value: 'H1' }] }, { segments: [{ kind: 'text', value: 'H2' }] }, { segments: [{ kind: 'text', value: 'H3' }] }],
+      [{ segments: [{ kind: 'field', path: 'a' }] }, { segments: [{ kind: 'field', path: 'b' }] }, { segments: [{ kind: 'field', path: 'c' }] }],
     ]
     const orig = baseTable({ dataSource: 'items', cells, staticRows: 0 })
     const next = ensureCells(orig)
@@ -118,16 +120,18 @@ describe('ensureCells', () => {
 })
 
 describe('patchCellText 行语义', () => {
-  it('表头/静态行：写 text 字面量', () => {
+  it('表头/静态行：写 segments 单 text 段', () => {
     const t = baseTable({ dataSource: 'items', staticRows: 1 })
     const next = patchCellText(t, 0, 0, '序号X') // 表头行
-    expect(next.cells![0]![0]!.text).toBe('序号X')
+    expect(next.cells![0]![0]!.segments).toEqual([{ kind: 'text', value: '序号X' }])
+    expect(next.cells![0]![0]!.text).toBeUndefined()
   })
 
-  it('静态尾行：写 text 字面量', () => {
+  it('静态尾行：写 segments 单 text 段', () => {
     const t = baseTable({ dataSource: 'items', staticRows: 1 })
     const next = patchCellText(t, 2, 0, '合计') // 静态行
-    expect(next.cells![2]![0]!.text).toBe('合计')
+    expect(next.cells![2]![0]!.segments).toEqual([{ kind: 'text', value: '合计' }])
+    expect(next.cells![2]![0]!.text).toBeUndefined()
   })
 
   it('数据样例行：与当前占位符一致 → 原样返回（不固化占位符）', () => {
@@ -136,25 +140,31 @@ describe('patchCellText 行语义', () => {
     expect(next).toBe(t)
   })
 
-  it('数据样例行：纯字段引用回写为 field', () => {
+  it('数据样例行：纯字段引用回写为 field 段', () => {
     const t = baseTable({ dataSource: 'items' })
     const next = patchCellText(t, 1, 1, '{{item.amount}}')
-    expect(next.cells![1]![1]!.field).toBe('amount')
+    expect(next.cells![1]![1]!.segments).toEqual([{ kind: 'field', path: 'amount' }])
+    expect(next.cells![1]![1]!.text).toBeUndefined()
+    expect(next.cells![1]![1]!.field).toBeUndefined()
     expect(next.cells![1]![1]!.expression).toBeUndefined()
   })
 
-  it('数据样例行：含表达式 → 写 expression 并清 field', () => {
+  it('数据样例行：含表达式 → 写 expr 段并清 field', () => {
     const t = baseTable({ dataSource: 'items' })
     const next = patchCellText(t, 1, 2, '{{row.price * row.qty}}')
-    expect(next.cells![1]![2]!.expression).toBe('{{row.price * row.qty}}')
+    expect(next.cells![1]![2]!.segments).toEqual([{ kind: 'expr', src: 'row.price * row.qty' }])
+    expect(next.cells![1]![2]!.text).toBeUndefined()
     expect(next.cells![1]![2]!.field).toBeUndefined()
+    expect(next.cells![1]![2]!.expression).toBeUndefined()
   })
 
-  it('数据样例行：清空 → 同时清 expression 与 field', () => {
+  it('数据样例行：清空 → 清 segments 与老字段', () => {
     const t = baseTable({ dataSource: 'items' })
     const next = patchCellText(t, 1, 1, '')
-    expect(next.cells![1]![1]!.expression).toBeUndefined()
+    expect(next.cells![1]![1]!.segments).toEqual([])
+    expect(next.cells![1]![1]!.text).toBeUndefined()
     expect(next.cells![1]![1]!.field).toBeUndefined()
+    expect(next.cells![1]![1]!.expression).toBeUndefined()
   })
 })
 
@@ -217,86 +227,86 @@ describe('designRowInfo', () => {
 
 describe('normalizeCellRows', () => {
   it('行/列不足补空、超出截断', () => {
-    const out = normalizeCellRows([[{ text: 'a' }], [{ text: 'b' }, { text: 'c' }]], 3, 2)
+    const out = normalizeCellRows([[{ segments: [{ kind: 'text', value: 'a' }] }], [{ segments: [{ kind: 'text', value: 'b' }] }, { segments: [{ kind: 'text', value: 'c' }] }]], 3, 2)
     expect(out.length).toBe(3)
     expect(out[0]!.length).toBe(2)
-    expect(out[0]![0]!.text).toBe('a')
+    expect(out[0]![0]!.segments).toEqual([{ kind: 'text', value: 'a' }])
     expect(out[0]![1]).toEqual({})
-    expect(out[1]![1]!.text).toBe('c')
+    expect(out[1]![1]!.segments).toEqual([{ kind: 'text', value: 'c' }])
   })
 })
 
 describe('patchCell 不可变更新', () => {
   it('返回新控件且只改目标格', () => {
     const t = baseTable({ dataSource: 'items' })
-    const next = patchCell(t, 0, 0, { text: '改' })
+    const next = patchCell(t, 0, 0, { segments: [{ kind: 'text', value: '改' }] })
     expect(next).not.toBe(t)
-    expect(next.cells![0]![0]!.text).toBe('改')
+    expect(next.cells![0]![0]!.segments).toEqual([{ kind: 'text', value: '改' }])
     expect(t.cells).toBeUndefined()
   })
 
-  it('P0-3 字段绑定写回：contentType=variable + field 路径 + 清 text/expression', () => {
+  it('P0-3 字段绑定写回：segments 单 field 段 + 清老字段', () => {
     const t = baseTable({ dataSource: 'items' })
-    // 目标格原本是 fixed 文本 → 模拟设计期默认填充
+    // 目标格原本是 col.field 派生的 field 段 → 改写为新路径
     const next = patchCell(t, 1, 1, {
-      contentType: 'variable',
-      field: 'items[].qty',
+      segments: [{ kind: 'field', path: 'items[].qty' }],
       text: undefined,
+      field: undefined,
       expression: undefined,
     })
     const cell = next.cells![1]![1]!
-    expect(cell.contentType).toBe('variable')
-    expect(cell.field).toBe('items[].qty')
+    expect(cell.segments).toEqual([{ kind: 'field', path: 'items[].qty' }])
     expect(cell.text).toBeUndefined()
+    expect(cell.field).toBeUndefined()
     expect(cell.expression).toBeUndefined()
     // 不可变：原控件未受影响
     expect(t.cells).toBeUndefined()
   })
 
-  it('P0-3 覆盖 expression 单元格：旧 expression 清空，新 field 生效', () => {
+  it('P0-3 覆盖 expression 单元格：旧 expr 段被新 field 段覆盖', () => {
     const t = baseTable({ dataSource: 'items' })
     // 旧表达式
-    const withExpr = patchCell(t, 1, 1, { contentType: 'expression', expression: '{{row.qty*2}}' })
-    expect(withExpr.cells![1]![1]!.expression).toBe('{{row.qty*2}}')
+    const withExpr = patchCell(t, 1, 1, { segments: [{ kind: 'expr', src: '{{row.qty*2}}' }] })
+    expect(withExpr.cells![1]![1]!.segments).toEqual([{ kind: 'expr', src: '{{row.qty*2}}' }])
     // 改绑字段
     const next = patchCell(withExpr, 1, 1, {
-      contentType: 'variable',
-      field: 'items[].qty',
+      segments: [{ kind: 'field', path: 'items[].qty' }],
       text: undefined,
+      field: undefined,
       expression: undefined,
     })
     const cell = next.cells![1]![1]!
-    expect(cell.contentType).toBe('variable')
-    expect(cell.field).toBe('items[].qty')
+    expect(cell.segments).toEqual([{ kind: 'field', path: 'items[].qty' }])
+    expect(cell.segments).toEqual([{ kind: 'field', path: 'items[].qty' }])
     expect(cell.expression).toBeUndefined()
   })
 
   it('P0-3 写回仅改目标格，其他单元格保留原值', () => {
     const t = baseTable({ dataSource: 'items' })
     const next = patchCell(t, 1, 1, {
-      contentType: 'variable',
-      field: 'items[].qty',
+      segments: [{ kind: 'field', path: 'items[].qty' }],
       text: undefined,
+      field: undefined,
       expression: undefined,
     })
     // 第 0 列（序号）不应受影响
-    expect(next.cells![1]![0]!.expression).toBe('{{rowIndex + 1}}')
+    expect(next.cells![1]![0]!.segments).toEqual([{ kind: 'expr', src: 'rowIndex + 1' }])
     // 表头不受影响
-    expect(next.cells![0]![1]!.text).toBe('名称')
+    expect(next.cells![0]![1]!.segments).toEqual([{ kind: 'text', value: '名称' }])
   })
 })
 
 describe('网格结构变更（#100）', () => {
   it('setGridRows 布局网格增正文行：保留已有内容并按目标维度补空', () => {
     const t = ensureCells(baseTable({ designRows: 2 }))
-    t.cells![0]![0] = { text: 'H' }
-    t.cells![1]![1] = { text: 'B' }
+    t.cells![0]![0] = { segments: [{ kind: 'text', value: 'H' }] }
+    t.cells![1]![1] = { segments: [{ kind: 'text', value: 'B' }] }
     const next = setGridRows(t, { designRows: 4 })
     expect(next.headerRows).toBe(1)
     expect(next.designRows).toBe(4)
     expect(next.cells!.length).toBe(5) // 1 表头 + 4 正文
-    expect(next.cells![0]![0]!.text).toBe('H') // 表头保留
-    expect(next.cells![1]![1]!.text).toBe('B') // 正文保留
+    expect(next.cells![0]![0]!.segments).toEqual([{ kind: 'text', value: 'H' }]) // 表头保留
+    expect(next.cells![1]![1]!.segments).toEqual([{ kind: 'text', value: 'B' }]) // 正文保留
     expect(next.cells![4]![0]).toEqual({}) // 新补空行
   })
 
@@ -313,15 +323,96 @@ describe('网格结构变更（#100）', () => {
     const next = setGridRows(t, { headerRows: 2 })
     expect(next.headerRows).toBe(2)
     expect(next.cells!.length).toBe(4) // 2 表头 + 2 正文
-    expect(next.cells![1]![0]!.text).toBe('序号') // 新表头行取列标题
+    expect(next.cells![1]![0]!.segments).toEqual([{ kind: 'text', value: '序号' }]) // 新表头行取列标题
   })
 
   it('setGridRows 减行数：截断尾部（保留前面内容）', () => {
     const t = ensureCells(baseTable({ designRows: 5 }))
-    t.cells![0]![0] = { text: 'H' }
+    t.cells![0]![0] = { segments: [{ kind: 'text', value: 'H' }] }
     const next = setGridRows(t, { designRows: 2 })
     expect(next.cells!.length).toBe(3) // 1 表头 + 2 正文
-    expect(next.cells![0]![0]!.text).toBe('H')
+    expect(next.cells![0]![0]!.segments).toEqual([{ kind: 'text', value: 'H' }])
+  })
+
+  // ─── Bug 回归：点表头行数 +1 后数据表"变文本表"──
+  // 历史 bug：setGridRows 用 normalizeCellRows 按位置补齐，
+  // 数据样例行被新表头行挤走，引擎把空白行当成模板克隆出全空数据行。
+  // 修复后：按 OLD 语义切片、按 NEW 目标重组，数据样例行恒在 cells[headerRows]。
+
+  it('setGridRows 数据表 +表头行数：数据样例行仍在 cells[headerRows]，字段绑定不丢', () => {
+    const t = ensureCells(baseTable({ dataSource: 'items' }))
+    // t.headerRows=1, t.cells=[H0, DT1]，DT1 由 buildDesignGrid 物化（每格含 field）
+    expect(t.cells!.length).toBe(2)
+    expect(t.cells![1]![1]!.segments).toEqual([{ kind: 'field', path: 'name' }]) // 修复前基线：DT1 字段确实存在
+
+    const next = setGridRows(t, { headerRows: 2 })
+    expect(next.headerRows).toBe(2)
+    expect(next.cells!.length).toBe(3) // 2 表头 + 1 数据样例（行数正确，非末尾追加）
+    // 数据样例行仍在 cells[headerRows=2]，原字段绑定保留——明细数据恢复
+    expect(next.cells![2]![1]!.segments).toEqual([{ kind: 'field', path: 'name' }])
+    expect(next.cells![2]![2]!.segments).toEqual([{ kind: 'field', path: 'qty' }])
+    // 新表头行用列标题兜底（位于表头区，不是末尾）
+    expect(next.cells![1]![0]!.segments).toEqual([{ kind: 'text', value: '序号' }])
+    // 原表头行保留
+    expect(next.cells![0]![0]!.segments).toEqual([{ kind: 'text', value: '序号' }])
+  })
+
+  it('setGridRows 数据表 -表头行数：数据样例行跟随 headerRows 位置', () => {
+    const t = ensureCells(baseTable({ dataSource: 'items', headerRows: 2 }))
+    // cells=[H0, H1, DT1]，DT1 含 field
+    expect(t.cells!.length).toBe(3)
+    const next = setGridRows(t, { headerRows: 1 })
+    expect(next.headerRows).toBe(1)
+    expect(next.cells!.length).toBe(2) // 1 表头 + 1 数据样例
+    // 数据样例行仍是原 DT1
+    expect(next.cells![1]![1]!.segments).toEqual([{ kind: 'field', path: 'name' }])
+    // 原第一个表头行保留
+    expect(next.cells![0]![0]!.segments).toEqual([{ kind: 'text', value: '序号' }])
+  })
+
+  it('setGridRows 数据表同时改表头与静态尾行：两段独立 splice，数据样例行不串位', () => {
+    const t = ensureCells(baseTable({ dataSource: 'items', staticRows: 1 }))
+    // cells=[H0, DT1, S0]
+    expect(t.cells!.length).toBe(3)
+    const next = setGridRows(t, { headerRows: 2, staticRows: 2 })
+    expect(next.headerRows).toBe(2)
+    expect(next.staticRows).toBe(2)
+    expect(next.cells!.length).toBe(5) // 2 表头 + 1 数据样例 + 2 静态尾
+    // DT1 仍在 cells[2]，字段保留
+    expect(next.cells![2]![1]!.segments).toEqual([{ kind: 'field', path: 'name' }])
+    // 新表头行 cells[1] 用列标题兜底
+    expect(next.cells![1]![0]!.segments).toEqual([{ kind: 'text', value: '序号' }])
+    // 原静态尾行 cells[3]、新静态尾行 cells[4] 都是空对象
+    expect(next.cells![3]![0]).toEqual({})
+    expect(next.cells![4]![0]).toEqual({})
+  })
+
+  it('setGridRows 布局网格 +正文行数：原正文保留在头部，新正文追加在主体末尾', () => {
+    const t = ensureCells(baseTable({ designRows: 2 }))
+    t.cells![0]![0] = { segments: [{ kind: 'text', value: 'H0' }] }
+    t.cells![1]![0] = { segments: [{ kind: 'text', value: 'B0' }] }
+    t.cells![2]![0] = { segments: [{ kind: 'text', value: 'B1' }] }
+    const next = setGridRows(t, { designRows: 4 })
+    expect(next.cells!.length).toBe(5) // 1 表头 + 4 正文
+    expect(next.cells![0]![0]!.segments).toEqual([{ kind: 'text', value: 'H0' }])
+    expect(next.cells![1]![0]!.segments).toEqual([{ kind: 'text', value: 'B0' }])
+    expect(next.cells![2]![0]!.segments).toEqual([{ kind: 'text', value: 'B1' }])
+    expect(next.cells![3]![0]).toEqual({}) // 新正文行（追加在主体末尾）
+    expect(next.cells![4]![0]).toEqual({})
+  })
+
+  it('setGridRows 布局网格 +表头行数：保留正文，新增表头行用列标题兜底', () => {
+    const t = ensureCells(baseTable({ designRows: 2 }))
+    // headerRows=1（默认）, cells=[H0, B0, B1]
+    t.cells![1]![0] = { segments: [{ kind: 'text', value: 'CUSTOM-B0' }] }
+    const next = setGridRows(t, { headerRows: 3 })
+    expect(next.headerRows).toBe(3)
+    expect(next.cells!.length).toBe(5) // 3 表头 + 2 正文
+    // 新增的两个表头行用列标题兜底
+    expect(next.cells![1]![0]!.segments).toEqual([{ kind: 'text', value: '序号' }])
+    expect(next.cells![2]![0]!.segments).toEqual([{ kind: 'text', value: '序号' }])
+    // 原正文保留（位置不变，只是下移）
+    expect(next.cells![3]![0]!.segments).toEqual([{ kind: 'text', value: 'CUSTOM-B0' }])
   })
 
   it('addTableColumn：列与每行单元格同步增加，新列表头默认填标题', () => {
@@ -329,7 +420,7 @@ describe('网格结构变更（#100）', () => {
     const next = addTableColumn(t, { title: '新列', width: 20 })
     expect(next.columns.length).toBe(4)
     expect(next.cells!.every((r) => r.length === 4)).toBe(true)
-    expect(next.cells![0]![3]!.text).toBe('新列') // 表头新列取标题
+    expect(next.cells![0]![3]!.segments).toEqual([{ kind: 'text', value: '新列' }]) // 表头新列取标题
   })
 
   it('addTableColumn：新列自动生成稳定 id（vMerge / 列配置靠 id 引用）', () => {
@@ -340,13 +431,13 @@ describe('网格结构变更（#100）', () => {
 
   it('removeTableColumn：删除指定列（含对应单元格），至少留 1 列', () => {
     const t = ensureCells(baseTable({ designRows: 2 }))
-    t.cells![0]![1] = { text: 'B-col1' }
+    t.cells![0]![1] = { segments: [{ kind: 'text', value: 'B-col1' }] }
     const next = removeTableColumn(t, 1)
     expect(next.columns.length).toBe(2)
     expect(next.cells!.every((r) => r.length === 2)).toBe(true)
     expect(next.columns[0]!.title).toBe('序号')
     expect(next.columns[1]!.title).toBe('数量') // 原第 2 列（数量）左移
-    expect(next.cells![0]![1]!.text).toBe('数量') // 单元格同步左移
+    expect(next.cells![0]![1]!.segments).toEqual([{ kind: 'text', value: '数量' }]) // 单元格同步左移
   })
 
   it('removeTableColumn：被删列若在 vMerge.columns 里 → 自动剔除（不留 stale id）', () => {
@@ -370,7 +461,7 @@ describe('网格结构变更（#100）', () => {
 
   it('removeTableRow：删除指定行（含对应单元格），至少留 1 行', () => {
     const t = ensureCells(baseTable({ designRows: 3 }))
-    t.cells![2]![0] = { text: '第三行' }
+    t.cells![2]![0] = { segments: [{ kind: 'text', value: '第三行' }] }
     const next = removeTableRow(t, 2)
     const grid = buildDesignGrid(next)
     expect(grid.rowCount).toBe(3) // 4 行 - 1
@@ -406,17 +497,106 @@ describe('网格结构变更（#100）', () => {
     const t = ensureCells(baseTable({ designRows: 2 }))
     const next = moveTableColumn(t, 0, 2)
     expect(next.columns[2]!.title).toBe('序号')
-    expect(next.cells![0]![2]!.text).toBe('序号') // 单元格同列位置搬动
-    expect(next.cells![0]![0]!.text).toBe('名称')
+    expect(next.cells![0]![2]!.segments).toEqual([{ kind: 'text', value: '序号' }]) // 单元格同列位置搬动
+    expect(next.cells![0]![0]!.segments).toEqual([{ kind: 'text', value: '名称' }])
+  })
+
+  /* ============= insertTableRow 三段语义：表头 / 数据样例 / 静态尾 ============= */
+  // 历史上数据表下 insertTableRow 粗暴地把 atRow 夹到 headerRows+1 之后——
+  // 用户右键表头行调用"上下插入行"也被夹到数据样例行下面，违反直觉。
+  // 修复后按 OLD 语义分三段：表头区插入 → headerRows+1；数据样例行 → 夹到静态尾行；
+  // 静态尾行区插入 → staticRows+1。
+
+  it('insertTableRow 数据表 +表头行下方插入：新行变表头，headerRows+1，dataSample 字段不丢', () => {
+    const t = ensureCells(baseTable({ dataSource: 'items' }))
+    // t.headerRows=1, t.cells=[H0, DT1]
+    expect(t.cells![1]![1]!.segments).toEqual([{ kind: 'field', path: 'name' }]) // 修复前基线：DT1 字段确实存在
+
+    // 选中表头第 1 行（row=0），下方插入 → atRow=1，落在表头区
+    const next = insertTableRow(t, 1)
+    expect(next.headerRows).toBe(2)
+    expect(next.staticRows).toBe(0)
+    expect(next.cells!.length).toBe(3) // 2 表头 + 1 数据样例
+    // cells[2] 仍是原 DT1，字段绑定保留
+    expect(next.cells![2]![1]!.segments).toEqual([{ kind: 'field', path: 'name' }])
+    expect(next.cells![2]![2]!.segments).toEqual([{ kind: 'field', path: 'qty' }])
+    // 新表头行 cells[1] 用列标题兜底
+    expect(next.cells![1]![0]!.segments).toEqual([{ kind: 'text', value: '序号' }])
+    // 原表头行保留为 cells[0]
+    expect(next.cells![0]![0]!.segments).toEqual([{ kind: 'text', value: '序号' }])
+  })
+
+  it('insertTableRow 数据表 +表头行上方插入：新行变表头，headerRows+1', () => {
+    const t = ensureCells(baseTable({ dataSource: 'items' }))
+    // 选中表头第 1 行（row=0），上方插入 → atRow=0，落在表头区
+    const next = insertTableRow(t, 0)
+    expect(next.headerRows).toBe(2)
+    expect(next.cells!.length).toBe(3)
+    // 新表头行 cells[0]（用列标题兜底），原 H0 下移到 cells[1]
+    expect(next.cells![0]![0]!.segments).toEqual([{ kind: 'text', value: '序号' }])
+    // dataSample 仍在 cells[2]，字段保留
+    expect(next.cells![2]![1]!.segments).toEqual([{ kind: 'field', path: 'name' }])
+  })
+
+  it('insertTableRow 数据表 +atRow===headerRows（下方插入最后一行表头）：新行变表头，headerRows+1', () => {
+    const t = ensureCells(baseTable({ dataSource: 'items' }))
+    // 选中"下方插入" 表头最后一行（atRow=1 === headerRows）
+    // 按统一规则 atRow<=headerRows → 新行变表头，避免用户视觉上"插到数据行下面"
+    const next = insertTableRow(t, 1)
+    expect(next.headerRows).toBe(2)
+    expect(next.staticRows).toBe(0) // 不动
+    expect(next.cells!.length).toBe(3) // 2 表头 + 1 dataSample
+    // dataSample 仍在 cells[2]，字段未丢（关键回归）
+    expect(next.cells![2]![1]!.segments).toEqual([{ kind: 'field', path: 'name' }])
+    // 新表头行 cells[1] 用列标题兜底
+    expect(next.cells![1]![0]!.segments).toEqual([{ kind: 'text', value: '序号' }])
+  })
+
+  it('insertTableRow 数据表 +数据样例行下方插入（atRow===headerRows+1）：落入静态尾行区', () => {
+    const t = ensureCells(baseTable({ dataSource: 'items', staticRows: 1 }))
+    // cells=[H0, DT1, S0]，选中数据样例行下方 → atRow=2
+    const next = insertTableRow(t, 2)
+    expect(next.headerRows).toBe(1)
+    expect(next.staticRows).toBe(2)
+    expect(next.cells!.length).toBe(4) // 1 表头 + 1 dataSample + 2 静态尾
+    // dataSample 仍在 cells[1]，字段保留
+    expect(next.cells![1]![1]!.segments).toEqual([{ kind: 'field', path: 'name' }])
+    // 原静态尾行 S0 下移到 cells[2]，新空白行 cells[3]
+    expect(next.cells![3]![0]).toEqual({})
+  })
+
+  it('insertTableRow 数据表 +静态尾行上方插入：staticRows+1，原内容保留', () => {
+    const t = ensureCells(baseTable({ dataSource: 'items', staticRows: 1 }))
+    // cells=[H0, DT1, S0]，选中静态尾行（row=2）上方插入 → atRow=2
+    const next = insertTableRow(t, 2)
+    expect(next.headerRows).toBe(1)
+    expect(next.staticRows).toBe(2)
+    expect(next.cells!.length).toBe(4)
+    // dataSample 仍在 cells[1]，字段保留
+    expect(next.cells![1]![1]!.segments).toEqual([{ kind: 'field', path: 'name' }])
+    // 原静态尾行 S0 下移到 cells[2]
+    expect(next.cells![3]![0]).toEqual({}) // 新空白行（插入位置 = atRow）
+  })
+
+  it('insertTableRow 布局网格：直接插入正文区，designRows+1', () => {
+    const t = ensureCells(baseTable({ designRows: 2 }))
+    t.cells![0]![0] = { segments: [{ kind: 'text', value: 'H0' }] }
+    t.cells![1]![0] = { segments: [{ kind: 'text', value: 'B0' }] }
+    const next = insertTableRow(t, 1) // 选中 H0，下方插入
+    expect(next.designRows).toBe(3)
+    expect(next.cells!.length).toBe(4) // 1 表头 + 3 正文
+    expect(next.cells![0]![0]!.segments).toEqual([{ kind: 'text', value: 'H0' }]) // 表头保留
+    expect(next.cells![1]![0]).toEqual({}) // 新正文行（默认空）
+    expect(next.cells![2]![0]!.segments).toEqual([{ kind: 'text', value: 'B0' }]) // 原 B0 下移
   })
 
   /* ============= Bug12 修复：布局网格 designRows 显式设为 0 时实际渲染 0 行正文 ============= */
   it('Bug12：布局网格 designRows=0 → 画布无正文行（修复前因 Math.max(1,...) 多出 1 行空白）', () => {
     // 1) 起手：1 表头 + 6 正文的布局网格（用户已填大量内容）
     const t = ensureCells(baseTable({ designRows: 6 }))
-    t.cells![0]![0] = { text: 'H0' }
-    t.cells![1]![0] = { text: 'B0' }
-    t.cells![2]![0] = { text: 'B1' }
+    t.cells![0]![0] = { segments: [{ kind: 'text', value: 'H0' }] }
+    t.cells![1]![0] = { segments: [{ kind: 'text', value: 'B0' }] }
+    t.cells![2]![0] = { segments: [{ kind: 'text', value: 'B1' }] }
     expect(t.cells!.length).toBe(7) // 1 表头 + 6 正文
 
     // 2) 用户把 designRows 显式设为 0
@@ -429,7 +609,7 @@ describe('网格结构变更（#100）', () => {
     expect(grid.designRows).toBe(0)
     expect(grid.rowCount).toBe(grid.headerRows + 0 + grid.staticRows)
     // 用户填的表头内容仍在；正文 6 行全部消失
-    expect(grid.cells[0]![0]!.text).toBe('H0')
+    expect(grid.cells[0]![0]!.segments).toEqual([{ kind: 'text', value: 'H0' }])
     expect(grid.cells.length).toBe(grid.headerRows)
   })
 
