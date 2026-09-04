@@ -408,7 +408,6 @@ function deleteCol(): void {
 <template>
   <div
     class="op-cell-toolbar"
-    :style="{ left: `${x}px`, top: `${y}px` }"
     @mousedown.stop
     @dblclick.stop
   >
@@ -755,12 +754,13 @@ function deleteCol(): void {
 
 <style scoped>
 .op-cell-toolbar {
-  position: absolute;
-  /* ★ 改：原 translateY(-100%) translateY(-8px) 把工具栏推到 td 顶部上方（跟点击位置走）。
-     现在锚点是 layer 底部居中点（由 TableViewLayer.syncToolbarPos 提供），
-     translateX(-50%) 让工具栏向左推自身宽度一半（水平居中），
-     translateY(-12px) 与底部留 12px 视觉间距。 */
-  transform: translateX(-50%) translateY(-12px);
+  /* ★ 改 fixed 定位：工具栏锚到 viewport（屏幕）底部居中，不再跟 canvas 几何走。
+     这样无论画布缩放/平移到哪，工具栏始终在屏幕可视区域内。
+     用户可滚动画布避开被覆盖的底部内容（按用户决策：允许覆盖）。 */
+  position: fixed;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
   pointer-events: auto;
   z-index: 30;
 }
