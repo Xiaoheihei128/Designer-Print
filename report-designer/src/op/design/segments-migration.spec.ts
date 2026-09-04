@@ -170,4 +170,30 @@ describe('rebuildSegmentsFromCell —— 画布→三态输入框反向同步', 
     expect(next.segments).toEqual([{ kind: 'field', path: 'newPath' }])
     expect(next.field).toBeUndefined()
   })
+
+  it('★ 序列化幂等：segments 与 cell 字段一致时严格返回原引用（防止 migrate 循环）', () => {
+    // 这是 CellToolbar.vue:286 判定 `rebuilt === c` 的依赖：
+    // 若 rebuildSegmentsFromCell 每次都返回新对象，watch(migrate) 会无限循环 emit。
+    const cell: TableCell = { segments: [{ kind: 'text', value: 'hello' }] }
+    const result = rebuildSegmentsFromCell(cell)
+    expect(result).toBe(cell)
+  })
+
+  it('★ 反向同步：cell.field="x" + segments 已经是 [field x] → 幂等', () => {
+    // cellFromColumn 写入 segments=[{field:'x'}] 后又显式补 cell.field='x'（mirror）
+    // → rebuildSegmentsFromCell 必须识别为「已同步」，返回原引用
+    const cell: TableCell = {
+      field: 'x',
+      segments: [{ kind: 'field', path: 'x' }],
+    }
+    expect(rebuildSegmentsFromCell(cell)).toBe(cell)
+  })
+
+  it('★ 反向同步：cell.text="hi" + segments 已经是 [text hi] → 幂等', () => {
+    const cell: TableCell = {
+      text: 'hi',
+      segments: [{ kind: 'text', value: 'hi' }],
+    }
+    expect(rebuildSegmentsFromCell(cell)).toBe(cell)
+  })
 })
