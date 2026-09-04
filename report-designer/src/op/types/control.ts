@@ -230,9 +230,19 @@ export interface TableColumn {
  */
 export interface TableCell {
   /**
-   * 内容片段数组（v2 模型）。配置后优先于 text/field/expression 渲染，
-   * 缺失时渲染端按 contentType/legacy 字段启发式回退。
-   * 与 text/field/expression 可共存（互为镜像）。
+   * 内容片段数组（v2 模型，单一真实源）。
+   *
+   * ★ Plan B 单源化后，cell 的内容渲染**唯一**以 segments 为准；老字段
+   * （text/field/expression/contentType）已 `@deprecated`，仅作为 lazy
+   * 迁移入口和聚合 token（`{{#xxx}}`）识别保留。
+   *
+   * 写回：所有写入路径（patchCellText / cellFromColumn / seedSummaryTail /
+   * 三态 emit / bindFieldToCell）一律写 segments + 清老字段。
+   * 读取：渲染端（dataCellText / staticCellText / parseAggTokenFromCell）
+   * 只读 segments；不再有老字段 fallback。
+   * 反向同步：rebuildSegmentsFromCell 在 CellToolbar.effectiveCell 内
+   * 按「最新 cell 字段」重新派生，保证画布 contentEditable 改文本后
+   * ContentValueEditor 立即看到新 segments。
    */
   segments?: Segment[]
   /**
@@ -240,14 +250,40 @@ export interface TableCell {
    * - 'fixed'      固定文字（text）
    * - 'variable'   字段绑定（field 路径）
    * - 'expression' 表达式（expression，支持 {{...}} / 内置函数）
-   * 老模板无此字段时，渲染端按 expression > field > text 启发式回退（见 table-engine.cellTextMode）。
+   *
+   * ★ Plan B：仅作为 CellToolbar 3 态 radio 的 UI 状态保留；segments 已是显示的
+   * 单一真实源（cellMode 派生优先级：segments > contentType > legacy 字段启发式）。
+   * 新代码不应写入此字段——segments 已覆盖。
+   *
+   * @deprecated 单源 segments 后不再作为权威；保留仅供老 schema lazy 迁移读取
    */
   contentType?: 'fixed' | 'variable' | 'expression'
-  /** 静态文字（无数据时显示 / 设计期占位） */
+  /**
+   * 静态文字（无数据时显示 / 设计期占位）
+   *
+   * ★ Plan B：segments 单源化后，新代码不应再写此字段；保留仅供老 schema
+   * 通过 rebuildSegmentsFromCell 触发 lazy 迁移。聚合 token `{{#xxx}}` 是例外——
+   * buildFooterRow 直接读 cell.text 识别 token，所以保留 text 字段以便聚合识别。
+   *
+   * @deprecated 单源 segments 后不再写入；保留仅供老 schema lazy 迁移 + 聚合 token 识别
+   */
   text?: string
-  /** 字段绑定路径（数据源数组元素的字段），优先级高于 text */
+  /**
+   * 字段绑定路径（数据源数组元素的字段），优先级高于 text
+   *
+   * ★ Plan B：segments 已覆盖。聚合 token `{{#xxx}}` 不走 field；正常 field 段
+   * 已被 segments 取代。
+   *
+   * @deprecated 单源 segments 后不再写入；保留仅供老 schema lazy 迁移读取
+   */
   field?: string
-  /** 行表达式，如 "{{row.price * row.qty}}" */
+  /**
+   * 行表达式，如 "{{row.price * row.qty}}"
+   *
+   * ★ Plan B：segments 已覆盖。expression 段已被 segments 取代。
+   *
+   * @deprecated 单源 segments 后不再写入；保留仅供老 schema lazy 迁移读取
+   */
   expression?: string
   /** 单元格样式（覆盖列 / 表格默认样式） */
   style?: TableCellStyle
@@ -300,7 +336,7 @@ export interface TableOptions {
    * - { min: number }  每页至少 N 行（不含表头/表尾）
    * 与 pageRows 互斥；同时设置时 pageRows 优先，warning 'PAGE_ROWS_CONFLICT'。
    */
-  fixBottomRows?: 'off' | 'fill' | { min: number }
+  fixBottomRows?: 'off' | 'fill' | { count: number }
   /** 离页底留白（mm，仅 fixBottomRows='fill' 生效；默认 0；银行回单建议 5-10） */
   fixBottomMargin?: number
   /** 多单合并打印（默认 false，§9.2.1a） */
