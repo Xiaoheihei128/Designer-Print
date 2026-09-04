@@ -756,7 +756,11 @@ function deleteCol(): void {
 <style scoped>
 .op-cell-toolbar {
   position: absolute;
-  transform: translateY(-100%) translateY(-8px);
+  /* ★ 改：原 translateY(-100%) translateY(-8px) 把工具栏推到 td 顶部上方（跟点击位置走）。
+     现在锚点是 layer 底部居中点（由 TableViewLayer.syncToolbarPos 提供），
+     translateX(-50%) 让工具栏向左推自身宽度一半（水平居中），
+     translateY(-12px) 与底部留 12px 视觉间距。 */
+  transform: translateX(-50%) translateY(-12px);
   pointer-events: auto;
   z-index: 30;
 }

@@ -233,15 +233,13 @@ function syncToolbarPos(): void {
     toolbarPos.value = null
     return
   }
-  const td = tdOf(e.controlId, e.row, e.col)
-  if (!td) {
-    toolbarPos.value = null
-    return
-  }
-  const a = td.getBoundingClientRect()
   const b = root.getBoundingClientRect()
-  toolbarPos.value = { x: a.left - b.left, y: a.top - b.top }
-  // 行名标签：锚定到当前行首列左侧
+  // ★ 改造：工具栏固定在画布底部水平居中（不跟点击位置走），切单元格时位置不变
+  //   x = layer 水平中心，y = layer 底部 - 12px（作为 CellToolbar CSS transform 锚点）
+  //   CellToolbar 内部 transform: translateX(-50%) translateY(-12px) 把工具栏向左推
+  //   自身宽度的一半、向上推 12px，最终呈现"底部水平居中 + 12px 留白"。
+  toolbarPos.value = { x: b.width / 2, y: b.height - 12 }
+  // 行名标签：按用户决策仍锚定到当前行首列左侧（保留原行为，不动）
   const firstTd = tdOf(e.controlId, e.row, 0)
   if (firstTd) {
     const fa = firstTd.getBoundingClientRect()
