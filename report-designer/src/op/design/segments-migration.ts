@@ -99,3 +99,67 @@ export function ensureSegments<T extends TriStateControl>(control: T): T {
   const next = { ...control, segments: segs } as T
   return sameLegacy(control, next) ? control : next
 }
+
+/**
+ * 永远按"最新 cell 字段"派生 segments —— 修复画布→三态输入框反向同步。
+ *
+ * 与 ensureSegments 的核心区别：
+ * - ensureSegments：仅当 segments 缺失时派生（lazy migration）；
+ * - rebuildSegmentsFromCell：在 segments 已存在时也重新比对，防止
+ *   "segments 与老字段（text/field/expression）漂移"导致 UI 看不到最新状态。
+ *
+ * 触发场景：用户在画布上用 contentEditable 改完文本，patchCellText 写了 cell.text
+ * 但 segments 仍是老值。effectiveCell 通过本函数重派生 → ContentValueEditor
+ * 拿到的 segments prop 自动更新（画布→输入框的反向同步）。
+ *
+ * 不变式：
+ * - 聚合 token `{{#xxx}}` 永远不动（buildFooterRow 直接读 cell.text）
+ * - 派生失败（无 contentType 且无任何字段）→ 原值
+ * - 序列化比对幂等：segments 已是当前 cell 字段的精确表达 → 返回原引用
+ * - 派生值与当前 segments 不一致 → 返回新对象，**清空老字段**避免双源并存
+ *
+ * 注意：本函数只做"派生"，不写回。写回由 caller（CellToolbar.watch(migrate)）触发。
+ */
+export function rebuildSegmentsFromCell<T extends TriStateControl>(c: T): T {
+  // 1) agg-token 永远不动
+  if ('text' in c && isAggToken((c as { text?: string }).text)) return c
+
+  // 2) 派生 legacy segments（与 ensureSegments 同款 type 分派）
+  const type = (() => {
+    if ('type' in c) {
+      const t = (c as { type: string }).type
+      if (t === 'barcode' || t === 'qrcode') return t as 'barcode' | 'qrcode'
+      if (t === 'text') return 'text' as const
+    }
+    return 'cell' as const
+  })()
+
+  const segs = legacyToSegments({
+    type,
+    value: 'value' in c ? (c as { value?: string }).value : undefined,
+    text: 'text' in c ? (c as { text?: string }).text : undefined,
+    binding: 'binding' in c ? (c as { binding?: string }).binding : undefined,
+    field: 'field' in c ? (c as { field?: string }).field : undefined,
+    expression: 'expression' in c ? (c as { expression?: string }).expression : undefined,
+    contentType: (c as { contentType?: 'fixed' | 'variable' | 'expression' }).contentType,
+  })
+
+  // 3) 派生失败（无可迁移内容）→ 原值
+  if (!segs) return c
+
+  // 4) 序列化比对：segments 已是当前 cell 字段的精确表达 → 幂等返回
+  if (Array.isArray(c.segments) && JSON.stringify(c.segments) === JSON.stringify(segs)) {
+    return c
+  }
+
+  // 5) 漂移或缺失：重建 segments + 清空老字段（避免 segments 与老字段双源并存）
+  return {
+    ...c,
+    segments: segs,
+    text: undefined,
+    field: undefined,
+    expression: undefined,
+    binding: undefined,
+    value: undefined,
+  } as T
+}

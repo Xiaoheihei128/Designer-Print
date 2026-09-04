@@ -38,9 +38,10 @@ import {
 import { FONT_CATALOG } from '@op/core/fonts/catalog'
 import { useSystemFonts } from '@op/core/fonts/system'
 import { useFieldCatalogStore } from '@op/design/stores/fieldCatalog'
+import { useUiStore } from '@op/design/stores/ui'
 import ContentValueEditor from '@op/design/panels/props/ContentValueEditor.vue'
 import type { ContentMode } from '@op/design/panels/props/ContentValueEditor.vue'
-import { ensureSegments } from '@op/design/segments-migration'
+import { rebuildSegmentsFromCell } from '@op/design/segments-migration'
 import {
   formatKindOptions,
   datePatternOptions,
@@ -73,6 +74,19 @@ const emit = defineEmits<{
 }>()
 
 const ds = useFieldCatalogStore()
+const uiStore = useUiStore()
+/** 打开右侧"表格属性快速面板"，整个属性区会被替换为精简版 4-tab 面板 */
+function openTableProps(): void {
+  uiStore.openTableQuickPanel()
+}
+/**
+ * × 关闭按钮：仅通知父组件关闭工具栏，**不联动**关闭快速面板。
+ * 用户决策：CellToolbar 与快速面板关闭独立——关闭工具栏后用户仍可继续在
+ * 快速面板上操作列配置 / 默认样式，避免点击右栏时误触发工具栏关闭。
+ */
+function closeToolbar(): void {
+  emit('close')
+}
 
 const grid = computed(() => buildDesignGrid(props.control))
 const cell = computed<TableCell>(() => grid.value.cells[props.row]?.[props.col] ?? {})
@@ -82,10 +96,16 @@ const cell = computed<TableCell>(() => grid.value.cells[props.row]?.[props.col] 
  * ContentValueEditor 的 segments 是 undefined，segmentsToText 返回空 → textarea 空白，
  * 与画布 placeholderOf(cell.field) 显示的 {{item.X}} 不一致。
  *
- * 这里同步跑一次 ensureSegments，把"应渲染的 segments"在本次渲染就交给编辑器，
+ * 这里同步跑一次 rebuildSegmentsFromCell，把"应渲染的 segments"在本次渲染就交给编辑器，
  * 画布反向同步链路里的 watch(migrate) 继续负责把 segments 写回 store（保持单一数据源）。
+ *
+ * ★ Plan B 改造：rebuildSegmentsFromCell 与 ensureSegments 关键区别 —— 前者在
+ *   segments 已存在时也按"最新 cell 字段"重新派生并清老字段。这是修复画布→三态输入框
+ *   反向同步的核心：用户用 contentEditable 改完文本后，patchCellText 写了 cell.text
+ *   但 segments 还是旧值，rebuildSegmentsFromCell 会在本次渲染就重派生，ContentValueEditor
+ *   立即拿到新 segments prop。
  */
-const effectiveCell = computed<TableCell>(() => ensureSegments(cell.value))
+const effectiveCell = computed<TableCell>(() => rebuildSegmentsFromCell(cell.value))
 const column = computed(() => props.control.columns[props.col])
 const style = computed<TableCellStyle>(() => resolveCellStyle(props.control, column.value, effectiveCell.value))
 
@@ -256,15 +276,32 @@ function onCellSegments(s: SegmentT[]): void {
   emit('apply', patchCell(props.control, props.row, props.col, { segments: s }))
 }
 
-/** 工具栏打开/控件变化时调 ensureSegments —— 老 schema 一次性 lazy 迁移（emit migrate → silent） */
+/** 工具栏打开/控件变化时调 rebuildSegmentsFromCell —— 一次写回 segments 并清老字段
+ *
+ * ★ Plan B 改造：原 ensureSegments 只在 segments 缺失时迁移；现 rebuildSegmentsFromCell
+ *   在 segments 与老字段漂移时也会重新派生并 emit migrate，保证 store 在任何编辑入口
+ *   （含画布 contentEditable 改文本）后都收敛到 v2 segments 单源。
+ *
+ *   emit 路径走 TableViewLayer 的 updateControlSilent（不进 undo 栈、不标 dirty），
+ *   同时 segments 写回后会触发表格重排、cellMode 切换等链式响应。
+ */
 watch(
   () => cell.value,
   (c) => {
     if (!c) return
-    const next = ensureSegments(c)
-    if (next !== c) {
-      emit('migrate', patchCell(props.control, props.row, props.col, { segments: next.segments }))
-    }
+    const rebuilt = rebuildSegmentsFromCell(c)
+    if (rebuilt === c) return // 幂等：segments 已是 cell 字段的精确表达
+    emit(
+      'migrate',
+      patchCell(props.control, props.row, props.col, {
+        segments: rebuilt.segments,
+        text: undefined,
+        field: undefined,
+        expression: undefined,
+        binding: undefined,
+        value: undefined,
+      }),
+    )
   },
   { immediate: true },
 )
@@ -652,7 +689,7 @@ function deleteCol(): void {
           删除本列
         </NTooltip>
 
-        <NButton size="tiny" quaternary @click="emit('close')">
+        <NButton size="tiny" quaternary @click="closeToolbar">
           <span class="i-carbon-close" />
         </NButton>
       </div>
@@ -709,6 +746,15 @@ function deleteCol(): void {
             @update:value="(v: boolean) => applyFormat({ ...cellFormat!, thousands: v })"
           />
         </template>
+      </div>
+
+      <!-- 顶部新加一行：表格属性快速面板入口（独立 row 不挤占格式操作） -->
+      <div class="op-cell-toolbar__row">
+        <span class="op-cell-toolbar__tag">表格</span>
+        <NButton size="tiny" quaternary title="打开表格属性快速面板" @click="openTableProps">
+          <template #icon><span class="i-carbon-settings" /></template>
+          表格属性
+        </NButton>
       </div>
     </div>
   </div>

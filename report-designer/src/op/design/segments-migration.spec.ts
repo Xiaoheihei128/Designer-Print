@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { TableCell } from '@op/types/control'
 
-import { ensureSegments } from '@op/design/segments-migration'
+import { ensureSegments, rebuildSegmentsFromCell } from '@op/design/segments-migration'
 
 describe('ensureSegments lazy migration', () => {
   it('cell: text 含 {{...}} 混合内容 → segments 正确生成（保留前后缀）', () => {
@@ -94,5 +94,80 @@ describe('ensureSegments lazy migration', () => {
     // 防止空 cell 被错误地写出 [{kind:'text', value:''}] 占位 segments，触发 UI 误切到 segments 模式
     const cell: TableCell = {}
     expect(ensureSegments(cell)).toBe(cell)
+  })
+})
+
+describe('rebuildSegmentsFromCell —— 画布→三态输入框反向同步', () => {
+  it('★ 反向同步：cell.text 改动 + segments 已存在且与派生值一致 → 幂等返回原引用', () => {
+    // 用户在画布 contentEditable 把 'old' 改成 'new'：
+    //   - patchCellText 写了 cell.text='new'，但 segments 还是旧的 [{text:'old'}]
+    //   - rebuildSegmentsFromCell 按"最新 cell 字段"重新派生
+    //   - 新派生 = legacyToSegments({text:'new'}) = [{text:'new'}]
+    //   - 当前 segments = [{text:'old'}] → 序列化不一致 → 返回新 cell
+    // 验证：派生值与新 text 一致，老字段被清空
+    const cell: TableCell = { text: 'new', segments: [{ kind: 'text', value: 'old' }] }
+    const next = rebuildSegmentsFromCell(cell)
+    expect(next).not.toBe(cell)
+    expect(next.segments).toEqual([{ kind: 'text', value: 'new' }])
+    expect(next.text).toBeUndefined()
+  })
+
+  it('★ 反向同步：segments 与 cell 字段一致 → 幂等返回原引用（不 emit migrate）', () => {
+    // 场景：用户画布改完文本后 watch migrate 已写回 segments，下次再触发时不应再 emit
+    const cell: TableCell = { segments: [{ kind: 'text', value: 'hello' }] }
+    expect(rebuildSegmentsFromCell(cell)).toBe(cell)
+  })
+
+  it('★ 反向同步：cell.field 改动 → 重建 segments 为 field 段并清空 cell.field', () => {
+    // 用户从画布上把绑定的字段从 a 改到 b（path），segments 尚未更新
+    const cell: TableCell = { field: 'b', segments: [{ kind: 'field', path: 'a' }] }
+    const next = rebuildSegmentsFromCell(cell)
+    expect(next.segments).toEqual([{ kind: 'field', path: 'b' }])
+    expect(next.field).toBeUndefined()
+  })
+
+  it('★ 反向同步：cell 完全空 + segments 已有占位 → 派生失败 → 返回原引用', () => {
+    // 防止清空文本后 rebuild 把 segments 也清空（segments 由 caller 通过 patchCell 控制）
+    const cell: TableCell = { segments: [] }
+    expect(rebuildSegmentsFromCell(cell)).toBe(cell)
+  })
+
+  it('★ 老 schema lazy migration：cell.text="hello" + segments undefined → 派生 + 清 text', () => {
+    // 这条用例与 ensureSegments 行为对齐：rebuildSegmentsFromCell 也承担 lazy 迁移职责
+    const cell: TableCell = { text: 'hello' }
+    const next = rebuildSegmentsFromCell(cell)
+    expect(next.segments).toEqual([{ kind: 'text', value: 'hello' }])
+    expect(next.text).toBeUndefined()
+  })
+
+  it('★ 老 schema：cell.field="items[].name" + segments undefined → 派生为 field 段', () => {
+    const cell: TableCell = { field: 'items[].name' }
+    const next = rebuildSegmentsFromCell(cell)
+    expect(next.segments).toEqual([{ kind: 'field', path: 'items[].name' }])
+    expect(next.field).toBeUndefined()
+  })
+
+  it('★ 反向同步：聚合 token cell.text="{{#pageSum}}" → 永远不动', () => {
+    // buildFooterRow 直接读 cell.text，移动 segments 会破坏聚合识别
+    const cell: TableCell = { text: '{{#pageSum}}' }
+    expect(rebuildSegmentsFromCell(cell)).toBe(cell)
+  })
+
+  it('★ 反向同步：混合内容 cell.text="{{x}} kg" + segments 漂移 → 重建为 [expr, text]', () => {
+    // 用户在画布上把"a kg"改成 "{{x}}kg"这种混合内容，segments 应保持前缀/后缀切分
+    const cell: TableCell = { text: '{{x}} kg', segments: [{ kind: 'text', value: 'old' }] }
+    const next = rebuildSegmentsFromCell(cell)
+    expect(next.segments).toEqual([
+      { kind: 'expr', src: 'x' },
+      { kind: 'text', value: ' kg' },
+    ])
+    expect(next.text).toBeUndefined()
+  })
+
+  it('★ 反向同步：cell.contentType=variable + cell.field 改路径 → 派生优先用 field（contentType 只是 UI 状态）', () => {
+    const cell: TableCell = { contentType: 'variable', field: 'newPath', segments: [{ kind: 'field', path: 'oldPath' }] }
+    const next = rebuildSegmentsFromCell(cell)
+    expect(next.segments).toEqual([{ kind: 'field', path: 'newPath' }])
+    expect(next.field).toBeUndefined()
   })
 })
