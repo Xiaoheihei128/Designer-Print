@@ -366,6 +366,18 @@ html, body {
    二维码保留默认 contain（100%×100% meet）居中。 */
 .op-code > svg { display: block; width: 100%; height: 100%; }
 
+/* ★ 段级形态容器（cell 内嵌的 svg/img）：
+   - 容器是 <span> 默认 display:inline → inline 元素忽略 width/height 样式，
+     SVG 用 viewBox 原始尺寸渲染，撑爆 cell，行被 CSS overflow:hidden 切。
+   - 改 inline-block:让 height/width 样式生效,SVG 内的 100% 才有计算基。
+   - max-width:100% + vertical-align:middle:与同行文字基线对齐,混排场景(文字+二维码段)不跑版。 */
+.op-code-seg, .op-image-seg {
+  display: inline-block;
+  vertical-align: middle;
+  max-width: 100%;
+}
+.op-code-seg > svg { display: block; width: 100%; height: 100%; }
+
 .op-line > span {
   position: absolute;
   display: block;

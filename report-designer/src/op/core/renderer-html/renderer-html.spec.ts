@@ -436,6 +436,15 @@ describe('renderer-html —— HTML 输出', () => {
       expect(html).toMatch(/<span class="op-code-seg"><svg><rect\/><\/svg><\/span>/)
     })
 
+    // ★ Bug 修复：段级 svg/image 容器必须是 inline-block,否则 height/width 样式
+    //   被 <span> 默认 display:inline 忽略,SVG 用 viewBox 原始尺寸渲染,撑爆 cell。
+    it('★ CSS 包含 .op-code-seg / .op-image-seg 设为 inline-block', async () => {
+      const result = await layout(template, makeData(5), { measurer })
+      const css = renderStyle(result, { screen: false })
+      expect(css).toMatch(/\.op-code-seg[\s\S]*?display\s*:\s*inline-block/)
+      expect(css).toMatch(/\.op-image-seg[\s\S]*?display\s*:\s*inline-block/)
+    })
+
     it('image part 输出 <img> 且 src/alt 走 escapeHtml', () => {
       const html = segTableHtml([
         {
