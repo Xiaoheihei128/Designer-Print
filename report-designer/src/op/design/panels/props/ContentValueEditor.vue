@@ -269,6 +269,16 @@ function onSegFormatSubChange(segIdx: number, patch: Partial<CellFormat>): void 
   emit('update:segmentFormat', segIdx, next)
 }
 
+/**
+ * 段预览文本。模板里不能用反引号 `${...}` 模板字符串(Vue 编译器不接受),
+ * 所以放在 script 里:text 段显示原值,field/expr 段显示 `{{path}}` 形式。
+ */
+function segPreview(seg: Segment): string {
+  if (seg.kind === 'text') return seg.value
+  if (seg.kind === 'field') return '{{' + seg.path + '}}'
+  return '{{' + seg.src + '}}'
+}
+
 /* ----------------------------- 字段 drop 入口 ----------------------------- */
 
 /**
@@ -509,7 +519,7 @@ function onExprConfirm(snippet: string): void {
           <NTag size="small" :bordered="false" :type="seg.kind === 'field' ? 'info' : seg.kind === 'expr' ? 'warning' : 'default'">
             {{ seg.kind }}
           </NTag>
-          <span class="seg-preview">{{ seg.kind === 'text' ? seg.value : seg.kind === 'field' ? `{{${seg.path}}}` : `{{${seg.src}}}` }}</span>
+          <span class="seg-preview">{{ segPreview(seg) }}</span>
 
           <template v-if="seg.kind === 'field' && !isAggToken(seg.path)">
             <NSelect
