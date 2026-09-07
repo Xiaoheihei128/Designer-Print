@@ -164,6 +164,19 @@ function onSegmentsChange(s: SegmentT[]): void {
   patch({ segments: s })
 }
 
+/**
+ * ★ Commit 7:段级 format 写回(field 段被选中段的下拉/子控件改 format 时)。
+ * 把 segments[segIdx].format 合并到当前 segments 数组,保持其他段不动。
+ */
+function onSegmentFormatChange(segIdx: number, format: CellFormat | undefined): void {
+  const cur = control.value?.segments
+  if (!cur) return
+  const next = cur.map((s, i) =>
+    i === segIdx && s.kind === 'field' ? { ...s, format } : s,
+  )
+  patch({ segments: next })
+}
+
 /** Properties Panel 打开/控件变化时调 ensureSegments —— 老 schema 一次性 lazy 迁移（不进 undo 栈） */
 watch(
   () => control.value,
@@ -194,11 +207,13 @@ watch(
       fixed-default="文本"
       binding-default="order.orderNo"
       :expression-default="'{{order.total}}'"
+      format-scope="text"
       @update:mode="onModeChange"
       @update:value="patch({ value: $event })"
       @update:binding="patch({ binding: $event })"
       @update:expression="patch({ expression: $event || undefined })"
       @update:segments="onSegmentsChange"
+      @update:segmentFormat="onSegmentFormatChange"
     />
 
     <div v-if="contentMode === 'variable'" class="props-section">

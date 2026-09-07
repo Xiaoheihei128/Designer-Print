@@ -6,7 +6,7 @@
  */
 import { computed, watch } from 'vue'
 import { NSelect, NSwitch } from 'naive-ui'
-import type { BarcodeControl, QrcodeControl, Segment as SegmentT } from '@op/types/control'
+import type { BarcodeControl, QrcodeControl, Segment as SegmentT, CellFormat } from '@op/types/control'
 import { useDesignerStore } from '@op/design/stores/designer'
 import ContentValueEditor from './ContentValueEditor.vue'
 import type { ContentMode } from './ContentValueEditor.vue'
@@ -65,6 +65,20 @@ function onSegmentsChange(s: SegmentT[]): void {
   patch({ segments: s })
 }
 
+/**
+ * ★ Commit 7:段级 format 写回 —— 控件级 CodeProps 接形态段不太常用(顶层控件本身就有 format 字段),
+ * 但 segments 内 field 段仍可附加形态(如混排「前缀 text + 字段 qrcode 段」)。
+ * 写回逻辑与 TextProps 一致:map segments,在 segIdx 字段段上合并 format。
+ */
+function onSegmentFormatChange(segIdx: number, format: CellFormat | undefined): void {
+  const cur = control.value?.segments
+  if (!cur) return
+  const next = cur.map((s, i) =>
+    i === segIdx && s.kind === 'field' ? { ...s, format } : s,
+  )
+  patch({ segments: next })
+}
+
 /** Properties Panel 打开/控件变化时调 ensureSegments —— 老 schema lazy 迁移（不进 undo 栈） */
 watch(
   () => control.value,
@@ -102,11 +116,13 @@ const barcodeFormats = [
       single-line
       binding-default="order.orderNo"
       :expression-default="'{{order.orderNo}}'"
+      format-scope="code"
       @update:mode="onModeChange"
       @update:value="patch({ value: $event || undefined })"
       @update:binding="patch({ binding: $event })"
       @update:expression="patch({ expression: $event || undefined })"
       @update:segments="onSegmentsChange"
+      @update:segmentFormat="onSegmentFormatChange"
     />
 
     <template v-if="isBarcode">

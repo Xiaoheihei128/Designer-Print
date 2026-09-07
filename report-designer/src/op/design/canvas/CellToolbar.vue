@@ -269,6 +269,20 @@ function onCellSegments(s: SegmentT[]): void {
   emit('apply', patchCell(props.control, props.row, props.col, { segments: s }))
 }
 
+/**
+ * ★ Commit 7:段级 format 写回 —— field 段的形态下拉 / 子控件触发。
+ * CellToolbar 这里是最常用的入口(单元格右键),用户给 {{order.qr}} 选「二维码」
+ * 走的就是这条路径。
+ */
+function onCellSegmentFormat(segIdx: number, format: CellFormat | undefined): void {
+  const cur = cell.value?.segments
+  if (!cur) return
+  const next = cur.map((s, i) =>
+    i === segIdx && s.kind === 'field' ? { ...s, format } : s,
+  )
+  emit('apply', patchCell(props.control, props.row, props.col, { segments: next }))
+}
+
 /** 工具栏打开/控件变化时调 rebuildSegmentsFromCell —— 一次写回 segments 并清老字段
  *
  * ★ Plan B 改造：原 ensureSegments 只在 segments 缺失时迁移；现 rebuildSegmentsFromCell
@@ -427,11 +441,13 @@ function deleteCol(): void {
           placeholder="单元格内容"
           :binding-default="bindingDefault"
           :expression-default="expressionDefault"
+          format-scope="cell"
           @update:mode="onCellMode"
           @update:value="onCellValue"
           @update:binding="onCellBinding"
           @update:expression="onCellExpression"
           @update:segments="onCellSegments"
+          @update:segmentFormat="onCellSegmentFormat"
         />
       </div>
 

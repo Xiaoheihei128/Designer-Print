@@ -19,7 +19,7 @@
  *   渲染层 resolveBinding 找不到 → 字段值丢了。
  */
 import { computed, ref, watch } from 'vue'
-import { NButton, NInput, NPopover, NRadioButton, NRadioGroup, NTag } from 'naive-ui'
+import { NButton, NInput, NPopover, NRadioButton, NRadioGroup, NSelect, NTag } from 'naive-ui'
 import type { CellFormat, Segment } from '@op/types/control'
 import { resolveSegments } from '@op/core/layout-engine/segments'
 import { isAggToken } from '@op/core/layout-engine/aggregate'
@@ -30,6 +30,17 @@ import ExpressionModal from './ExpressionModal.vue'
 import { isAutoMigratedFieldOnly } from './content-value-helpers'
 import { insertFieldAt } from './content-value-insert'
 import { DRAG_BINDING_KEY } from '@op/design/hooks/useDragAdd'
+import {
+  formatKindOptions,
+  makeFormat,
+  needsErrorLevel,
+  needsBcid,
+  needsBarcodeShowText,
+  needsFit,
+  barcodeBcidOptions,
+  qrErrorLevelOptions,
+  imageFitOptions,
+} from '@op/design/format-options'
 
 export type ContentMode = 'fixed' | 'variable' | 'expression'
 
@@ -65,6 +76,14 @@ const props = withDefaults(
     expressionDefault?: string
     /** segments 模式 textarea 行数（默认 3） */
     segmentsRows?: number
+    /**
+     * ★ 段级形态 scope —— 决定 formatKindOptions 显示哪些选项。
+     * - 'text': 仅 none/text(date/int/decimal/currency/percent)— TextProps 用
+     * - 'code': 仅 none/qrcode/barcode/image — CodeProps(已绑码控件)用
+     * - 'cell': 全部 — CellToolbar(单元格)用
+     * - 'all': 全部 — 默认(向后兼容)
+     */
+    formatScope?: 'text' | 'code' | 'cell' | 'all'
   }>(),
   {
     mode: undefined,
@@ -80,6 +99,7 @@ const props = withDefaults(
     bindingDefault: '',
     expressionDefault: '',
     segmentsRows: 3,
+    formatScope: 'all',
   },
 )
 
@@ -89,6 +109,8 @@ const emit = defineEmits<{
   (e: 'update:binding', v: string): void
   (e: 'update:expression', v: string): void
   (e: 'update:segments', v: Segment[]): void
+  /** ★ Commit 7:段级 format 写回(field 段被选中段的下拉/子控件改 format 时) */
+  (e: 'update:segmentFormat', segIdx: number, format: CellFormat | undefined): void
 }>()
 
 const varModalShow = ref(false)
@@ -193,6 +215,58 @@ function onSegmentsBlur(): void {
   // emit（segments + value + binding + expression），后者在 CellToolbar 中
   // 会因为 props.control 是上一次响应式快照而被后续 emit 用旧 segments
   // 覆盖，导致"清空 textarea 不生效"。
+}
+
+/* ------------------------------ 段列表 + 形态 ------------------------------ */
+
+/**
+ * 按 formatScope 过滤的 kind 下拉选项。
+ * - text scope:无形态形态段(text 段只 none)
+ * - code scope:仅形态段(qrcode/barcode/image)— 控件级 Barcode/Qrcode 用
+ * - cell / all:全部
+ */
+const scopedKindOptions = computed(() => {
+  const all = formatKindOptions
+  switch (props.formatScope) {
+    case 'text':
+      return all.filter((o) => o.value !== 'qrcode' && o.value !== 'barcode' && o.value !== 'image')
+    case 'code':
+      return all.filter(
+        (o) =>
+          o.value === 'none' ||
+          o.value === 'qrcode' ||
+          o.value === 'barcode' ||
+          o.value === 'image',
+      )
+    case 'cell':
+    case 'all':
+    default:
+      return all
+  }
+})
+
+/**
+ * 段级形态改写:
+ * 1) segIdx 下拉改 kind → 用 makeFormat(kind) 生成新 CellFormat(覆盖默认值)
+ *    然后 emit('update:segmentFormat', segIdx, format)
+ * 2) 子控件改 errorLevel / bcid / showText / fit → 合并写回
+ *
+ * 注意:emit 模式只发 (segIdx, format),由父组件写回 segments[i].format(不直接动 segments
+ * 数组引用,父组件可在自己 patch 上下文里合并)。
+ */
+function onSegFormatKindChange(segIdx: number, kind: CellFormat['kind']): void {
+  const cur = props.segments?.[segIdx]
+  if (!cur || cur.kind !== 'field') return
+  const next = makeFormat(kind)
+  emit('update:segmentFormat', segIdx, next)
+}
+
+function onSegFormatSubChange(segIdx: number, patch: Partial<CellFormat>): void {
+  const cur = props.segments?.[segIdx]
+  if (!cur || cur.kind !== 'field') return
+  const base = cur.format ?? { kind: 'none' as const }
+  const next: CellFormat = { ...base, ...patch }
+  emit('update:segmentFormat', segIdx, next)
 }
 
 /* ----------------------------- 字段 drop 入口 ----------------------------- */
@@ -419,6 +493,73 @@ function onExprConfirm(snippet: string): void {
         </NPopover>
         <span class="props-tip" v-if="segmentsPreview">预览：{{ segmentsPreview }}</span>
       </div>
+
+      <!-- ★ Commit 7:段列表 + 段级形态下拉。
+           每个段一行:序号 + 类型 chip(text/field/expr)+ 内容预览;
+           field 段右侧加形态下拉 + 子控件(errorLevel/bcid/fit)。
+           text 段不可改形态。
+           聚合 token(field path 含 #)→ 不改形态,跳过。 -->
+      <div v-if="props.segments && props.segments.length" class="seg-list mt-1">
+        <div
+          v-for="(seg, i) in props.segments"
+          :key="i"
+          class="seg-item"
+        >
+          <span class="seg-index">{{ i + 1 }}</span>
+          <NTag size="small" :bordered="false" :type="seg.kind === 'field' ? 'info' : seg.kind === 'expr' ? 'warning' : 'default'">
+            {{ seg.kind }}
+          </NTag>
+          <span class="seg-preview">{{ seg.kind === 'text' ? seg.value : seg.kind === 'field' ? `{{${seg.path}}}` : `{{${seg.src}}}` }}</span>
+
+          <template v-if="seg.kind === 'field' && !isAggToken(seg.path)">
+            <NSelect
+              size="tiny"
+              style="width: 110px"
+              :value="seg.format?.kind ?? 'none'"
+              :options="scopedKindOptions"
+              @update:value="(v: CellFormat['kind']) => onSegFormatKindChange(i, v)"
+            />
+            <!-- qrcode 纠错 -->
+            <NSelect
+              v-if="needsErrorLevel(seg.format?.kind)"
+              size="tiny"
+              style="width: 80px"
+              :value="seg.format?.errorLevel ?? 'M'"
+              :options="qrErrorLevelOptions"
+              @update:value="(v: 'L' | 'M' | 'Q' | 'H') => onSegFormatSubChange(i, { errorLevel: v })"
+            />
+            <!-- barcode bcid -->
+            <NSelect
+              v-if="needsBcid(seg.format?.kind)"
+              size="tiny"
+              style="width: 130px"
+              :value="seg.format?.bcid ?? 'code128'"
+              :options="barcodeBcidOptions"
+              @update:value="(v: string) => onSegFormatSubChange(i, { bcid: v })"
+            />
+            <!-- barcode showText 开关(简化为占位) -->
+            <NTag
+              v-if="needsBarcodeShowText(seg.format?.kind)"
+              size="tiny"
+              :bordered="false"
+              :type="seg.format?.showText === false ? 'default' : 'success'"
+              @click="onSegFormatSubChange(i, { showText: !(seg.format?.showText ?? true) })"
+              style="cursor: pointer"
+            >
+              {{ (seg.format?.showText ?? true) ? '显示数字' : '隐藏数字' }}
+            </NTag>
+            <!-- image fit -->
+            <NSelect
+              v-if="needsFit(seg.format?.kind)"
+              size="tiny"
+              style="width: 110px"
+              :value="seg.format?.fit ?? 'contain'"
+              :options="imageFitOptions"
+              @update:value="(v: 'contain' | 'cover' | 'fill' | 'none') => onSegFormatSubChange(i, { fit: v })"
+            />
+          </template>
+        </div>
+      </div>
     </template>
 
     <!-- 旧 3 态模式（v1 兼容，老模板走这里） -->
@@ -543,5 +684,36 @@ function onExprConfirm(snippet: string): void {
   color: var(--n-text-color-3, #888);
   border-top: 1px dashed rgba(127, 127, 127, 0.2);
   padding-top: 4px;
+}
+/* ★ Commit 7:段列表样式 */
+.seg-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 1px dashed rgba(127, 127, 127, 0.2);
+  padding-top: 6px;
+}
+.seg-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.seg-index {
+  font-size: 11px;
+  color: var(--n-text-color-3, #888);
+  font-family: monospace;
+  min-width: 16px;
+  text-align: right;
+}
+.seg-preview {
+  font-size: 12px;
+  color: var(--n-text-color-2, #444);
+  font-family: monospace;
+  flex: 1 1 80px;
+  min-width: 80px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 </style>
