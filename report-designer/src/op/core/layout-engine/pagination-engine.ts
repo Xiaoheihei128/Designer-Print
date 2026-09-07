@@ -438,12 +438,18 @@ export async function layout(
   // 跨 cell 跨 row 收集所有 (path, value) 组合 → 预生成 cache (key = `${path}:${value}`)。
   // 真实场景:resolveBinding 在 rowCtx 下取值 → 我们用 sample row(每 path 取第一个非空值)预生成。
   const allValuesByPath = new Map<string, Set<string>>()
-  const items = (baseCtx.data as Record<string, unknown>)[table.dataSource]
+  const dataRoot = baseCtx.data as Record<string, unknown>
+  // 1) 顶层字段(非 dataSource 数组)—— 例:cell path = 'Header.ReportNo' 时,值在 data.Header.ReportNo
+  //    老 binding 用 {{path}} 路径会落到 dataRoot 自身。
+  collectRowPaths(dataRoot, '', allValuesByPath)
+  // 2) 数组项(dataSource 指向的数组的每个元素)—— 例:cell path = 'items[].name' 时,
+  //    渲染时 resolveBinding 把 items[].name 转成 items[i].name,我们的 cache key 是
+  //    'items[].name',需要在 collectRowPaths 中按数组路径生成(见 collectRowPaths 内部)。
+  const items = dataRoot[table.dataSource]
   if (Array.isArray(items)) {
     for (const row of items) {
       if (!row || typeof row !== 'object') continue
       const r = row as Record<string, unknown>
-      // 简易遍历 row,把所有 string 值塞进 path→values 集合
       collectRowPaths(r, '', allValuesByPath)
     }
   }

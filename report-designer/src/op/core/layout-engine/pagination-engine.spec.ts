@@ -624,4 +624,53 @@ describe('layout —— 段级形态(qrcode)端到端', () => {
     // 注意:可能因为别的测试残留 svg,这里只断言占位文本存在
     expect(result.warnings.filter((w) => w.code === 'BARCODE_FAILED').length).toBe(0)
   })
+
+  // ★ Bug 回归:cell path 是顶层字段(如 Header.ReportNo)时,precompute 也必须能命中。
+  //   之前 collectRowPaths 只对 dataSource 数组遍历,顶层字段直接被跳过 → 预生成空 cache → svgLookup miss → 显示空。
+  it('★ cell path 是顶层字段(如 Header.ReportNo)时,顶层字段值参与预生成 → 显示 svg', async () => {
+    const table: TableControl = {
+      id: 'tbl',
+      type: 'table',
+      left: 10,
+      top: 10,
+      width: 100,
+      height: 30,
+      dataSource: 'items',
+      columns: [{ field: 'name', title: '列', width: 100 }],
+      // cell path = 'Header.ReportNo'(顶层,非数组项)
+      cells: [
+        [],
+        [
+          {
+            segments: [
+              { kind: 'field', path: 'Header.ReportNo', format: { kind: 'qrcode', errorLevel: 'M' } },
+            ],
+          },
+        ],
+      ],
+    } as TableControl
+    const template: TemplateData<AnyControl> = {
+      version: '1',
+      document: {
+        type: 'report',
+        page: {
+          width: 210,
+          height: 297,
+          unit: 'mm',
+          orientation: 'portrait',
+          margin: { top: 0, right: 10, bottom: 0, left: 10 },
+        },
+        sections: [{ type: 'body', components: [table] }],
+      },
+    }
+    const measurer = createCjkMeasurer()
+    // 关键:Header.ReportNo 是顶层字段,items 数组项内不出现。
+    const data = {
+      Header: { ReportNo: 'SO-2026-0001' },
+      items: [{ name: 'A' }, { name: 'B' }],
+    }
+    const result = await layout(template, data, { measurer })
+    const html = renderHtml(result)
+    expect(html).toMatch(/<svg/)
+  })
 })
