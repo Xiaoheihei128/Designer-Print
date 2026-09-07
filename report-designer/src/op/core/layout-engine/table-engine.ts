@@ -59,7 +59,15 @@ import {
 } from './group-engine'
 import { computeVMergeSpans } from './vmerge'
 import type { TextMeasurer } from './measure'
-import type { EvalContext, RenderCell, RenderRow, RenderWarning } from './types'
+import type { EvalContext, RenderCell, RenderPart, RenderRow, RenderWarning } from './types'
+
+/**
+ * 段级 SVG 缓存 key —— 由 pagination-engine 在 buildTableModel 之前预生成。
+ * 形态段(qrcode/barcode)异步生成 SVG,buildTableModel 保持同步契约,从 cache 取。
+ * 格式:`${segIdx}:${path}:${value}` —— value 参与以让不同值不同 svg 命中正确项。
+ * 同一 cell 内形态段位置由 segIdx 区分(同 path 多次出现也独立缓存)。
+ */
+export type SegKey = `${number}:${string}:${string}`
 
 /* ------------------------------- 排版常数 ------------------------------- */
 
@@ -250,7 +258,8 @@ function dataCellText(
   col: TableColumn | undefined,
   ctx: EvalContext,
   errors: string[],
-): string {
+  svgCache?: Map<string, string>,
+): { text: string; parts: RenderPart[] } {
   if (cell.segments && cell.segments.length) {
     // ★ Bug7 修复：单 text 段且为聚合 token → 短路返回 ''，让 buildFooterRow 接管
     if (
@@ -258,14 +267,17 @@ function dataCellText(
       cell.segments[0]!.kind === 'text' &&
       isAggToken(cell.segments[0]!.value)
     ) {
-      return ''
+      return { text: '', parts: [] }
     }
-    const r = resolveSegments(cell.segments, ctx, { fallbackFormat: cell.format ?? col?.format })
+    const r = resolveSegments(cell.segments, ctx, {
+      fallbackFormat: cell.format ?? col?.format,
+      svgCache,
+    })
     errors.push(...r.errors)
-    return r.text
+    return { text: r.text, parts: r.parts }
   }
   // 无 segments = 用户主动清空（buildDesignGrid 已跑过 migrateCell），按空串返回
-  return ''
+  return { text: '', parts: [] }
 }
 
 /**
@@ -280,7 +292,8 @@ function staticCellText(
   fallback: string,
   ctx: EvalContext,
   errors: string[],
-): string {
+  svgCache?: Map<string, string>,
+): { text: string; parts: RenderPart[] } {
   // Plan B 步骤 3/5：仅走 v2 segments（cell.segments 由 buildDesignGrid migrateCell 兜底派生）
   if (cell.segments && cell.segments.length) {
     // ★ Bug7 修复：单 text 段且为聚合 token → 短路返回 ''，让 buildFooterRow 接管
@@ -289,19 +302,27 @@ function staticCellText(
       cell.segments[0]!.kind === 'text' &&
       isAggToken(cell.segments[0]!.value)
     ) {
-      return ''
+      return { text: '', parts: [] }
     }
-    const r = resolveSegments(cell.segments, ctx, { fallbackFormat: cell.format ?? col?.format })
+    const r = resolveSegments(cell.segments, ctx, {
+      fallbackFormat: cell.format ?? col?.format,
+      svgCache,
+    })
     errors.push(...r.errors)
-    return r.text
+    return { text: r.text, parts: r.parts }
   }
   // 布局网格正文行（emptyRow）→ 用列配置派生单段，让 col.field / col.expression 仍生效
   if (col?.field) {
-    return formatCellValue(resolveBinding(col.field, ctx), col?.format)
+    return {
+      text: formatCellValue(resolveBinding(col.field, ctx), col?.format),
+      parts: [],
+    }
   }
-  if (col?.expression) return interp(col.expression, ctx, errors)
-  if (!fallback) return ''
-  return interp(fallback, ctx, errors)
+  if (col?.expression) {
+    return { text: interp(col.expression, ctx, errors), parts: [] }
+  }
+  if (!fallback) return { text: '', parts: [] }
+  return { text: interp(fallback, ctx, errors), parts: [] }
 }
 
 /** 聚合值显示：整数不带小数，小数保留两位，统一加千分位 */
@@ -406,7 +427,18 @@ function measureRowHeight(
       fontWeight: cell.bold ? 'bold' : 'normal',
       widthMm: avail,
     })
-    if (heightMm > maxH) maxH = heightMm
+    // ★ 段级形态高度:非 text part(qrcode/barcode/image)按 display.heightMm 优先,
+    // 缺省兜底为 fontSize * 1.5(至少 8mm,避免二维码被压扁)。
+    let cellPartH = 0
+    for (const p of cell.parts ?? []) {
+      if (p.kind === 'text') continue
+      const displayH =
+        p.meta?.display?.heightMm ??
+        Math.max(((cell.fontSize ?? TABLE_FONT_SIZE) * 1.5), 8)
+      if (displayH > cellPartH) cellPartH = displayH
+    }
+    const effectiveH = Math.max(heightMm, cellPartH)
+    if (effectiveH > maxH) maxH = effectiveH
   }
   return Math.max(MIN_ROW_HEIGHT, maxH + CELL_PADDING_Y * 2)
 }
@@ -424,6 +456,13 @@ export interface BuildTableOptions {
   widthMm?: number
   /** 表格高度（mm），仅布局网格算行数时用到 */
   heightMm?: number
+  /**
+   * 段级 SVG 缓存 —— 由 pagination-engine 在调用 buildTableModel 之前预生成。
+   * key = `${segIdx}:${path}:${value}`(见 SegKey)。命中后,resolveSegments 输出的
+   * 占位 {kind:'text', text:''} 会被替换成 {kind:'svg', svg:..., meta}。
+   * 未传或未命中 → parts 保留 text 占位,渲染器输出空字符串(运行期未走预生成也能渲染)。
+   */
+  svgCache?: Map<string, string>
 }
 
 export function buildTableModel({
@@ -432,6 +471,7 @@ export function buildTableModel({
   measurer,
   widthMm,
   heightMm,
+  svgCache,
 }: BuildTableOptions): TableModel {
   const warnings: RenderWarning[] = []
   // 老模板兼容：列无 id 时运行时补齐（不写回持久化，详见 ensureColumnIds 注释）
@@ -457,10 +497,12 @@ export function buildTableModel({
   /* ── 表头行（支持多行表头） ── */
   const headerRows: RenderRow[] = []
   for (let r = 0; r < grid.headerRows; r++) {
-    const built = buildRowFrom(grid.cells[r] ?? [], spanLayout[r]!, (cell, col) =>
-      applyCellStyle(
+    const built = buildRowFrom(grid.cells[r] ?? [], spanLayout[r]!, (cell, col) => {
+      const t = staticCellText(cell, col, col?.title ?? '', ctx, errors, svgCache)
+      return applyCellStyle(
         {
-          text: staticCellText(cell, col, col?.title ?? '', ctx, errors),
+          text: t.text,
+          parts: t.parts.length ? t.parts : undefined,
           align: col?.headerAlign ?? col?.align ?? 'center',
           background: col?.headerBackgroundColor,
           bold: true,
@@ -469,8 +511,8 @@ export function buildTableModel({
         col,
         cell,
         'header',
-      ),
-    )
+      )
+    })
     headerRows.push({
       kind: 'header',
       height: measureRowHeight(built, control, measurer) * HEADER_ROW_FACTOR,
@@ -480,15 +522,20 @@ export function buildTableModel({
 
   /** 静态行（布局网格正文 / 数据表静态尾行）：字面量 + 全局插值 */
   const buildStaticRow = (rowCells: TableCell[], height: number | undefined, spanRow: CellSpan[]): RenderRow => {
-    const built = buildRowFrom(rowCells, spanRow, (cell, col) =>
-      applyCellStyle(
-        { text: staticCellText(cell, col, '', ctx, errors), align: col?.align ?? 'left' },
+    const built = buildRowFrom(rowCells, spanRow, (cell, col) => {
+      const t = staticCellText(cell, col, '', ctx, errors, svgCache)
+      return applyCellStyle(
+        {
+          text: t.text,
+          parts: t.parts.length ? t.parts : undefined,
+          align: col?.align ?? 'left',
+        },
         control,
         col,
         cell,
         'static',
-      ),
-    )
+      )
+    })
     return {
       kind: 'static',
       height: height ?? measureRowHeight(built, control, measurer),
@@ -571,10 +618,12 @@ export function buildTableModel({
 
     // 数据行：内容与样式都由"数据样例行"模板驱动（含 colSpan 合并；rowSpan 强制为 1）
     const rowCtx: EvalContext = { ...ctx, row: plan.row, rowIndex: plan.dataIndex ?? 0 }
-    const built = buildRowFrom(template, templateSpan, (cell, col) =>
-      applyCellStyle(
+    const built = buildRowFrom(template, templateSpan, (cell, col) => {
+      const t = dataCellText(cell, col, rowCtx, errors, svgCache)
+      return applyCellStyle(
         {
-          text: dataCellText(cell, col, rowCtx, errors),
+          text: t.text,
+          parts: t.parts.length ? t.parts : undefined,
           align: col?.align ?? 'left',
           background: col?.cellBackgroundColor,
         },
@@ -582,8 +631,8 @@ export function buildTableModel({
         col,
         cell,
         'data',
-      ),
-    )
+      )
+    })
     return {
       kind: 'data',
       dataIndex: plan.dataIndex,
@@ -719,7 +768,15 @@ function buildFooterRow(rowCells: TableCell[], spanRow: CellSpan[]): RenderRow {
         )
       }
       return applyCellStyle(
-        { text: staticCellText(cell, col, '', ctx, errors), align: col?.align ?? 'left' },
+        (() => {
+          const t = staticCellText(cell, col, '', ctx, errors, svgCache)
+          return {
+            text: t.text,
+            parts: t.parts.length ? t.parts : undefined,
+            align: col?.align ?? 'left',
+            bold: true,
+          }
+        })(),
         control,
         col,
         cell,

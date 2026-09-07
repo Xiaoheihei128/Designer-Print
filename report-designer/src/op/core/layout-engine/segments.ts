@@ -31,6 +31,12 @@ import { resolveImageSrcForSegment } from './code-render'
 export interface ResolveSegmentsOptions {
   /** 段级 format 缺失时的兜底（通常为 cell.format ?? col.format） */
   fallbackFormat?: CellFormat
+  /**
+   * 段级 SVG 缓存 —— 由 pagination-engine 在 buildTableModel 之前预生成。
+   * key = `${segIdx}:${path}:${value}`(SegKey);命中后,占位 text:'' 被替换成 {kind:'svg'}。
+   * 未传或未命中 → 保留 {kind:'text', text:''} 占位,运行期仍可渲染（只是没有 svg 形态）。
+   */
+  svgCache?: Map<string, string>
 }
 
 export interface ResolveSegmentsResult {
@@ -71,7 +77,7 @@ export function resolveSegments(
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i]!
     try {
-      const out = resolveOne(seg, ctx, opts)
+      const out = resolveOne(seg, ctx, opts, i)
       textParts.push(out.text)
       renderParts.push(...out.parts)
     } catch (e) {
@@ -97,6 +103,7 @@ function resolveOne(
   seg: Segment,
   ctx: EvalContext,
   opts: ResolveSegmentsOptions,
+  segIdx: number,
 ): { text: string; parts: RenderPart[] } {
   if (seg.kind === 'text') {
     const v = seg.value ?? ''
@@ -132,7 +139,17 @@ function resolveOne(
           ],
         }
       }
-      // qrcode/barcode:占位 {kind:'text', text:''},svg 由 precomputeCodeSvgs 塞回
+      // qrcode/barcode:占位 {kind:'text', text:''},svg 由 svgCache 命中则替换
+      if (opts.svgCache) {
+        const key = `${segIdx}:${seg.path}:${value}`
+        const svg = opts.svgCache.get(key)
+        if (svg) {
+          return {
+            text: '',
+            parts: [{ kind: 'svg', svg, meta: { display: fmt?.display } }],
+          }
+        }
+      }
       return { text: '', parts: [{ kind: 'text', text: '' }] }
     }
     // 普通 field 段:走老 formatCellValue 路径

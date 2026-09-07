@@ -205,6 +205,114 @@ describe('buildTableModel —— 表格建模', () => {
     expect(staticRow).toBeTruthy()
     expect(staticRow!.cells[0]!.text).toBe('5')
   })
+
+  // ★ Commit 4:RenderCell.parts + svgCache 命中
+  it('svgCache 命中 → 段级 svg 替换占位 text 部分', () => {
+    const c: TableControl = {
+      id: 'tbl',
+      type: 'table',
+      left: 0,
+      top: 0,
+      width: 60,
+      height: 30,
+      dataSource: 'items',
+      columns: [
+        {
+          field: 'qr',
+          title: '码',
+          width: 60,
+        },
+      ],
+      cells: [
+        // 表头行(0)
+        [],
+        // 数据样例行(1)
+        [
+          {
+            segments: [{ kind: 'field', path: 'qr', format: { kind: 'qrcode', errorLevel: 'M' } }],
+          },
+        ],
+      ],
+    } as TableControl
+    const ctx: EvalContext = { data: { items: [{ qr: 'ABC-123' }] } }
+    const svgCache = new Map<string, string>([['0:qr:ABC-123', '<svg>FAKE</svg>']])
+    const model = buildTableModel({
+      control: c,
+      ctx,
+      measurer,
+      widthMm: 60,
+      heightMm: 30,
+      svgCache,
+    })
+    const dataRow = model.rows.find((r) => r.kind === 'data')!
+    const cell = dataRow.cells[0]!
+    expect(cell.parts).toBeDefined()
+    const svgPart = cell.parts!.find((p) => p.kind === 'svg')
+    expect(svgPart).toBeDefined()
+    expect(svgPart!.kind === 'svg' && svgPart!.svg).toBe('<svg>FAKE</svg>')
+  })
+
+  it('未命中 svgCache → parts 含占位 text 但 svg 部分缺失(运行期仍可渲染)', () => {
+    const c: TableControl = {
+      id: 'tbl',
+      type: 'table',
+      left: 0,
+      top: 0,
+      width: 60,
+      height: 30,
+      dataSource: 'items',
+      columns: [{ field: 'qr', title: '码', width: 60 }],
+      cells: [
+        [],
+        [
+          {
+            segments: [{ kind: 'field', path: 'qr', format: { kind: 'qrcode', errorLevel: 'M' } }],
+          },
+        ],
+      ],
+    } as TableControl
+    const ctx: EvalContext = { data: { items: [{ qr: 'XYZ' }] } }
+    const model = buildTableModel({ control: c, ctx, measurer, widthMm: 60, heightMm: 30 })
+    const dataRow = model.rows.find((r) => r.kind === 'data')!
+    const cell = dataRow.cells[0]!
+    expect(cell.parts).toBeDefined()
+    // 没有 cache → 无 svg part,只有占位 text
+    expect(cell.parts!.every((p) => p.kind !== 'svg')).toBe(true)
+    expect(cell.parts!.some((p) => p.kind === 'text' && p.text === '')).toBe(true)
+  })
+
+  it('段级二维码 cell 行高 ≥ 8mm(不被压扁)', () => {
+    const c: TableControl = {
+      id: 'tbl',
+      type: 'table',
+      left: 0,
+      top: 0,
+      width: 60,
+      height: 30,
+      dataSource: 'items',
+      columns: [{ field: 'qr', title: '码', width: 60 }],
+      cells: [
+        [],
+        [
+          {
+            segments: [{ kind: 'field', path: 'qr', format: { kind: 'qrcode', errorLevel: 'M' } }],
+          },
+        ],
+      ],
+    } as TableControl
+    const ctx: EvalContext = { data: { items: [{ qr: 'X' }] } }
+    const svgCache = new Map<string, string>([['0:qr:X', '<svg/>']])
+    const model = buildTableModel({
+      control: c,
+      ctx,
+      measurer,
+      widthMm: 60,
+      heightMm: 30,
+      svgCache,
+    })
+    const dataRow = model.rows.find((r) => r.kind === 'data')!
+    expect(dataRow.height).toBeGreaterThanOrEqual(8)
+  })
 })
 
 describe('sliceTable —— 分页切片（含空尾片回归）', () => {
