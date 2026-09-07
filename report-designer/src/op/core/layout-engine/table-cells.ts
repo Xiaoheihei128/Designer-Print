@@ -14,7 +14,7 @@
  *
  * ⚠️ `designRows` 语义 = **正文行数（不含表头）**；可视行总数一律取 `grid.rowCount`。
  */
-import type { TableCell, TableCellStyle, TableColumn, TableControl, Segment } from '@op/types/control'
+import type { TableCell, TableCellStyle, TableColumn, TableControl, Segment, CellFormat } from '@op/types/control'
 import { isAggToken, parseAggToken, stripItems } from './aggregate'
 import { ptToMm } from '@op/core/units'
 import { getSharedMeasurer } from '@op/core/layout-engine/measure'
@@ -908,6 +908,27 @@ export function patchCellText(
     return ''
   })()
 
+  // ★ 段级 format 保护：画布编辑会重建 segments,如果新段是 field 段(path 还在)
+  //   → 把旧段的 format 合回去(形态选择不丢)。
+  //   例:用户在 ContentValueEditor 给 {{order.qr}} 选了「二维码」,然后双击 cell
+  //   改成 `{{order.qr}} 备用`,patchCellText 重建为 [field(order.qr), text(' 备用')],
+  //   新 field 段没 format → 老 format 合并回。
+  //   注意:path 改变 / field 段被删除时,format 自然丢失(预期,用户已换字段)。
+  //   expr 段不带 format(预期,形态对 expr 段无意义)。
+  const oldFormatByPath = new Map<string, CellFormat>()
+  for (const s of cell.segments ?? []) {
+    if (s.kind === 'field' && s.format) {
+      oldFormatByPath.set(s.path, s.format)
+    }
+  }
+  const restoreFormats = (segs: Segment[]): Segment[] =>
+    segs.map((s) => {
+      if (s.kind !== 'field') return s
+      if (s.format) return s // 新段已有 format 不覆盖
+      const old = oldFormatByPath.get(s.path)
+      return old ? { ...s, format: old } : s
+    })
+
   if (!info.isDataTemplate) {
     // 表头 / 静态行：纯字面量，单 text 段
     if (text === currentPlaceholder) return control
@@ -933,7 +954,7 @@ export function patchCellText(
   if (single) {
     if (text === currentPlaceholder) return control
     return patchCell(control, r, c, {
-      segments: [{ kind: 'field', path: single[1]! }],
+      segments: restoreFormats([{ kind: 'field', path: single[1]! }]),
       text: undefined,
       field: undefined,
       expression: undefined,
@@ -944,7 +965,7 @@ export function patchCellText(
   if (singleArr) {
     if (text === currentPlaceholder) return control
     return patchCell(control, r, c, {
-      segments: [{ kind: 'field', path: singleArr[1]! }],
+      segments: restoreFormats([{ kind: 'field', path: singleArr[1]! }]),
       text: undefined,
       field: undefined,
       expression: undefined,
@@ -953,7 +974,7 @@ export function patchCellText(
   // 其�Y（混合 {{expr}} + 字面量后缀等）→ splitFixedText 切分成 expr/text 段
   if (text === currentPlaceholder) return control
   return patchCell(control, r, c, {
-    segments: splitFixedText(text),
+    segments: restoreFormats(splitFixedText(text)),
     text: undefined,
     field: undefined,
     expression: undefined,

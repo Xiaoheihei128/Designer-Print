@@ -166,6 +166,58 @@ describe('patchCellText 行语义', () => {
     expect(next.cells![1]![1]!.field).toBeUndefined()
     expect(next.cells![1]![1]!.expression).toBeUndefined()
   })
+
+  // ★ Commit 3:画布编辑应保留 seg.format(形态不丢)
+  it('数据样例行：纯字段引用重写时保留 path 对应的 seg.format', () => {
+    const t0 = baseTable({ dataSource: 'items' })
+    // 预置一个带 format 的 field 段(模拟用户在 ContentValueEditor 选了二维码)
+    const seeded = patchCell(t0, 1, 1, {
+      segments: [{ kind: 'field', path: 'qr', format: { kind: 'qrcode', errorLevel: 'M' } }],
+    })
+    // 画布编辑:用户把内容改成同一字段 → 应保留 format
+    const next = patchCellText(seeded, 1, 1, '{{item.qr}}')
+    expect(next.cells![1]![1]!.segments).toEqual([
+      { kind: 'field', path: 'qr', format: { kind: 'qrcode', errorLevel: 'M' } },
+    ])
+  })
+
+  it('数据样例行：混合 {{field}} + 字面量后缀重建后,field 段保留 format,text 段无 format', () => {
+    const t0 = baseTable({ dataSource: 'items' })
+    const seeded = patchCell(t0, 1, 1, {
+      segments: [
+        { kind: 'field', path: 'sn', format: { kind: 'barcode', bcid: 'code128', showText: true } },
+        { kind: 'text', value: ' 备用' },
+      ],
+    })
+    const next = patchCellText(seeded, 1, 1, '{{item.sn}} 备用')
+    expect(next.cells![1]![1]!.segments).toEqual([
+      { kind: 'field', path: 'sn', format: { kind: 'barcode', bcid: 'code128', showText: true } },
+      { kind: 'text', value: ' 备用' },
+    ])
+  })
+
+  it('数据样例行：path 改了就丢 format(用户已换字段,老 format 失去意义)', () => {
+    const t0 = baseTable({ dataSource: 'items' })
+    const seeded = patchCell(t0, 1, 1, {
+      segments: [{ kind: 'field', path: 'qr', format: { kind: 'qrcode', errorLevel: 'M' } }],
+    })
+    // 用户改成绑定 name → 不应再携带 qr 的 format
+    const next = patchCellText(seeded, 1, 1, '{{item.name}}')
+    expect(next.cells![1]![1]!.segments).toEqual([{ kind: 'field', path: 'name' }])
+  })
+
+  it('数据样例行：singleArr 单字段 + 老 format 命中 → 完整保留', () => {
+    const t0 = baseTable({ dataSource: 'items' })
+    const seeded = patchCell(t0, 1, 1, {
+      segments: [{ kind: 'field', path: 'items[].sn', format: { kind: 'barcode', bcid: 'ean13' } }],
+    })
+    const next = patchCellText(seeded, 1, 1, '{{items[].sn}}')
+    expect(next.cells![1]![1]!.segments![0]).toEqual({
+      kind: 'field',
+      path: 'items[].sn',
+      format: { kind: 'barcode', bcid: 'ean13' },
+    })
+  })
 })
 
 describe('patchCellStyle / resolveCellStyle', () => {
