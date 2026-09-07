@@ -86,7 +86,32 @@ export interface RenderCell {
   tokenKind?: import('./aggregate').AggKind
   /** 聚合对应的数据字段键（已去 items[]. 前缀）；isAgg 为真时有效 */
   aggField?: string
+  /**
+   * ★ 段级渲染分段：cell 内的多形态内容(text/svg/image)按段输出。
+   * 旧路径无 parts 时,渲染器用 cell.text;有 parts 时按 part.kind 分支输出。
+   * text 段走 escapeHtml,svg 段内联(raw,不转义),image 段输出 <img>。
+   * 向后兼容:无 parts → 用 cell.text(老路径)
+   */
+  parts?: RenderPart[]
 }
+
+/**
+ * 段级渲染单元 —— 表格 cell 内一个 segment 的最终形态。
+ * 由 resolveSegments 在 field 段识别 seg.format.kind 时产出,
+ * svg 段的具体内容由 precomputeCodeSvgs 预生成后塞回(Commit 4/6)。
+ */
+export type RenderPart =
+  | { kind: 'text'; text: string }
+  | { kind: 'svg'; svg: string; meta?: { display?: import('@op/types/control').SegmentDisplayOpts } }
+  | {
+      kind: 'image'
+      src: string
+      alt?: string
+      meta?: {
+        display?: import('@op/types/control').SegmentDisplayOpts
+        fit?: 'contain' | 'cover' | 'fill' | 'none'
+      }
+    }
 
 export interface RenderRow {
   kind: RenderRowKind

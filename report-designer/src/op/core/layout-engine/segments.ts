@@ -21,9 +21,10 @@
  * 压成 segments，用于渲染层 fallback 与 Properties Panel lazy migration。
  */
 import type { Segment, CellFormat } from '@op/types/control'
-import type { EvalContext } from './types'
+import type { EvalContext, RenderPart } from './types'
 import { evaluate, resolveBinding, formatCellValue } from './expression'
 import { isAggToken } from './aggregate'
+import { resolveImageSrcForSegment } from './code-render'
 
 /* -------------------------------- 求值 -------------------------------- */
 
@@ -34,14 +35,25 @@ export interface ResolveSegmentsOptions {
 
 export interface ResolveSegmentsResult {
   text: string
+  /** ★ 段级渲染分段：含 svg/image 的形态段 + text 段混排 */
+  parts: RenderPart[]
   errors: string[]
 }
 
+/** 段级形态专属空值占位（按用户决策：不回落示例码，显示轻量灰色提示） */
+function emptyDisplayLabel(kind: 'qrcode' | 'barcode' | 'image'): string {
+  return kind === 'qrcode' ? '(空二维码)' : kind === 'barcode' ? '(空条码)' : '(空图)'
+}
+
 /**
- * 求值 segments 数组 —— 拼接各片段字符串
+ * 求值 segments 数组 —— 拼接各片段字符串 + 输出结构化 parts
  *
- * - 空数组 / undefined → `{ text: '', errors: [] }`
+ * - 空数组 / undefined → `{ text: '', parts: [], errors: [] }`
  * - 任一段失败不影响其它段，错误信息塞 errors[]
+ * - field 段识别 seg.format.kind === 'qrcode'|'barcode'|'image':
+ *   - 非空值 → image 段立即 resolveImageSrcForSegment 出 src;qrcode/barcode
+ *     段输出 {kind:'text', text:''} 占位(SVG 由 precomputeCodeSvgs 后续塞回)
+ *   - 空值 → {kind:'text', text:'(空形态)'} 灰色提示,符合用户「不回落示例码」决策
  */
 export function resolveSegments(
   segments: Segment[] | undefined,
@@ -49,44 +61,88 @@ export function resolveSegments(
   opts: ResolveSegmentsOptions = {},
 ): ResolveSegmentsResult {
   if (!segments || segments.length === 0) {
-    return { text: '', errors: [] }
+    return { text: '', parts: [], errors: [] }
   }
 
   const errors: string[] = []
-  const parts: string[] = []
+  const textParts: string[] = []
+  const renderParts: RenderPart[] = []
 
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i]!
     try {
-      parts.push(resolveOne(seg, ctx, opts))
+      const out = resolveOne(seg, ctx, opts)
+      textParts.push(out.text)
+      renderParts.push(...out.parts)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       errors.push(`segment[${i}] (${seg.kind}): ${msg}`)
-      parts.push('')
+      textParts.push('')
     }
   }
 
-  return { text: parts.join(''), errors }
+  return { text: textParts.join(''), parts: renderParts, errors }
 }
 
+/**
+ * 单段求值：返回 text(老 string 契约)+ parts(段级结构化结果)
+ * - text 段 → parts 只有 1 个 {kind:'text'}
+ * - field 段(普通) → parts 1 个 {kind:'text', text:formatCellValue 走老路径}
+ * - field 段(形态 + 非空值) → image 立即出 src;qrcode/barcode 占位
+ *   {kind:'text', text:''} 待预生成塞回 svg
+ * - field 段(形态 + 空值) → {kind:'text', text:'(空形态)'} 占位
+ * - expr 段 → {kind:'text', text:String(v)}
+ */
 function resolveOne(
   seg: Segment,
   ctx: EvalContext,
   opts: ResolveSegmentsOptions,
-): string {
+): { text: string; parts: RenderPart[] } {
   if (seg.kind === 'text') {
-    return seg.value ?? ''
+    const v = seg.value ?? ''
+    return { text: v, parts: [{ kind: 'text', text: v }] }
   }
   if (seg.kind === 'field') {
-    if (!seg.path) return ''
+    if (!seg.path) return { text: '', parts: [] }
     const raw = resolveBinding(seg.path, ctx)
     const fmt = seg.format ?? opts.fallbackFormat
-    return formatCellValue(raw, fmt)
+    const fkind = fmt?.kind
+    // ★ 段级形态分支
+    if (fkind === 'image' || fkind === 'qrcode' || fkind === 'barcode') {
+      // 形态对空值:显示占位(用户决策 — 不回落示例码)
+      if (raw === null || raw === undefined || raw === '') {
+        return {
+          text: emptyDisplayLabel(fkind),
+          parts: [{ kind: 'text', text: emptyDisplayLabel(fkind) }],
+        }
+      }
+      const value = String(raw)
+      if (fkind === 'image') {
+        // 图片:立即出 src
+        const src = resolveImageSrcForSegment(seg.path, ctx)
+        return {
+          text: '',
+          parts: [
+            {
+              kind: 'image',
+              src,
+              alt: seg.path,
+              meta: { display: fmt?.display, fit: fmt?.fit },
+            },
+          ],
+        }
+      }
+      // qrcode/barcode:占位 {kind:'text', text:''},svg 由 precomputeCodeSvgs 塞回
+      return { text: '', parts: [{ kind: 'text', text: '' }] }
+    }
+    // 普通 field 段:走老 formatCellValue 路径
+    const formatted = formatCellValue(raw, fmt)
+    return { text: formatted, parts: [{ kind: 'text', text: formatted }] }
   }
   // seg.kind === 'expr'
   const v = evaluate(seg.src, ctx)
-  if (v === null || v === undefined) return ''
-  return String(v)
+  const text = v === null || v === undefined ? '' : String(v)
+  return { text, parts: [{ kind: 'text', text }] }
 }
 
 /* -------------------------------- 老模板兼容 -------------------------------- */

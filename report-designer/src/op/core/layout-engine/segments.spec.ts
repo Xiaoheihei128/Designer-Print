@@ -8,13 +8,17 @@ import { legacyToSegments, resolveSegments } from '@op/core/layout-engine/segmen
 
 describe('resolveSegments 求值', () => {
   it('undefined / 空数组 → 空串 + 无错误', () => {
-    expect(resolveSegments(undefined, { data: {} })).toEqual({ text: '', errors: [] })
-    expect(resolveSegments([], { data: {} })).toEqual({ text: '', errors: [] })
+    expect(resolveSegments(undefined, { data: {} })).toEqual({ text: '', parts: [], errors: [] })
+    expect(resolveSegments([], { data: {} })).toEqual({ text: '', parts: [], errors: [] })
   })
 
   it('单 text 段原样拼接', () => {
     const segs: Segment[] = [{ kind: 'text', value: '外观：' }]
-    expect(resolveSegments(segs, { data: {} })).toEqual({ text: '外观：', errors: [] })
+    expect(resolveSegments(segs, { data: {} })).toEqual({
+      text: '外观：',
+      parts: [{ kind: 'text', text: '外观：' }],
+      errors: [],
+    })
   })
 
   it('单 field 段按路径取值', () => {
@@ -118,6 +122,98 @@ describe('resolveSegments 求值', () => {
     // text 段原样拼接，不走 regex
     expect(r.text).toBe('{锦鲤} 的 { mol/L } 浓度')
     expect(r.errors).toEqual([])
+  })
+})
+
+/* ============================================================
+ * ★ 段级渲染形态（qrcode/barcode/image）
+ * ============================================================ */
+
+describe('★ resolveSegments 段级渲染形态', () => {
+  it('image 形态 + 非空字段值 → parts 含 {kind:"image", src:...}', () => {
+    const segs: Segment[] = [
+      { kind: 'field', path: 'product.photo', format: { kind: 'image', fit: 'cover' } },
+    ]
+    const r = resolveSegments(segs, { data: { product: { photo: 'https://a.png' } } })
+    expect(r.text).toBe('') // 形态段不产生 text
+    expect(r.parts.length).toBe(1)
+    expect(r.parts[0]!.kind).toBe('image')
+    if (r.parts[0]!.kind === 'image') {
+      expect(r.parts[0]!.src).toBe('https://a.png')
+      expect(r.parts[0]!.meta?.fit).toBe('cover')
+    }
+  })
+
+  it('qrcode 形态 + 非空字段值 → parts 含占位 {kind:"text", text:""}（svg 由预生成塞回）', () => {
+    const segs: Segment[] = [
+      { kind: 'field', path: 'order.qr', format: { kind: 'qrcode', errorLevel: 'Q' } },
+    ]
+    const r = resolveSegments(segs, { data: { order: { qr: 'LOT-001' } } })
+    expect(r.text).toBe('')
+    expect(r.parts.length).toBe(1)
+    expect(r.parts[0]!.kind).toBe('text')
+    expect((r.parts[0] as { text: string }).text).toBe('')
+  })
+
+  it('barcode 形态 + 非空字段值 → parts 含占位（svg 由预生成塞回）', () => {
+    const segs: Segment[] = [
+      { kind: 'field', path: 'product.sn', format: { kind: 'barcode', bcid: 'code128' } },
+    ]
+    const r = resolveSegments(segs, { data: { product: { sn: 'SN-12345' } } })
+    expect(r.text).toBe('')
+    expect(r.parts.length).toBe(1)
+    expect(r.parts[0]!.kind).toBe('text')
+  })
+
+  it('★ 空字段值 → text 显示「(空二维码)」占位（用户决策：不回落示例码）', () => {
+    const segs: Segment[] = [
+      { kind: 'field', path: 'order.qr', format: { kind: 'qrcode' } },
+    ]
+    const r1 = resolveSegments(segs, { data: { order: { qr: null } } })
+    expect(r1.text).toBe('(空二维码)')
+
+    const r2 = resolveSegments(segs, { data: { order: { qr: '' } } })
+    expect(r2.text).toBe('(空二维码)')
+
+    const r3 = resolveSegments(segs, { data: {} })
+    expect(r3.text).toBe('(空二维码)')
+  })
+
+  it('★ 空字段值 → barcode 显示「(空条码)」，image 显示「(空图)」', () => {
+    const qrcodeSegs: Segment[] = [{ kind: 'field', path: 'x', format: { kind: 'barcode' } }]
+    expect(resolveSegments(qrcodeSegs, { data: {} }).text).toBe('(空条码)')
+
+    const imageSegs: Segment[] = [{ kind: 'field', path: 'x', format: { kind: 'image' } }]
+    expect(resolveSegments(imageSegs, { data: {} }).text).toBe('(空图)')
+  })
+
+  it('★ 混排场景：「扫描:」+ qrcode段 +「核对」', () => {
+    const segs: Segment[] = [
+      { kind: 'text', value: '扫描:' },
+      { kind: 'field', path: 'order.qr', format: { kind: 'qrcode' } },
+      { kind: 'text', value: '核对' },
+    ]
+    const r = resolveSegments(segs, { data: { order: { qr: 'LOT-001' } } })
+    // 文本部分由 text 段拼接
+    expect(r.text).toBe('扫描:核对') // 形态段 text 为空,只拼前后缀
+    // parts 数组 3 段:text + 占位 + text
+    expect(r.parts.length).toBe(3)
+    expect(r.parts[0]!.kind).toBe('text')
+    expect((r.parts[0] as { text: string }).text).toBe('扫描:')
+    expect(r.parts[1]!.kind).toBe('text') // 占位
+    expect(r.parts[2]!.kind).toBe('text')
+    expect((r.parts[2] as { text: string }).text).toBe('核对')
+  })
+
+  it('普通 field 段 + 普通 format（int/date/percent 等）→ 不进形态分支，老路径不变', () => {
+    const segs: Segment[] = [
+      { kind: 'field', path: 'v', format: { kind: 'percent', digits: 0 } },
+    ]
+    const r = resolveSegments(segs, { data: { v: 0.95 } })
+    expect(r.text).toBe('95%')
+    expect(r.parts.length).toBe(1)
+    expect(r.parts[0]!.kind).toBe('text')
+    expect((r.parts[0] as { text: string }).text).toBe('95%')
   })
 })
 
