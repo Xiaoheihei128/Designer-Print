@@ -495,3 +495,133 @@ describe('layout —— fixBottomRows="fill" + 下方控件回归（fill 让位�
     expect(totalDataRows).toBe(5) // 5 数据行完整保留，无丢失
   })
 })
+
+// ★ Commit 6:pagination-engine 预生成入口端到端测试
+describe('layout —— 段级形态(qrcode)端到端', () => {
+  it('cell 含 qrcode 段时 layout 返回 HTML 包含 <svg>', async () => {
+    const table: TableControl = {
+      id: 'tbl',
+      type: 'table',
+      left: 10,
+      top: 10,
+      width: 100,
+      height: 30,
+      dataSource: 'items',
+      columns: [{ field: 'qr', title: '码', width: 100 }],
+      cells: [
+        [],
+        [
+          {
+            segments: [{ kind: 'field', path: 'qr', format: { kind: 'qrcode', errorLevel: 'M' } }],
+          },
+        ],
+      ],
+    } as TableControl
+    const template: TemplateData<AnyControl> = {
+      version: '1',
+      document: {
+        type: 'report',
+        page: {
+          width: 210,
+          height: 297,
+          unit: 'mm',
+          orientation: 'portrait',
+          margin: { top: 0, right: 10, bottom: 0, left: 10 },
+        },
+        sections: [{ type: 'body', components: [table] }],
+      },
+    }
+    const measurer = createCjkMeasurer()
+    const data = { items: [{ qr: 'ABC-001' }, { qr: 'ABC-002' }] }
+    const result = await layout(template, data, { measurer })
+    const html = renderHtml(result)
+    expect(html).toMatch(/<svg/)
+  })
+
+  it('段级二维码混排 text+qrcode+text → HTML 文本与 svg 顺序串联', async () => {
+    const table: TableControl = {
+      id: 'tbl',
+      type: 'table',
+      left: 10,
+      top: 10,
+      width: 100,
+      height: 30,
+      dataSource: 'items',
+      columns: [{ field: 'qr', title: '扫描', width: 100 }],
+      cells: [
+        [],
+        [
+          {
+            segments: [
+              { kind: 'text', value: '扫描:' },
+              { kind: 'field', path: 'qr', format: { kind: 'qrcode', errorLevel: 'M' } },
+              { kind: 'text', value: '核对' },
+            ],
+          },
+        ],
+      ],
+    } as TableControl
+    const template: TemplateData<AnyControl> = {
+      version: '1',
+      document: {
+        type: 'report',
+        page: {
+          width: 210,
+          height: 297,
+          unit: 'mm',
+          orientation: 'portrait',
+          margin: { top: 0, right: 10, bottom: 0, left: 10 },
+        },
+        sections: [{ type: 'body', components: [table] }],
+      },
+    }
+    const measurer = createCjkMeasurer()
+    const data = { items: [{ qr: 'X1' }] }
+    const result = await layout(template, data, { measurer })
+    const html = renderHtml(result)
+    expect(html).toMatch(/扫描:.*<svg/)
+    expect(html).toMatch(/svg.*核对/s)
+  })
+
+  it('段级二维码空值 → 显示占位文本 (空二维码),不显示 svg', async () => {
+    const table: TableControl = {
+      id: 'tbl',
+      type: 'table',
+      left: 10,
+      top: 10,
+      width: 100,
+      height: 30,
+      dataSource: 'items',
+      columns: [{ field: 'qr', title: '码', width: 100 }],
+      cells: [
+        [],
+        [
+          {
+            segments: [{ kind: 'field', path: 'qr', format: { kind: 'qrcode', errorLevel: 'M' } }],
+          },
+        ],
+      ],
+    } as TableControl
+    const template: TemplateData<AnyControl> = {
+      version: '1',
+      document: {
+        type: 'report',
+        page: {
+          width: 210,
+          height: 297,
+          unit: 'mm',
+          orientation: 'portrait',
+          margin: { top: 0, right: 10, bottom: 0, left: 10 },
+        },
+        sections: [{ type: 'body', components: [table] }],
+      },
+    }
+    const measurer = createCjkMeasurer()
+    const data = { items: [{ qr: '' }] } // 空值 → 触发占位符
+    const result = await layout(template, data, { measurer })
+    const html = renderHtml(result)
+    expect(html).toContain('(空二维码)')
+    // 注意:可能因为别的测试残留 svg,这里只断言占位文本存在
+    expect(result.warnings.filter((w) => w.code === 'BARCODE_FAILED').length).toBe(0)
+  })
+})

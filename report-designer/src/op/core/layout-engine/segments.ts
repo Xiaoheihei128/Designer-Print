@@ -32,11 +32,15 @@ export interface ResolveSegmentsOptions {
   /** 段级 format 缺失时的兜底（通常为 cell.format ?? col.format） */
   fallbackFormat?: CellFormat
   /**
-   * 段级 SVG 缓存 —— 由 pagination-engine 在 buildTableModel 之前预生成。
-   * key = `${segIdx}:${path}:${value}`(SegKey);命中后,占位 text:'' 被替换成 {kind:'svg'}。
+   * 段级 SVG 缓存查找函数 —— 由 pagination-engine 在 buildTableModel 之前预生成。
+   * 接受 (segIdx, path, value) → svg 字符串|undefined。
+   * 命中后,占位 text:'' 被替换成 {kind:'svg'}。
    * 未传或未命中 → 保留 {kind:'text', text:''} 占位,运行期仍可渲染（只是没有 svg 形态）。
+   *
+   * 用 lookup 函数而非 Map:让 caller 自定 key 策略(同 cell 内 resolveSegments 的
+   * segIdx 是 cell-local;caller 负责把它转成全局 key,例如 `${cellIdx}:${segIdx}:...`)。
    */
-  svgCache?: Map<string, string>
+  svgLookup?: (segIdx: number, path: string, value: string) => string | undefined
 }
 
 export interface ResolveSegmentsResult {
@@ -139,10 +143,9 @@ function resolveOne(
           ],
         }
       }
-      // qrcode/barcode:占位 {kind:'text', text:''},svg 由 svgCache 命中则替换
-      if (opts.svgCache) {
-        const key = `${segIdx}:${seg.path}:${value}`
-        const svg = opts.svgCache.get(key)
+      // qrcode/barcode:占位 {kind:'text', text:''},svg 由 svgLookup 命中则替换
+      if (opts.svgLookup) {
+        const svg = opts.svgLookup(segIdx, seg.path, value)
         if (svg) {
           return {
             text: '',

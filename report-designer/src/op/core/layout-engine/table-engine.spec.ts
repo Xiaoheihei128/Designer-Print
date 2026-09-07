@@ -235,14 +235,15 @@ describe('buildTableModel —— 表格建模', () => {
       ],
     } as TableControl
     const ctx: EvalContext = { data: { items: [{ qr: 'ABC-123' }] } }
-    const svgCache = new Map<string, string>([['0:qr:ABC-123', '<svg>FAKE</svg>']])
+    const svgLookup = (_segIdx: number, path: string, value: string) =>
+      path === 'qr' && value === 'ABC-123' ? '<svg>FAKE</svg>' : undefined
     const model = buildTableModel({
       control: c,
       ctx,
       measurer,
       widthMm: 60,
       heightMm: 30,
-      svgCache,
+      svgLookup,
     })
     const dataRow = model.rows.find((r) => r.kind === 'data')!
     const cell = dataRow.cells[0]!
@@ -301,14 +302,15 @@ describe('buildTableModel —— 表格建模', () => {
       ],
     } as TableControl
     const ctx: EvalContext = { data: { items: [{ qr: 'X' }] } }
-    const svgCache = new Map<string, string>([['0:qr:X', '<svg/>']])
+    const svgLookup = (_segIdx: number, path: string, value: string) =>
+      path === 'qr' && value === 'X' ? '<svg/>' : undefined
     const model = buildTableModel({
       control: c,
       ctx,
       measurer,
       widthMm: 60,
       heightMm: 30,
-      svgCache,
+      svgLookup,
     })
     const dataRow = model.rows.find((r) => r.kind === 'data')!
     expect(dataRow.height).toBeGreaterThanOrEqual(8)

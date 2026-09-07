@@ -38,6 +38,8 @@ import {
   type TableModel,
 } from './table-engine'
 import { isDataTable } from './table-cells'
+import { precomputeCodeSvgsForCells } from './code-render'
+import type { Segment } from '@op/types/control'
 import {
   bodyStepMm,
   expandLabelGrids,
@@ -431,12 +433,32 @@ export async function layout(
   const tableWidth = toMm(table.width, unit)
   const tableBottom = tableTop + toMm(table.height, unit)
 
+  // ★ Commit 6: 段级 svg 预生成 —— 形态段(qrcode/barcode)的 svg 异步生成,
+  // 在 buildTableModel 之前一次性预生成,buildTableModel 通过 svgLookup 同步消费。
+  // 跨 cell 跨 row 收集所有 (path, value) 组合 → 预生成 cache (key = `${path}:${value}`)。
+  // 真实场景:resolveBinding 在 rowCtx 下取值 → 我们用 sample row(每 path 取第一个非空值)预生成。
+  const allValuesByPath = new Map<string, Set<string>>()
+  const items = (baseCtx.data as Record<string, unknown>)[table.dataSource]
+  if (Array.isArray(items)) {
+    for (const row of items) {
+      if (!row || typeof row !== 'object') continue
+      const r = row as Record<string, unknown>
+      // 简易遍历 row,把所有 string 值塞进 path→values 集合
+      collectRowPaths(r, '', allValuesByPath)
+    }
+  }
+  const cellSegmentsList = collectCellSegmentsForTable(table)
+  const svgCacheMap = await precomputeCodeSvgsForCells(cellSegmentsList, allValuesByPath)
+  const svgLookup = (_segIdx: number, path: string, value: string) =>
+    svgCacheMap.get(`${path}:${value}`)
+
   const model = buildTableModel({
     control: table,
     ctx: baseCtx,
     measurer,
     widthMm: tableWidth,
     heightMm: toMm(table.height, unit),
+    svgLookup,
   })
   warnings.push(...model.warnings)
 
@@ -667,4 +689,60 @@ function dedupeWarnings(list: RenderWarning[]): RenderWarning[] {
     out.push(w)
   }
   return out
+}
+
+/**
+ * 把 table 所有 cell 的 segments 收集为二维数组(每行一个 cell segments 数组)。
+ * 缺 segments 的 cell → [];空 segments → []。
+ * 仅扫描 table.cells(顶层控件 BarcodeControl/QrcodeControl 不在 cells 里,走 resolveControlContent 老路径)。
+ */
+function collectCellSegmentsForTable(table: TableControl): Segment[][] {
+  const out: Segment[][] = []
+  const cells = table.cells ?? []
+  for (const row of cells) {
+    for (const cell of row ?? []) {
+      out.push(cell.segments ?? [])
+    }
+  }
+  return out
+}
+
+/**
+ * 简易遍历 row 对象,把所有 path→string-value 收集到 valuesByPath。
+ * 支持 `items[].name` 这种数组路径 —— 把每个数组元素都遍历。
+ * 不走完整 resolveBinding,只做扁平遍历 —— 足够覆盖 cell 段引用字段场景。
+ */
+function collectRowPaths(
+  obj: Record<string, unknown>,
+  prefix: string,
+  out: Map<string, Set<string>>,
+): void {
+  for (const [k, v] of Object.entries(obj)) {
+    const path = prefix ? `${prefix}.${k}` : k
+    if (v === null || v === undefined) continue
+    if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
+      let bucket = out.get(path)
+      if (!bucket) {
+        bucket = new Set<string>()
+        out.set(path, bucket)
+      }
+      bucket.add(String(v))
+    } else if (Array.isArray(v)) {
+      // 数组路径:同时输出 `items[].xxx` 形态(prefix + k + '[]') 供老 binding 匹配
+      const arrPath = `${k}[]`
+      const fullArrPath = prefix ? `${prefix}.${arrPath}` : arrPath
+      let bucket = out.get(fullArrPath)
+      if (!bucket) {
+        bucket = new Set<string>()
+        out.set(fullArrPath, bucket)
+      }
+      for (const item of v) {
+        if (item && typeof item === 'object') {
+          collectRowPaths(item as Record<string, unknown>, fullArrPath, out)
+        }
+      }
+    } else if (typeof v === 'object') {
+      collectRowPaths(v as Record<string, unknown>, path, out)
+    }
+  }
 }

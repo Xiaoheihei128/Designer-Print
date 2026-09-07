@@ -168,6 +168,57 @@ export async function precomputeCodeSvgs(
   return cache
 }
 
+/**
+ * 跨 cell 预生成：把 cells 二维网格 flatten 后统一预生成。
+ * key 用 `${path}:${value}` —— 同 path 同 value 的 svg 内容一定相同(码内容决定 svg),
+ * 跨 cell 同形态段可共用一份缓存,无需 cellIdx 隔开。
+ *
+ * valuesByPath 是 path→Set<value> 的样本集合 —— 由 caller 提前从 data 收集所有可能值,
+ * 我们无需在 pagination-engine 上下文做 resolveBinding(那需要 rowCtx,难做)。
+ * 对 (path, value) 笛卡尔积生成 svg:每对 path × 每个 value 生成一次。
+ */
+export async function precomputeCodeSvgsForCells(
+  cellSegments: Segment[][],
+  valuesByPath: Map<string, Set<string>>,
+): Promise<Map<string, string>> {
+  const cache = new Map<string, string>()
+  const tasks: Array<Promise<void>> = []
+  for (const segs of cellSegments) {
+    for (const seg of segs) {
+      if (seg.kind !== 'field') continue
+      const fmt = seg.format
+      if (!fmt) continue
+      const fkind = fmt.kind
+      if (fkind !== 'qrcode' && fkind !== 'barcode') continue
+      // 取 path 对应的所有 value 样本(空集合 → 跳过)
+      const values = valuesByPath.get(seg.path)
+      if (!values || values.size === 0) continue
+      for (const value of values) {
+        if (!value) continue
+        const key = `${seg.path}:${value}`
+        if (cache.has(key)) continue
+        if (fkind === 'barcode') {
+          const svg = renderBarcodeSvgSync(value, {
+            bcid: fmt.bcid,
+            showText: fmt.showText,
+            widthMm: fmt.display?.widthMm,
+            heightMm: fmt.display?.heightMm,
+          })
+          cache.set(key, svg)
+        } else {
+          tasks.push(
+            renderQrcodeSvgSync(value, { errorLevel: fmt.errorLevel }).then((svg) => {
+              cache.set(key, svg)
+            }),
+          )
+        }
+      }
+    }
+  }
+  await Promise.all(tasks)
+  return cache
+}
+
 /* ============================================================
  * 形态段 display 配置构建（cell 渲染层用）
  * ============================================================ */

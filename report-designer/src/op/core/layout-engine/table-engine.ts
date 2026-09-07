@@ -258,7 +258,7 @@ function dataCellText(
   col: TableColumn | undefined,
   ctx: EvalContext,
   errors: string[],
-  svgCache?: Map<string, string>,
+  svgLookup?: (segIdx: number, path: string, value: string) => string | undefined,
 ): { text: string; parts: RenderPart[] } {
   if (cell.segments && cell.segments.length) {
     // ★ Bug7 修复：单 text 段且为聚合 token → 短路返回 ''，让 buildFooterRow 接管
@@ -271,7 +271,7 @@ function dataCellText(
     }
     const r = resolveSegments(cell.segments, ctx, {
       fallbackFormat: cell.format ?? col?.format,
-      svgCache,
+      svgLookup,
     })
     errors.push(...r.errors)
     return { text: r.text, parts: r.parts }
@@ -292,7 +292,7 @@ function staticCellText(
   fallback: string,
   ctx: EvalContext,
   errors: string[],
-  svgCache?: Map<string, string>,
+  svgLookup?: (segIdx: number, path: string, value: string) => string | undefined,
 ): { text: string; parts: RenderPart[] } {
   // Plan B 步骤 3/5：仅走 v2 segments（cell.segments 由 buildDesignGrid migrateCell 兜底派生）
   if (cell.segments && cell.segments.length) {
@@ -306,7 +306,7 @@ function staticCellText(
     }
     const r = resolveSegments(cell.segments, ctx, {
       fallbackFormat: cell.format ?? col?.format,
-      svgCache,
+      svgLookup,
     })
     errors.push(...r.errors)
     return { text: r.text, parts: r.parts }
@@ -457,12 +457,15 @@ export interface BuildTableOptions {
   /** 表格高度（mm），仅布局网格算行数时用到 */
   heightMm?: number
   /**
-   * 段级 SVG 缓存 —— 由 pagination-engine 在调用 buildTableModel 之前预生成。
-   * key = `${segIdx}:${path}:${value}`(见 SegKey)。命中后,resolveSegments 输出的
-   * 占位 {kind:'text', text:''} 会被替换成 {kind:'svg', svg:..., meta}。
+   * 段级 SVG 缓存查找函数 —— 由 pagination-engine 在调用 buildTableModel 之前预生成。
+   * 接受 (segIdx, path, value) → svg|undefined。
+   * 命中后,resolveSegments 输出的占位 text:'' 被替换成 svg part。
    * 未传或未命中 → parts 保留 text 占位,渲染器输出空字符串(运行期未走预生成也能渲染)。
+   *
+   * 用 lookup 函数而非 Map:让 caller 自定 key 策略(同 cell 内 resolveSegments 的
+   * segIdx 是 cell-local;caller 负责把它转成全局 key,例如 `${cellIdx}:${segIdx}:...`)。
    */
-  svgCache?: Map<string, string>
+  svgLookup?: (segIdx: number, path: string, value: string) => string | undefined
 }
 
 export function buildTableModel({
@@ -471,7 +474,7 @@ export function buildTableModel({
   measurer,
   widthMm,
   heightMm,
-  svgCache,
+  svgLookup,
 }: BuildTableOptions): TableModel {
   const warnings: RenderWarning[] = []
   // 老模板兼容：列无 id 时运行时补齐（不写回持久化，详见 ensureColumnIds 注释）
@@ -498,7 +501,7 @@ export function buildTableModel({
   const headerRows: RenderRow[] = []
   for (let r = 0; r < grid.headerRows; r++) {
     const built = buildRowFrom(grid.cells[r] ?? [], spanLayout[r]!, (cell, col) => {
-      const t = staticCellText(cell, col, col?.title ?? '', ctx, errors, svgCache)
+      const t = staticCellText(cell, col, col?.title ?? '', ctx, errors, svgLookup)
       return applyCellStyle(
         {
           text: t.text,
@@ -523,7 +526,7 @@ export function buildTableModel({
   /** 静态行（布局网格正文 / 数据表静态尾行）：字面量 + 全局插值 */
   const buildStaticRow = (rowCells: TableCell[], height: number | undefined, spanRow: CellSpan[]): RenderRow => {
     const built = buildRowFrom(rowCells, spanRow, (cell, col) => {
-      const t = staticCellText(cell, col, '', ctx, errors, svgCache)
+      const t = staticCellText(cell, col, '', ctx, errors, svgLookup)
       return applyCellStyle(
         {
           text: t.text,
@@ -619,7 +622,7 @@ export function buildTableModel({
     // 数据行：内容与样式都由"数据样例行"模板驱动（含 colSpan 合并；rowSpan 强制为 1）
     const rowCtx: EvalContext = { ...ctx, row: plan.row, rowIndex: plan.dataIndex ?? 0 }
     const built = buildRowFrom(template, templateSpan, (cell, col) => {
-      const t = dataCellText(cell, col, rowCtx, errors, svgCache)
+      const t = dataCellText(cell, col, rowCtx, errors, svgLookup)
       return applyCellStyle(
         {
           text: t.text,
@@ -769,7 +772,7 @@ function buildFooterRow(rowCells: TableCell[], spanRow: CellSpan[]): RenderRow {
       }
       return applyCellStyle(
         (() => {
-          const t = staticCellText(cell, col, '', ctx, errors, svgCache)
+          const t = staticCellText(cell, col, '', ctx, errors, svgLookup)
           return {
             text: t.text,
             parts: t.parts.length ? t.parts : undefined,
