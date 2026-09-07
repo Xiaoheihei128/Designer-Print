@@ -157,6 +157,17 @@ export type CellFormatKind =
   | 'decimal' // 定点小数，digits 位（默认 2，带千分位）
   | 'currency' // 货币，code 币种 + digits 位（默认 CNY / 2 位 / 千分位）
   | 'percent' // 百分比，digits 位（默认 2）
+  | 'qrcode' // ★ 段级二维码渲染（仅 field 段有意义）
+  | 'barcode' // ★ 段级条形码渲染（仅 field 段有意义）
+  | 'image' // ★ 段级图片渲染（仅 field 段有意义，字段值是 URL/dataURL）
+
+/** 段级渲染形态的几何/显示参数（qrcode/barcode/image 共有） */
+export interface SegmentDisplayOpts {
+  /** 渲染元素宽度（mm），缺省走 cell 列宽 / 子元素数 */
+  widthMm?: number
+  /** 渲染元素高度（mm），缺省走 row.height 测量结果 */
+  heightMm?: number
+}
 
 export interface CellFormat {
   kind: CellFormatKind
@@ -168,6 +179,17 @@ export interface CellFormat {
   code?: string
   /** int/decimal/currency：是否加千分位（默认 true）；false 走不分组定点 */
   thousands?: boolean
+  // ★ 段级形态专属字段（qrcode/barcode/image，全部 optional，向后兼容）
+  /** qrcode：纠错等级 L/M/Q/H，默认 M */
+  errorLevel?: 'L' | 'M' | 'Q' | 'H'
+  /** barcode：bwip-js bcid（CODE128/EAN13/CODE39/UPC...），默认 code128 */
+  bcid?: string
+  /** barcode：是否在码下方显示文本，默认 true */
+  showText?: boolean
+  /** image：object-fit 语义，默认 contain */
+  fit?: 'contain' | 'cover' | 'fill' | 'none'
+  /** qrcode/barcode/image：几何尺寸（mm），缺省走 cell/段级默认 */
+  display?: SegmentDisplayOpts
 }
 
 /**

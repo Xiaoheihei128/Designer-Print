@@ -14,6 +14,9 @@ export const formatKindOptions: Array<{ label: string; value: CellFormatKind }> 
   { label: '小数', value: 'decimal' },
   { label: '货币', value: 'currency' },
   { label: '百分比', value: 'percent' },
+  { label: '二维码', value: 'qrcode' },
+  { label: '条形码', value: 'barcode' },
+  { label: '图片', value: 'image' },
 ]
 
 /** 日期模板预设（pattern 即 formatDate 的模板语法） */
@@ -50,6 +53,15 @@ export function makeFormat(kind: CellFormatKind): CellFormat {
       return { kind, code: 'CNY', digits: 2, thousands: true }
     case 'percent':
       return { kind, digits: 2 }
+    case 'qrcode':
+      // 段级二维码默认：M 纠错 + 不指定 width/height（由 cell/段自动推算）
+      return { kind, errorLevel: 'M' }
+    case 'barcode':
+      // 段级条形码默认：CODE128 + 显示数字
+      return { kind, bcid: 'code128', showText: true }
+    case 'image':
+      // 段级图片默认：contain 模式
+      return { kind, fit: 'contain' }
     case 'none':
     case 'text':
     default:
@@ -69,6 +81,51 @@ export function needsCode(kind: CellFormatKind | undefined): boolean {
 export function supportsThousands(kind: CellFormatKind | undefined): boolean {
   return kind === 'int' || kind === 'decimal' || kind === 'currency'
 }
+
+/** ★ 段级形态专属谓词：UI 条件渲染子控件用 */
+export function needsErrorLevel(kind: CellFormatKind | undefined): boolean {
+  return kind === 'qrcode'
+}
+export function needsBcid(kind: CellFormatKind | undefined): boolean {
+  return kind === 'barcode'
+}
+export function needsBarcodeShowText(kind: CellFormatKind | undefined): boolean {
+  return kind === 'barcode'
+}
+export function needsFit(kind: CellFormatKind | undefined): boolean {
+  return kind === 'image'
+}
+/** 公共：是否需要 display 几何配置（widthMm/heightMm） */
+export function needsDisplaySize(kind: CellFormatKind | undefined): boolean {
+  return kind === 'qrcode' || kind === 'barcode' || kind === 'image'
+}
+
+/** bwip-js bcid 常用选项（与 BarcodeControl.format 同语义） */
+export const barcodeBcidOptions: Array<{ label: string; value: string }> = [
+  { label: 'CODE128（通用）', value: 'code128' },
+  { label: 'EAN13（商品码）', value: 'ean13' },
+  { label: 'EAN8（短商品码）', value: 'ean8' },
+  { label: 'CODE39（工业）', value: 'code39' },
+  { label: 'UPC（北美商品）', value: 'upca' },
+  { label: 'ITF14（物流）', value: 'itf14' },
+  { label: 'CODE93（紧凑）', value: 'code93' },
+]
+
+/** 二维码纠错等级选项 */
+export const qrErrorLevelOptions: Array<{ label: string; value: 'L' | 'M' | 'Q' | 'H' }> = [
+  { label: 'L（低 7%）', value: 'L' },
+  { label: 'M（中 15%）', value: 'M' },
+  { label: 'Q（较高 25%）', value: 'Q' },
+  { label: 'H（高 30%）', value: 'H' },
+]
+
+/** 图片 fit 选项 */
+export const imageFitOptions: Array<{ label: string; value: 'contain' | 'cover' | 'fill' | 'none' }> = [
+  { label: 'contain（完整显示）', value: 'contain' },
+  { label: 'cover（裁剪填满）', value: 'cover' },
+  { label: 'fill（拉伸填满）', value: 'fill' },
+  { label: 'none（原尺寸）', value: 'none' },
+]
 
 /** 由数据源字段类型推荐一个默认格式类型（仅作 UI 提示，不直接落库） */
 export function suggestKindByFieldType(type: string | undefined): CellFormatKind | null {

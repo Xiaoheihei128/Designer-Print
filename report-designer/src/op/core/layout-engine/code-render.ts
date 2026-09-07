@@ -1,0 +1,178 @@
+/**
+ * code-render —— 段级码/图渲染纯函数
+ *
+ * 职责：
+ * - 把 (text, opts) 转成 SVG 字符串或图片 src（与 control 类型解耦）
+ * - 供表格 cell 段级调用 + 顶层 BarcodeControl/QrcodeControl/ImageControl 调用
+ * - 唯一 async：`renderQrcodeSvg`（qrcode 库 toString 异步）
+ *
+ * 复用关系：
+ * - data-binder.ts 的 renderBarcodeSvg / renderQrcodeSvg / makeSvgResponsive / resolveImageSrc binding 分支
+ *   改为薄壳委托到本文件（保持现有 export 不变）
+ * - bwip-js 同步；qrcode 库异步（用 Promise.all 并行预生成）
+ */
+import * as BwipJs from '@bwip-js/generic'
+import QRCode from 'qrcode'
+import type { SegmentDisplayOpts } from '@op/types/control'
+import type { EvalContext } from '@op/core/layout-engine/expression'
+import { resolveBinding } from '@op/core/layout-engine/expression'
+import type { Segment } from '@op/types/control'
+
+/* ============================================================
+ * 形态段标识（用于预生成 cache key）
+ * ============================================================ */
+
+/** 段级 svg 缓存 key —— value 参与,因为不同字段值渲染出不同 svg */
+export type SegSvgKey = string
+
+export function makeSegSvgKey(segIdx: number, seg: Segment, value: string): SegSvgKey {
+  const path = seg.kind === 'field' ? seg.path : seg.kind === 'expr' ? seg.src : ''
+  return `${segIdx}:${path}:${value}`
+}
+
+/* ============================================================
+ * 段级几何适配（cell 几何 → bwip-js/qrcode 参数）
+ * ============================================================ */
+
+export interface BarcodeRenderOpts {
+  /** bwip-js bcid（CODE128 / EAN13 / CODE39 / UPC ...），默认 code128 */
+  bcid?: string
+  /** 是否在码下方显示文本，默认 true */
+  showText?: boolean
+  /** 目标宽度（mm），缺省 30 */
+  widthMm?: number
+  /** 目标高度（mm），缺省 30；bar 高度按 0.6× 算 */
+  heightMm?: number
+}
+
+export interface QrcodeRenderOpts {
+  /** 纠错等级 L/M/Q/H，默认 M */
+  errorLevel?: 'L' | 'M' | 'Q' | 'H'
+}
+
+export interface ImageResolveOpts {
+  /** 字段路径（走 resolveBinding 解值） */
+  path: string
+  ctx: EvalContext
+}
+
+/* ============================================================
+ * 纯函数
+ * ============================================================ */
+
+/**
+ * 让 SVG 自适应容器：去掉固定 width/height，保留 viewBox 由外层容器缩放。
+ * bwip-js / qrcode 输出的 SVG 都带写死的 width/height，直接嵌入会溢出容器框。
+ *
+ * @param mode 'meet'（默认，等比留白）/ 'none'（拉伸填满，条形码用）
+ */
+export function makeSvgResponsive(svg: string, mode: 'meet' | 'none' = 'meet'): string {
+  let out = svg
+    .replace(/<svg([^>]*?)\swidth="[^"]*"/i, '<svg$1')
+    .replace(/<svg([^>]*?)\sheight="[^"]*"/i, '<svg$1')
+  const ratio = mode === 'none' ? 'none' : 'xMidYMid meet'
+  out = out.replace(/<svg\b/i, `<svg preserveAspectRatio="${ratio}" width="100%" height="100%"`)
+  return out
+}
+
+/**
+ * 条形码 SVG 同步生成（bwip-js）。
+ * 与原 data-binder.ts:174 行为一致：bar 高度 = 控件高 × 0.6，padding = 0.04× 控件高。
+ */
+export function renderBarcodeSvgSync(text: string, opts: BarcodeRenderOpts = {}): string {
+  const controlHeightMM = opts.heightMm ?? 30
+  const controlWidthMM = opts.widthMm ?? 30
+  const barHeightMM = Math.max(2, controlHeightMM * 0.6)
+  const paddingMM = Math.max(0.5, controlHeightMM * 0.04)
+  const svg = BwipJs.toSVG({
+    bcid: (opts.bcid ?? 'code128').toLowerCase(),
+    text,
+    scale: 2,
+    height: barHeightMM,
+    // 目标宽度（mm）：bwip-js 以 72dpi 换算像素，而渲染端是 96dpi；
+    // 传「控件宽mm × 96/72 ÷ scale」使输出自然宽 ≈ 控件宽，宽度独立可调且条码条不变形
+    width: Math.max(1, controlWidthMM * (96 / 72) / 2),
+    paddingtop: paddingMM,
+    paddingbottom: paddingMM,
+    includetext: opts.showText ?? true,
+    textxalign: 'center',
+    textsize: 12,
+  })
+  return makeSvgResponsive(svg, 'none')
+    .replace(/<svg\b/, '<svg class="op-barcode-svg"')
+}
+
+/**
+ * 二维码 SVG 异步生成（qrcode 库 toString 异步）。
+ * 阻塞点 → 必须用 precomputeCodeSvgs 预生成缓存，buildTableModel 同步消费。
+ */
+export async function renderQrcodeSvgSync(text: string, opts: QrcodeRenderOpts = {}): Promise<string> {
+  const svg = await QRCode.toString(text, {
+    type: 'svg',
+    errorCorrectionLevel: opts.errorLevel ?? 'M',
+    margin: 0,
+  })
+  return makeSvgResponsive(svg, 'meet')
+}
+
+/**
+ * 段级图片 src 解析：纯 binding 模式（字段路径 → resolveBinding → String）。
+ * 顶层 ImageControl 另有 inline/url/asset 模式，留在 data-binder.ts 不动。
+ */
+export function resolveImageSrcForSegment(path: string, ctx: EvalContext): string {
+  const raw = resolveBinding(path, ctx)
+  return raw === null || raw === undefined ? '' : String(raw)
+}
+
+/* ============================================================
+ * 预生成缓存（commit 6 在 pagination-engine 入口调用）
+ * ============================================================ */
+
+/** 一组 segments 一次性预生成所有码 svg，返回 cache map */
+export async function precomputeCodeSvgs(
+  segments: Segment[],
+  ctx: EvalContext,
+): Promise<Map<SegSvgKey, string>> {
+  const cache = new Map<SegSvgKey, string>()
+  const tasks: Array<Promise<void>> = []
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i]!
+    if (seg.kind !== 'field') continue
+    const fmt = seg.format
+    if (!fmt) continue
+    const fkind = fmt.kind
+    if (fkind !== 'qrcode' && fkind !== 'barcode') continue
+    const raw = resolveBinding(seg.path, ctx)
+    const value = raw === null || raw === undefined ? '' : String(raw)
+    if (!value) continue // 空值不预生成（由 resolveSegments 输出占位符）
+    const key = makeSegSvgKey(i, seg, value)
+    if (fkind === 'barcode') {
+      // 同步：直接 push 到 cache
+      const svg = renderBarcodeSvgSync(value, {
+        bcid: fmt.bcid,
+        showText: fmt.showText,
+        widthMm: fmt.display?.widthMm,
+        heightMm: fmt.display?.heightMm,
+      })
+      cache.set(key, svg)
+    } else {
+      // 异步：丢进 Promise.all
+      tasks.push(
+        renderQrcodeSvgSync(value, { errorLevel: fmt.errorLevel }).then((svg) => {
+          cache.set(key, svg)
+        }),
+      )
+    }
+  }
+  await Promise.all(tasks)
+  return cache
+}
+
+/* ============================================================
+ * 形态段 display 配置构建（cell 渲染层用）
+ * ============================================================ */
+
+export function displayOptsFromFormat(seg: Segment): SegmentDisplayOpts | undefined {
+  if (seg.kind !== 'field' || !seg.format) return undefined
+  return seg.format.display
+}

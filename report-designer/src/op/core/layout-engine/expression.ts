@@ -719,6 +719,12 @@ export function formatCellValue(raw: unknown, fmt?: CellFormat | null): string {
     }
     case 'percent':
       return `${(n * 100).toFixed(clampDigits(fmt.digits ?? 2))}%`
+    // ★ 段级形态：formatCellValue 不负责生成 svg/img，由 resolveSegments
+    //   在前面识别 kind 并塞 parts；这里走 default 把 raw 字符串化作为文本降级
+    //   （新引擎跑老 cell 路径或老引擎加载新模板时生效，行为是「显示文本」而非「崩溃」）
+    case 'qrcode':
+    case 'barcode':
+    case 'image':
     default:
       return stringifyValue(raw)
   }

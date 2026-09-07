@@ -7,9 +7,12 @@
  * - 所有异步资源（二维码 SVG）在此解析完成，后续渲染全同步
  * - 条码/二维码统一输出 **SVG 矢量**（§5.7）：打印用位图会糊，扫码枪可能读不出
  */
-import * as BwipJs from '@bwip-js/generic'
 import DOMPurify from 'dompurify'
-import QRCode from 'qrcode'
+import {
+  renderBarcodeSvgSync,
+  renderQrcodeSvgSync,
+  makeSvgResponsive as _makeSvgResponsive,
+} from '@op/core/layout-engine/code-render'
 
 /**
  * DOMPurify 3.x 在浏览器里 default export 直接是带 .sanitize 的实例；
@@ -162,48 +165,25 @@ export function resolveCodeText(control: BarcodeControl | QrcodeControl, ctx: Ev
 
 /**
  * 让 SVG 自适应控件尺寸：去掉固定 width/height，保留 viewBox 由外层容器缩放。
- * bwip-js / qrcode 输出的 SVG 都带写死的 width/height，直接嵌入会溢出控件框。
+ * 委托到 code-render.ts 纯函数版（段级复用），保留此处 export 兼容老调用方。
  */
 function makeSvgResponsive(svg: string): string {
-  return svg
-    .replace(/<svg([^>]*?)\swidth="[^"]*"/i, '<svg$1')
-    .replace(/<svg([^>]*?)\sheight="[^"]*"/i, '<svg$1')
-    .replace(/<svg\b/i, '<svg preserveAspectRatio="xMidYMid meet" width="100%" height="100%"')
+  return _makeSvgResponsive(svg, 'meet')
 }
 
+/** 委托到 code-render.ts 纯函数版（段级复用），保留 control 类型接口 */
 function renderBarcodeSvg(control: BarcodeControl, text: string): string {
-  // 与设计画布 barcode-draw.ts 保持一致：按控件几何反算条码条高度，让文字行不被压扁
-  const controlHeightMM = control.height ?? 30
-  const barHeightMM = Math.max(2, controlHeightMM * 0.6)
-  const paddingMM = Math.max(0.5, controlHeightMM * 0.04)
-  const svg = BwipJs.toSVG({
-    bcid: (control.format ?? 'code128').toLowerCase(),
-    text,
-    scale: 2,
-    height: barHeightMM,
-    // 目标宽度（mm）：bwip-js 以 72dpi 换算像素，而渲染端是 96dpi；
-    // 传「控件宽mm × 96/72 ÷ scale」使输出自然宽 ≈ 控件宽，宽度独立可调且条码条不变形
-    width: Math.max(1, (control.width ?? 30) * (96 / 72) / 2),
-    paddingtop: paddingMM,
-    paddingbottom: paddingMM,
-    includetext: control.showText ?? true,
-    textxalign: 'center',
-    textsize: 12,
+  return renderBarcodeSvgSync(text, {
+    bcid: control.format,
+    showText: control.showText,
+    widthMm: control.width,
+    heightMm: control.height,
   })
-  // 条码与二维码统一 100%×100% 填满控件框（宽高独立，所见即所得）；
-  // preserveAspectRatio="none"：自然尺寸 ≈ 控件尺寸后拉伸量 ≈ 1，条与数字不变形。
-  return makeSvgResponsive(svg)
-    .replace(/preserveAspectRatio="xMidYMid meet"/, 'preserveAspectRatio="none"')
-    .replace(/<svg\b/, '<svg class="op-barcode-svg"')
 }
 
+/** 委托到 code-render.ts 纯函数版（段级复用），保留 control 类型接口与 async 签名 */
 async function renderQrcodeSvg(control: QrcodeControl, text: string): Promise<string> {
-  const svg = await QRCode.toString(text, {
-    type: 'svg',
-    errorCorrectionLevel: control.errorLevel ?? 'M',
-    margin: 0,
-  })
-  return makeSvgResponsive(svg)
+  return renderQrcodeSvgSync(text, { errorLevel: control.errorLevel })
 }
 
 /* ------------------------------- 富文本消毒 ------------------------------ */
