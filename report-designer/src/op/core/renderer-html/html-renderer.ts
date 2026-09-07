@@ -130,6 +130,57 @@ function renderCode(node: PlacedControl, svg: string): string {
   return `<div class="op-node op-code" data-id="${escapeHtml(node.id)}"${styleAttr(boxStyles(node))}>${svg}</div>`
 }
 
+/**
+ * 渲染单元格内部内容 —— 段级形态(text/svg/image)按 part.kind 分支输出。
+ * 老路径无 parts → 直接 escapeHtml(cell.text)(保持字节级兼容)。
+ *
+ * ★ 安全：
+ * - text part → escapeHtml(防 XSS)
+ * - svg part → 原始内联(svg 由 bwip-js/qrcode 库自身生成,不带用户内容)
+ * - image part → escapeHtml src/alt(防 XSS via src=javascript:)
+ */
+function renderCellInner(cell: RenderCell): string {
+  if (!cell.parts || cell.parts.length === 0) {
+    return escapeHtml(cell.text) || '<br>'
+  }
+  const out: string[] = []
+  for (const p of cell.parts) {
+    if (p.kind === 'text') {
+      out.push(escapeHtml(p.text))
+      continue
+    }
+    if (p.kind === 'svg') {
+      // 段级 svg:不携带 node.id(无 PlacedControl),inline-block 让 svg 与文字行内对齐
+      const display = p.meta?.display
+      const sizeStyle =
+        display?.widthMm || display?.heightMm
+          ? ` style="${[
+              display.widthMm ? `width:${mmv(display.widthMm)}` : '',
+              display.heightMm ? `height:${mmv(display.heightMm)}` : '',
+            ]
+              .filter(Boolean)
+              .join(';')}"`
+          : ''
+      out.push(`<span class="op-code-seg"${sizeStyle}>${p.svg}</span>`)
+      continue
+    }
+    // image
+    const fit = p.meta?.fit ?? 'contain'
+    const d = p.meta?.display
+    const style = [
+      fit ? `object-fit:${fit}` : '',
+      d?.widthMm ? `width:${mmv(d.widthMm)}` : '',
+      d?.heightMm ? `height:${mmv(d.heightMm)}` : '',
+    ]
+      .filter(Boolean)
+      .join(';')
+    out.push(
+      `<img class="op-image-seg"${style ? ` style="${style}"` : ''} src="${escapeHtml(p.src)}" alt="${escapeHtml(p.alt ?? '')}">`,
+    )
+  }
+  return out.join('') || '<br>'
+}
+
 function renderRichText(node: PlacedControl, html: string): string {
   // html 已在 data-binder 中经 DOMPurify 消毒
   return `<div class="op-node op-richtext" data-id="${escapeHtml(node.id)}"${styleAttr(boxStyles(node))}>${html}</div>`
@@ -257,7 +308,7 @@ function renderRow(row: RenderRow, striped: boolean): string {
       ]
       const span = cell.colSpan && cell.colSpan > 1 ? ` colspan="${cell.colSpan}"` : ''
       const rspan = cell.rowSpan && cell.rowSpan > 1 ? ` rowspan="${cell.rowSpan}"` : ''
-      return `<td${span}${rspan}${styleAttr(style)}>${escapeHtml(cell.text) || '<br>'}</td>`
+      return `<td${span}${rspan}${styleAttr(style)}>${renderCellInner(cell)}</td>`
     })
     .join('')
 

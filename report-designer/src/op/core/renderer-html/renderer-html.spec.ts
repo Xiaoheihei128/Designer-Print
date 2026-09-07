@@ -369,4 +369,104 @@ describe('renderer-html —— HTML 输出', () => {
       expect(allRows[0]).toContain('rowspan="3"')
     })
   })
+
+  // ★ Commit 5:段级 parts 渲染
+  describe('段级形态(text/svg/image)parts 渲染', () => {
+    function segTableHtml(cells: RenderCell[]): string {
+      const table: PlacedTable = {
+        kind: 'table',
+        id: 't',
+        left: 0,
+        top: 0,
+        width: 60,
+        height: 30,
+        control: { id: 't', type: 'table' } as TableControl,
+        columns: [{ title: 'X', width: 60 }],
+        columnWidths: [60],
+        headerRows: [{ kind: 'header', height: 8, cells: [{ text: 'X', align: 'left' }] }],
+        rows: [{ kind: 'data', height: 12, cells }],
+        footerRows: [],
+        isLastSlice: false,
+      }
+      const page: LayoutPage = {
+        index: 0,
+        pageNo: 1,
+        header: [],
+        body: [table],
+        footer: [],
+      }
+      const doc: LayoutResult = {
+        pages: [page],
+        metrics: {
+          pageWidth: 210,
+          pageHeight: 297,
+          margin: { top: 10, right: 10, bottom: 10, left: 10 },
+          contentWidth: 190,
+          contentHeight: 277,
+          headerHeight: 0,
+          footerHeight: 0,
+          bodyHeight: 277,
+        },
+        page: { size: 'A4', orientation: 'portrait', unit: 'mm' },
+        warnings: [],
+      }
+      return renderHtml(doc)
+    }
+
+    it('text part 走 escapeHtml,防止 XSS', () => {
+      const html = segTableHtml([
+        {
+          text: '',
+          align: 'left',
+          parts: [{ kind: 'text', text: '<img src=x onerror=alert(1)>' }],
+        },
+      ])
+      expect(html).not.toContain('<img src=x')
+      expect(html).toContain('&lt;img src=x')
+    })
+
+    it('svg part 内联 <svg> 且不转义', () => {
+      const html = segTableHtml([
+        {
+          text: '',
+          align: 'left',
+          parts: [{ kind: 'svg', svg: '<svg><rect/></svg>' }],
+        },
+      ])
+      expect(html).toMatch(/<span class="op-code-seg"><svg><rect\/><\/svg><\/span>/)
+    })
+
+    it('image part 输出 <img> 且 src/alt 走 escapeHtml', () => {
+      const html = segTableHtml([
+        {
+          text: '',
+          align: 'left',
+          parts: [{ kind: 'image', src: 'javascript:alert(1)', alt: '"onload=x"' }],
+        },
+      ])
+      // src "javascript:" 协议被 escapeHtml 防 XSS
+      expect(html).toContain('src="javascript:alert(1)"') // 内容保留但作为属性值无害
+      expect(html).toContain('alt="&quot;onload=x&quot;"')
+    })
+
+    it('混排:text + svg + text → 按 parts 顺序串联', () => {
+      const html = segTableHtml([
+        {
+          text: '',
+          align: 'left',
+          parts: [
+            { kind: 'text', text: '扫描:' },
+            { kind: 'svg', svg: '<svg/>' },
+            { kind: 'text', text: '核对' },
+          ],
+        },
+      ])
+      expect(html).toMatch(/扫描:.*?<svg\/>.*?核对/)
+    })
+
+    it('无 parts → 走老路径 escapeHtml(cell.text)', () => {
+      const html = segTableHtml([{ text: 'hello', align: 'left' }])
+      expect(html).toContain('<td style="text-align:left">hello</td>')
+    })
+  })
 })
