@@ -56,6 +56,27 @@ function emptyDisplayLabel(kind: 'qrcode' | 'barcode' | 'image'): string {
 }
 
 /**
+ * 形态段默认显示尺寸(mm)。用户没显式设 display.heightMm/widthMm 时使用——
+ * 否则 measureRowHeight 只兜底 `fontSize * 1.5` ≈ 13.5mm,远不够 SVG 真实尺寸。
+ * 表格 td 用 `width:100% height:100% preserveAspectRatio="none"` 把 SVG 强压,
+ * SVG 被切 → 行看起来"被截断"。
+ *
+ * - qrcode:紧凑型,15mm 方块够 4 级纠错 30 字符
+ * - barcode:Code128+showText 默认需 25mm(条码 ~15mm + 数字行 ~10mm)
+ * - image:15mm 默认(可由 fit 配合 columnWidth 自适应)
+ */
+function defaultDisplayForFormat(
+  kind: 'qrcode' | 'barcode' | 'image',
+  userDisplay?: { widthMm?: number; heightMm?: number },
+): { widthMm?: number; heightMm: number } {
+  const defaultH = kind === 'barcode' ? 25 : 15
+  return {
+    widthMm: userDisplay?.widthMm,
+    heightMm: userDisplay?.heightMm ?? defaultH,
+  }
+}
+
+/**
  * 求值 segments 数组 —— 拼接各片段字符串 + 输出结构化 parts
  *
  * - 空数组 / undefined → `{ text: '', parts: [], errors: [] }`
@@ -138,7 +159,7 @@ function resolveOne(
               kind: 'image',
               src,
               alt: seg.path,
-              meta: { display: fmt?.display, fit: fmt?.fit },
+              meta: { display: defaultDisplayForFormat('image', fmt?.display), fit: fmt?.fit },
             },
           ],
         }
@@ -149,7 +170,7 @@ function resolveOne(
         if (svg) {
           return {
             text: '',
-            parts: [{ kind: 'svg', svg, meta: { display: fmt?.display } }],
+            parts: [{ kind: 'svg', svg, meta: { display: defaultDisplayForFormat(fkind, fmt?.display) } }],
           }
         }
       }

@@ -165,6 +165,52 @@ describe('★ resolveSegments 段级渲染形态', () => {
     expect(r.parts[0]!.kind).toBe('text')
   })
 
+  // ★ Bug 修复：段级 svg/image part 必须带 display.heightMm,否则 measureRowHeight
+  //   兜底 fontSize*1.5≈13.5mm 不够 SVG 真实尺寸,SVG 被 td overflow:hidden 切。
+  //   用户案例：table.cell 绑了 qrcode/barcode 后预览,SVG 顶部显示,底部被切,
+  //   视觉上像「行被截断」。
+  it('★ qrcode svg part 默认 display.heightMm = 15mm（紧凑 QR）', () => {
+    const segs: Segment[] = [
+      { kind: 'field', path: 'order.qr', format: { kind: 'qrcode', errorLevel: 'M' } },
+    ]
+    // 模拟 pagination-engine 预生成 svgLookup 命中
+    const svgLookup = (_i: number, _p: string, _v: string) => '<svg/>'
+    const r = resolveSegments(segs, { data: { order: { qr: 'S-1' } } }, { svgLookup })
+    expect(r.parts.length).toBe(1)
+    expect(r.parts[0]!.kind).toBe('svg')
+    const part = r.parts[0] as { kind: 'svg'; meta?: { display?: { heightMm?: number } } }
+    expect(part.meta?.display?.heightMm).toBe(15)
+  })
+
+  it('★ barcode svg part 默认 display.heightMm = 25mm（Code128+showText 需 ~10mm 数字行）', () => {
+    const segs: Segment[] = [
+      { kind: 'field', path: 'product.sn', format: { kind: 'barcode', bcid: 'code128', showText: true } },
+    ]
+    const svgLookup = (_i: number, _p: string, _v: string) => '<svg/>'
+    const r = resolveSegments(segs, { data: { product: { sn: 'SN-1' } } }, { svgLookup })
+    const part = r.parts[0] as { kind: 'svg'; meta?: { display?: { heightMm?: number } } }
+    expect(part.meta?.display?.heightMm).toBe(25)
+  })
+
+  it('★ image part 默认 display.heightMm = 15mm', () => {
+    const segs: Segment[] = [
+      { kind: 'field', path: 'photo', format: { kind: 'image', fit: 'cover' } },
+    ]
+    const r = resolveSegments(segs, { data: { photo: 'http://x/y.jpg' } })
+    const part = r.parts[0] as { kind: 'image'; meta?: { display?: { heightMm?: number } } }
+    expect(part.meta?.display?.heightMm).toBe(15)
+  })
+
+  it('★ 用户显式设 display.heightMm 时覆盖默认值', () => {
+    const segs: Segment[] = [
+      { kind: 'field', path: 'qr', format: { kind: 'qrcode', display: { widthMm: 30, heightMm: 40 } } },
+    ]
+    const svgLookup = (_i: number, _p: string, _v: string) => '<svg/>'
+    const r = resolveSegments(segs, { data: { qr: 'S-1' } }, { svgLookup })
+    const part = r.parts[0] as { kind: 'svg'; meta?: { display?: { heightMm?: number } } }
+    expect(part.meta?.display?.heightMm).toBe(40)
+  })
+
   it('★ 空字段值 → text 显示「(空二维码)」占位（用户决策：不回落示例码）', () => {
     const segs: Segment[] = [
       { kind: 'field', path: 'order.qr', format: { kind: 'qrcode' } },

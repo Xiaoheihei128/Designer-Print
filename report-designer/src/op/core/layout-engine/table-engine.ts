@@ -427,15 +427,14 @@ function measureRowHeight(
       fontWeight: cell.bold ? 'bold' : 'normal',
       widthMm: avail,
     })
-    // ★ 段级形态高度:非 text part(qrcode/barcode/image)按 display.heightMm 优先,
-    // 缺省兜底为 fontSize * 1.5(至少 8mm,避免二维码被压扁)。
+    // ★ 段级形态高度:非 text part(qrcode/barcode/image)按 display.heightMm 决定。
+    // resolveSegments 已按 format kind 给合理默认(qrcode=15mm/barcode=25mm/image=15mm),
+    // 用户显式设置会覆盖。这里不再兜底 fontSize 公式 —— 老公式 13.5mm 不够 SVG 真实尺寸。
     let cellPartH = 0
     for (const p of cell.parts ?? []) {
       if (p.kind === 'text') continue
-      const displayH =
-        p.meta?.display?.heightMm ??
-        Math.max(((cell.fontSize ?? TABLE_FONT_SIZE) * 1.5), 8)
-      if (displayH > cellPartH) cellPartH = displayH
+      const displayH = p.meta?.display?.heightMm
+      if (displayH !== undefined && displayH > cellPartH) cellPartH = displayH
     }
     const effectiveH = Math.max(heightMm, cellPartH)
     if (effectiveH > maxH) maxH = effectiveH
