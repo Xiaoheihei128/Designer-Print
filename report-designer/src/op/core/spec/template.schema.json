@@ -111,25 +111,40 @@
           "additionalProperties": true
         },
         "dataSource": { "type": "string" },
+        "mode": { "enum": ["standard", "appendix"], "description": "LabelGrid 模式:standard=通用 / appendix=附录图片墙预设(首卡 children 锁死三件套)" },
+        "forceNewPage": { "type": "boolean", "description": "appendix 模式:把网格推到下一页顶部" },
+        "cornerRadius": { "type": "number", "description": "appendix 模式:卡片圆角(mm),>0 走 roundRect 路径" },
+        "cardBorder": { "type": "boolean", "description": "appendix 模式:卡片边框开关,默认 true" },
+        "appendixHeader": { "type": "string", "description": "appendix 模式:拖入时自动插入 body 顶部的 TextControl 内容" },
         "columns": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": ["title", "width"],
-            "properties": {
-              "id": { "type": "string" },
-              "title": { "type": "string" },
-              "field": { "type": "string" },
-              "expression": { "type": "string" },
-              "width": { "type": "number", "exclusiveMinimum": 0 },
-              "align": { "enum": ["left", "center", "right"] },
-              "headerAlign": { "enum": ["left", "center", "right"] },
-              "cellBackgroundColor": { "type": "string" },
-              "headerBackgroundColor": { "type": "string" },
-              "cellPadding": { "type": "number", "minimum": 0 }
+          "description": "table.columns=列定义数组;labelgrid.columns=每行列数(number)。schema 共享一个字段名,按 anyOf 分支",
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 1,
+              "description": "labelgrid 的每行列数"
             },
-            "additionalProperties": true
-          }
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["title", "width"],
+                "properties": {
+                  "id": { "type": "string" },
+                  "title": { "type": "string" },
+                  "field": { "type": "string" },
+                  "expression": { "type": "string" },
+                  "width": { "type": "number", "exclusiveMinimum": 0 },
+                  "align": { "enum": ["left", "center", "right"] },
+                  "headerAlign": { "enum": ["left", "center", "right"] },
+                  "cellBackgroundColor": { "type": "string" },
+                  "headerBackgroundColor": { "type": "string" },
+                  "cellPadding": { "type": "number", "minimum": 0 }
+                },
+                "additionalProperties": true
+              }
+            }
+          ]
         },
         "options": {
           "type": "object",
@@ -145,7 +160,7 @@
               "anyOf": [
                 { "const": "off" },
                 { "const": "fill" },
-                { "type": "object", "properties": { "min": { "type": "number", "minimum": 1 } }, "required": ["min"], "additionalProperties": false }
+                { "type": "object", "properties": { "count": { "type": "number", "minimum": 0 } }, "required": ["count"], "additionalProperties": false }
               ]
             },
             "fixBottomMargin": { "type": "number", "minimum": 0 },
