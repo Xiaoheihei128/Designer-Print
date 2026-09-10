@@ -107,6 +107,13 @@ export type RowCtxMap = Map<string, { row: Record<string, unknown>; rowIndex: nu
 export interface GridLinePlacement {
   pageIndex: number
   line: GridLine
+  /** 所属 grid id（用于 post-process 清理空卡片的 gridLine） */
+  gridId?: string
+  /**
+   * 卡片索引（0-based,grid 内全局）。仅卡片 gridLine 有此字段；容器边框（按 pageRanges
+   * 切分的连续矩形）不设此字段,由 gridId + pageRanges 反算覆盖范围。
+   */
+  cardIndex?: number
 }
 
 export interface ExpandResult {
@@ -118,6 +125,12 @@ export interface ExpandResult {
   expanded: boolean
   /** 网格参考线（容器 + 卡片边框），按页切分，供渲染 / 导出画出与设计一致的网络 */
   gridLines: GridLinePlacement[]
+  /**
+   * 已被展开的 labelgrid 原始控件（按 id 索引）。流式表格场景下分页引擎需要拿到
+   * 原始 grid 控件在「表格下方」分页后重新展开，传入新 gridTop 才能让容器边框
+   * 跟生成控件同步落到正确的页面（避免「容器边框 vs 卡片脱钩」）。
+   */
+  originalGrids: Map<string, LabelGridControl>
 }
 
 /** 分页步长（mm）：与 layoutStaticOnly 的按位置切页保持同一真理源（整页相对模型 = 物理页高） */
@@ -141,6 +154,22 @@ function gridDataArray(
   return Array.isArray(v) ? (v as Array<Record<string, unknown>>) : null
 }
 
+/** 分页引擎下传的目标页位置 hint（仅 mode=appendix + pageBreak 决策生效） */
+export interface GridPlacementHint {
+  /** 目标 pageIndex（0-based），展开器必须把整组网格落在此页 */
+  pageIndex: number
+  /** 该页内的 originTop（mm, page-relative），展开器在该位置起铺卡片 */
+  originTop: number
+}
+
+/** 展开器需要的页面可用区域参数（与 pagination-engine 同口径） */
+export interface PageCapacityOptions {
+  /** 该页「可用顶部」(mm,page-relative)= headerHeight(页眉下方),无页眉时=0 */
+  zoneTop: number
+  /** 该页「可用底部」(mm,page-relative,从顶部量起)= bodyStep - footerHeight,无页脚时=bodyStep */
+  usableBottom: number
+}
+
 /**
  * 把正文里的 labelgrid 全部展开为绝对定位的普通控件。
  *
@@ -152,6 +181,10 @@ function gridDataArray(
  *
  * @param bodyStep 分页步长（mm）= 物理页高，见 bodyStepMm
  * @param maxPages 最大页数保护（同时兜住超大行数）
+ * @param placementHint 分页引擎下传的目标页位置 hint（可选）。仅 mode=appendix + pageBreak
+ *   非 'always' 时生效：展开器不重置 pageIndex/originTop,直接使用 hint。
+ *   'always' 永远独占 hint.pageIndex + originTop=0;
+ *   无 hint → 走默认的「按 gridTop 推断 pageIndex + 首页放不下整体下移」路径。
  */
 export function expandLabelGrids(
   components: readonly AnyControl[],
@@ -159,11 +192,14 @@ export function expandLabelGrids(
   unit: PageUnit,
   bodyStep: number,
   maxPages: number,
+  placementHints?: Map<string, GridPlacementHint>,
+  pageCapacity?: PageCapacityOptions,
 ): ExpandResult {
   const out: AnyControl[] = []
   const rowCtx: RowCtxMap = new Map()
   const warnings: RenderWarning[] = []
   const gridLines: GridLinePlacement[] = []
+  const originalGrids: Map<string, LabelGridControl> = new Map()
   let expanded = false
 
   for (const control of components) {
@@ -172,6 +208,8 @@ export function expandLabelGrids(
       continue
     }
     expanded = true
+    // 记录原始 grid,供流式表格场景下分页后按真实位置重新展开
+    originalGrids.set(control.id, control as LabelGridControl)
 
     // 整个网格被条件渲染关掉 / 不打印 → 整体跳过
     if (!isControlPrintable(control, ctx)) continue
@@ -224,12 +262,43 @@ export function expandLabelGrids(
 
     let pageIndex = 0
     let originTop = gridTop
+    // ★ pageCapacity:与 pagination-engine 同口径,从可用顶部(zoneTop=headerHeight)
+    // 算 rowCapacity,避免 grid 跨页时把卡片塞进页眉区。无 pageCapacity 时回退
+    // 到 bodyStep(零回归)。
+    const zoneTop = pageCapacity?.zoneTop ?? 0
+    const usableBottom = pageCapacity?.usableBottom ?? bodyStep
+    const usablePerPage = Math.max(1, usableBottom - zoneTop)
     let capacity = rowCapacity(bodyStep - gridTop)
-    if (capacity <= 0) {
-      // 首页从网格 top 起放不下一整行 → 整体下移到下一页顶部
+    // ★ 分页引擎下传的目标页位置 hint(仅 mode=appendix 生效):
+    //   展开器完全信任 caller 算出的 hint.pageIndex + hint.originTop(由 caller
+    //   decideGridTarget 已根据 pageBreak 三态预算:always/auto 优先新页放得下就跟,
+    //   never 强制紧跟当前页)。展开器不再在 'always' 分支强制 originTop=0。
+    //   standard 模式走默认推断路径(无 hint 不变),零回归。
+    const hint = placementHints?.get(control.id)
+    const effectivePageBreak =
+      control.pageBreak ?? (control.forceNewPage ? 'always' : 'auto')
+    if (control.mode === 'appendix' && hint) {
+      pageIndex = hint.pageIndex
+      originTop = hint.originTop
+      capacity = rowCapacity(usablePerPage - (originTop - zoneTop))
+    } else if (capacity <= 0) {
+      // 首页从网格 top 起放不下一整行 → 整体下移到下一页顶部(从页眉下方)
       pageIndex = 1
-      originTop = 0
-      capacity = rowCapacity(bodyStep)
+      originTop = zoneTop
+      capacity = rowCapacity(usablePerPage)
+    }
+    // ★ 分页策略 (Step 2 三态):
+    //   - 'always':强制把网格整组推到下一页顶部(等同老 forceNewPage=true)
+    //   - 'auto'  :能放下就紧跟当前页;放不下才推下一页顶部(默认,等同老 forceNewPage=false)
+    //   - 'never' :始终紧跟当前页;放不下时由引擎裁切(用户承担)
+    // 仅在 mode === 'appendix' 时生效,standard 模式零影响。
+    // 向后兼容:forceNewPage=true → 'always';forceNewPage=false/undefined → 'auto'。
+    // 已在上面 hint 分支里覆盖,此处保留仅给 standard 模式下的 'always' 兜底。
+    if (control.mode === 'appendix' && effectivePageBreak === 'always' && !hint) {
+      const currentPageIndex = Math.floor(gridTop / bodyStep)
+      pageIndex = currentPageIndex + 1
+      originTop = zoneTop
+      capacity = rowCapacity(usablePerPage)
     }
     if (capacity <= 0) {
       capacity = 1
@@ -240,16 +309,41 @@ export function expandLabelGrids(
       })
     }
 
+    // ★ 'auto' 分支:整组能否塞进当前页剩余空间(originTop ~ bodyStep)?
+    // - 塞得下 → 紧跟当前页(原 capacity 不变)
+    // - 塞不下 → 整组推到下一页顶部(等同 'always' 的副作用,但只在确实放不下时才推)
+    // 'never' → 不做这一步,即便放不下也按原 capacity 走(由 maxPages 截断保护)
+    if (control.mode === 'appendix' && effectivePageBreak === 'auto' && !hint) {
+      // ★ 'auto' 分支:仅在没有 hint 时由展开器自身做 fits 推断。
+      // 有 hint 时(分页引擎流式表格场景),caller 已经算过 fits + baseTop,
+      // 展开器必须信任 hint,不要用原始 gridTop 再推 pageIndex(会吞掉 caller 的 designOffset)。
+      const totalRows = Math.ceil(total / geo.columns)
+      const requiredHeight = totalRows * stepY - geo.gapY // 最后一行不用 gapY
+      const availableHeight = usablePerPage - (originTop - zoneTop)
+      if (requiredHeight > availableHeight + 0.5) {
+        const currentPageIndex = Math.floor(gridTop / bodyStep)
+        pageIndex = currentPageIndex + 1
+        originTop = zoneTop
+        capacity = rowCapacity(usablePerPage)
+      }
+    }
+
     let rowOnPage = 0
     let truncated = false
     let cardIndex = 0
+    // 容器边框切段用：跟踪每页上首行/末行的 page-relative 坐标
+    // 数据驱动模式下,容器实际纵向范围 = 首行 top → 末行 bottom(可能跨多页),
+    // 不能用 gridHeight(只是「行数估算参考」,数据展开后实际更高)
+    const pageRanges = new Map<number, { top: number; bottom: number }>()
 
     while (cardIndex < total) {
       if (rowOnPage >= capacity) {
         pageIndex++
         rowOnPage = 0
-        originTop = 0
-        capacity = Math.max(1, rowCapacity(bodyStep))
+        // ★ 关键修复:grid 跨页时新页 originTop 必须 = zoneTop(页眉下方),
+        // 不能从 page 顶部 0 起(否则 grid 卡片覆盖每页重复的页眉)。
+        originTop = zoneTop
+        capacity = Math.max(1, rowCapacity(usablePerPage))
       }
       if (pageIndex >= maxPages) {
         truncated = true
@@ -257,9 +351,18 @@ export function expandLabelGrids(
       }
 
       const rowTop = pageIndex * bodyStep + originTop + rowOnPage * stepY
+      const pageRelTop = rowTop - pageIndex * bodyStep
+      const pageRelBottom = pageRelTop + cardH
+      // 更新该页的纵向范围
+      const range = pageRanges.get(pageIndex)
+      if (range) {
+        range.top = Math.min(range.top, pageRelTop)
+        range.bottom = Math.max(range.bottom, pageRelBottom)
+      } else {
+        pageRanges.set(pageIndex, { top: pageRelTop, bottom: pageRelBottom })
+      }
       // 卡片边框（page-relative 坐标：减掉页偏移，与 PlacedNode 同坐标系）
       if (showLines) {
-        const pageRelTop = rowTop - pageIndex * bodyStep
         for (let col = 0; col < Math.min(geo.columns, total - cardIndex); col++) {
           gridLines.push({
             pageIndex,
@@ -270,6 +373,8 @@ export function expandLabelGrids(
               height: cardH,
               solid,
             },
+            gridId: control.id,
+            cardIndex: cardIndex + col,
           })
         }
       }
@@ -279,9 +384,13 @@ export function expandLabelGrids(
         const cardLeft = gridLeft + col * (cardW + gapX)
         for (const child of children) {
           const genId = `${control.id}${GEN_SEP}${cardIndex}${GEN_SEP}${child.id}`
+          // ★ 写 childOf:让分页引擎能从 plan.below 中识别"这是 grid 的子控件"→
+          // 从 textFlowBelow / appendixChildIds 中正确剔除。
+          // 没有这一字段时,所有 grid 子控件都会进 textFlow,reserveBelow 暴涨→grid 被错推。
           out.push({
             ...child,
             id: genId,
+            childOf: control.id,
             left: fromMm(cardLeft + toMm(child.left, unit), unit),
             top: fromMm(rowTop + toMm(child.top, unit), unit),
           } as AnyControl)
@@ -305,29 +414,29 @@ export function expandLabelGrids(
     }
 
     // 容器边框按页切分成若干段（跨页时每段落在对应页，避免单条大矩形越页被裁剪）
-    if (showLines && gridHeight > 0) {
-      const first = Math.floor(gridTop / bodyStep)
-      const last = Math.floor((gridTop + gridHeight - 1e-6) / bodyStep)
-      for (let p = first; p <= last && p < maxPages; p++) {
-        const segTopAbs = Math.max(gridTop, p * bodyStep)
-        const segBottomAbs = Math.min(gridTop + gridHeight, (p + 1) * bodyStep)
-        if (segBottomAbs - segTopAbs > 1e-6) {
+    // 关键：数据驱动模式下总卡片数 ≠ 列数 × 行数（跟随 dataCount），实际占据的纵向范围
+    // 可能远超用户设定的 gridHeight（容器只是「行数估算参考」），必须用实际行范围切段。
+    if (showLines) {
+      for (const [pIdx, range] of pageRanges) {
+        const segHeight = range.bottom - range.top
+        if (segHeight > 1e-6) {
           gridLines.push({
-            pageIndex: p,
+            pageIndex: pIdx,
             line: {
               left: gridLeft,
-              top: segTopAbs - p * bodyStep,
+              top: range.top,
               width: gridWidth,
-              height: segBottomAbs - segTopAbs,
+              height: segHeight,
               solid,
             },
+            gridId: control.id,
           })
         }
       }
     }
   }
 
-  return { components: out, rowCtx, warnings, expanded, gridLines }
+  return { components: out, rowCtx, warnings, expanded, gridLines, originalGrids }
 }
 
 /** 把行上下文并进求值上下文（生成控件原样返回，零开销；标签网格当前恒空） */

@@ -4,7 +4,7 @@
  * 选中控件 → 通用属性 + 类型属性；无选中 → 页面设置（纸张预设 / 方向 / 边距）。
  * 样式与事件本就分散在各控件 Props 与协议层，故不再设独立 tab。
  */
-import { computed, ref, type Component } from 'vue'
+import { computed, ref, watch, type Component } from 'vue'
 import {
   NSelect,
   NInputNumber,
@@ -29,9 +29,35 @@ import ChartProps from '@op/design/panels/props/ChartProps.vue'
 import MathProps from '@op/design/panels/props/MathProps.vue'
 import SignatureProps from '@op/design/panels/props/SignatureProps.vue'
 import LabelGridProps from '@op/design/panels/props/LabelGridProps.vue'
+import TableQuickPanel from '@op/design/panels/quick/TableQuickPanel.vue'
+import { useUiStore } from '@op/design/stores/ui'
 
 const store = useDesignerStore()
+const uiStore = useUiStore()
 const control = computed(() => store.selectedControl)
+
+/**
+ * 防呆：快速面板只对 table 类型生效——
+ *   1. 面板被打开时若控件不是 table，自动关
+ *   2. 控件切换到非 table 时若面板仍开着，自动关
+ *   3. 控件被删除（变 null）时也由 v-else-if 兜底走到页面设置
+ */
+watch(
+  () => uiStore.rightPanelMode,
+  (mode) => {
+    if (mode === 'tableQuick' && control.value?.type !== 'table') {
+      uiStore.closeTableQuickPanel()
+    }
+  },
+)
+watch(
+  () => control.value?.id,
+  () => {
+    if (uiStore.rightPanelMode === 'tableQuick' && control.value?.type !== 'table') {
+      uiStore.closeTableQuickPanel()
+    }
+  },
+)
 
 const propsComponent = computed<Component | null>(() => {
   switch (control.value?.type) {
@@ -256,8 +282,15 @@ const watermark = computed<WatermarkConfig>(() => store.pageSetup.watermark ?? {
         </template>
       </div>
 
-      <!-- 选中控件：通用 + 类型属性 -->
-      <template v-if="control">
+      <!-- 选中控件：表格 + 快速面板模式 → 替代属性（精简版 4 tab） -->
+      <!-- 用 v-if 而非 v-else-if：上面是 </div> 闭合"页面外观"section，没有 v-if 锚点；
+           v-else-if 没有锚点会被 Vue 编译器静默忽略。 -->
+      <TableQuickPanel
+        v-if="control?.type === 'table' && uiStore.rightPanelMode === 'tableQuick'"
+      />
+
+      <!-- 选中控件：普通模式 → 原类型属性 + 通用 -->
+      <template v-else-if="control">
         <component :is="propsComponent" v-if="propsComponent" />
         <CommonProps />
       </template>

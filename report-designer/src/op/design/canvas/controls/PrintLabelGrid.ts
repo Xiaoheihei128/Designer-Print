@@ -52,6 +52,12 @@ export class PrintLabelGrid extends FabricImage implements IPrintObject {
   /** 可选逐卡数据源数组路径（如 items），见 LabelGridControl.dataSource */
   dataSource?: string
   children: AnyControl[]
+  /* 模式化包装（mode/forceNewPage/cornerRadius/cardBorder/appendixHeader）—— 见 LabelGridControl */
+  mode?: 'standard' | 'appendix'
+  forceNewPage?: boolean
+  cornerRadius?: number
+  cardBorder?: boolean
+  appendixHeader?: string
 
   constructor(control: LabelGridControl) {
     super(document.createElement('canvas'), {
@@ -71,6 +77,11 @@ export class PrintLabelGrid extends FabricImage implements IPrintObject {
     this.lineStyle = control.lineStyle
     this.dataSource = control.dataSource
     this.children = control.children ?? []
+    this.mode = control.mode
+    this.forceNewPage = control.forceNewPage
+    this.cornerRadius = control.cornerRadius
+    this.cardBorder = control.cardBorder
+    this.appendixHeader = control.appendixHeader
     this.printable = control.printable ?? true
     this.visibleIf = control.visibleIf
     this.controlName = control.name
@@ -175,17 +186,51 @@ export class PrintLabelGrid extends FabricImage implements IPrintObject {
     ctx.rect(0, 0, boundW, boundH)
     ctx.clip()
 
-    // 背景：首卡白底，其余浅灰锁定
-    ctx.fillStyle = active ? CARD_BG : LOCKED_BG
-    ctx.fillRect(x, y, cardW, cardH)
+    // ★ 模式化包装分支(Step 2 Commit 6):
+    //   - cardBorder === false → 不画边框(白底无框,常用作附录图卡)
+    //   - cornerRadius > 0     → ctx.roundRect 替换 strokeRect/fillRect
+    //     Canvas API 原生支持,本项目运行环境现代浏览器(老浏览器走 arcTo fallback)
+    const showCardBorder = this.showLines && (this.cardBorder ?? true)
+    const radius = Math.max(0, this.cornerRadius ?? 0)
 
-    // 边框：首卡品牌蓝，其余灰（线型随 lineStyle；showLines=false 时统一不画框线）
-    if (this.showLines) {
-      ctx.strokeStyle = active ? CARD_COLOR : LOCKED_BORDER
-      ctx.lineWidth = 0.5
-      ctx.setLineDash(this.lineDash)
-      ctx.strokeRect(x + 0.25, y + 0.25, cardW - 0.5, cardH - 0.5)
-      ctx.setLineDash([])
+    if (radius > 0) {
+      // 圆角路径:fill + (可选)stroke
+      ctx.beginPath()
+      const c = ctx as CanvasRenderingContext2D & { roundRect?: (x: number, y: number, w: number, h: number, r: number | number[]) => void }
+      if (typeof c.roundRect === 'function') {
+        c.roundRect(x, y, cardW, cardH, radius)
+      } else {
+        const r = Math.min(radius, cardW / 2, cardH / 2)
+        ctx.moveTo(x + r, y)
+        ctx.arcTo(x + cardW, y, x + cardW, y + cardH, r)
+        ctx.arcTo(x + cardW, y + cardH, x, y + cardH, r)
+        ctx.arcTo(x, y + cardH, x, y, r)
+        ctx.arcTo(x, y, x + cardW, y, r)
+        ctx.closePath()
+      }
+      ctx.fillStyle = active ? CARD_BG : LOCKED_BG
+      ctx.fill()
+      if (showCardBorder) {
+        ctx.strokeStyle = active ? CARD_COLOR : LOCKED_BORDER
+        ctx.lineWidth = 0.5
+        ctx.setLineDash(this.lineDash)
+        ctx.stroke()
+        ctx.setLineDash([])
+      }
+    } else {
+      // 标准(无圆角)路径:fillRect + (可选)strokeRect
+      // 背景：首卡白底，其余浅灰锁定
+      ctx.fillStyle = active ? CARD_BG : LOCKED_BG
+      ctx.fillRect(x, y, cardW, cardH)
+
+      // 边框：首卡品牌蓝，其余灰（线型随 lineStyle；cardBorder=false 时不画）
+      if (showCardBorder) {
+        ctx.strokeStyle = active ? CARD_COLOR : LOCKED_BORDER
+        ctx.lineWidth = 0.5
+        ctx.setLineDash(this.lineDash)
+        ctx.strokeRect(x + 0.25, y + 0.25, cardW - 0.5, cardH - 0.5)
+        ctx.setLineDash([])
+      }
     }
 
     // 首卡子组件以**真实 Fabric 对象**渲染在画布上（可选中/拖动/编辑），这里不再画示意图；
@@ -264,6 +309,11 @@ export class PrintLabelGrid extends FabricImage implements IPrintObject {
       lineStyle: this.lineStyle,
       dataSource: this.dataSource,
       children: this.children,
+      mode: this.mode,
+      forceNewPage: this.forceNewPage,
+      cornerRadius: this.cornerRadius,
+      cardBorder: this.cardBorder,
+      appendixHeader: this.appendixHeader,
       printable: this.printable,
       visibleIf: this.visibleIf,
       name: this.controlName,
@@ -280,6 +330,11 @@ export class PrintLabelGrid extends FabricImage implements IPrintObject {
     this.lineStyle = control.lineStyle
     this.dataSource = control.dataSource
     this.children = control.children ?? []
+    this.mode = control.mode
+    this.forceNewPage = control.forceNewPage
+    this.cornerRadius = control.cornerRadius
+    this.cardBorder = control.cardBorder
+    this.appendixHeader = control.appendixHeader
     this.printable = control.printable ?? true
     this.visibleIf = control.visibleIf
     this.controlName = control.name

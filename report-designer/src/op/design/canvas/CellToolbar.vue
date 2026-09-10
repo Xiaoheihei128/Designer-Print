@@ -39,6 +39,7 @@ import { FONT_CATALOG } from '@op/core/fonts/catalog'
 import { useSystemFonts } from '@op/core/fonts/system'
 import { useFieldCatalogStore } from '@op/design/stores/fieldCatalog'
 import { useUiStore } from '@op/design/stores/ui'
+import { useDesignerStore } from '@op/design/stores/designer'
 import ContentValueEditor from '@op/design/panels/props/ContentValueEditor.vue'
 import type { ContentMode } from '@op/design/panels/props/ContentValueEditor.vue'
 import { rebuildSegmentsFromCell } from '@op/design/segments-migration'
@@ -75,6 +76,11 @@ const emit = defineEmits<{
 
 const ds = useFieldCatalogStore()
 const uiStore = useUiStore()
+const designerStore = useDesignerStore()
+/** 首卡行上下文：当本控件所在表格位于 LabelGrid 内时,弹窗顶部多展示 row.* 分组 */
+const hostLabelGrid = computed(() =>
+  props.control?.id ? designerStore.findAncestorLabelGrid(props.control.id) : null,
+)
 /** 打开右侧"表格属性快速面板"，整个属性区会被替换为精简版 4-tab 面板 */
 function openTableProps(): void {
   uiStore.openTableQuickPanel()
@@ -442,6 +448,7 @@ function deleteCol(): void {
           :binding-default="bindingDefault"
           :expression-default="expressionDefault"
           format-scope="cell"
+          :host-label-grid="hostLabelGrid"
           @update:mode="onCellMode"
           @update:value="onCellValue"
           @update:binding="onCellBinding"
