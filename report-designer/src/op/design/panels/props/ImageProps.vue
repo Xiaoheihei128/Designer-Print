@@ -44,6 +44,11 @@ const varModalShow = ref(false)
 function onVarConfirm(path: string): void {
   patchContent(path)
 }
+
+/** 首卡行上下文：当本控件在 LabelGrid 内时,弹窗顶部多展示 row.* 分组 */
+const hostLabelGrid = computed(() =>
+  control.value ? store.findAncestorLabelGrid(control.value.id) : null,
+)
 </script>
 
 <template>
@@ -93,6 +98,7 @@ function onVarConfirm(path: string): void {
   <VariableModal
     v-model:show="varModalShow"
     :binding="control?.value?.mode === 'binding' ? (control.value.content ?? '') : ''"
+    :host-label-grid="hostLabelGrid"
     @confirm="onVarConfirm"
   />
 

@@ -20,11 +20,14 @@ interface ControlItem {
     | 'datablock'
     | 'circle'
     | 'labelgrid'
+    | 'appendix-imagewall'
   label: string
   icon: string
   disabled?: boolean
   /** 拖入/插入时的初始属性补丁（如圆形 shape） */
   init?: Partial<AnyControl>
+  /** 工厂级 init(透传给 createDefaultControl,仅 appendix-imagewall 用) */
+  factoryInit?: { mode: 'appendix'; photoField?: string; titleField?: string; appendixHeader?: string }
 }
 
 interface Category {
@@ -56,6 +59,17 @@ const categories: Category[] = [
       { type: 'zone-footer', label: '页脚', icon: 'i-carbon-row' },
       { type: 'pageno', label: '页码', icon: 'i-carbon-page-number' },
       { type: 'labelgrid', label: '标签网格', icon: 'i-carbon-grid' },
+      {
+        type: 'appendix-imagewall',
+        label: '附录图片墙',
+        icon: 'i-carbon-grid-cluster',
+        factoryInit: {
+          mode: 'appendix',
+          photoField: 'Photo',
+          titleField: 'AnalysisItem',
+          appendixHeader: '附录:样本照片',
+        },
+      },
     ],
   },
   {
@@ -96,6 +110,8 @@ function onDragStart(e: DragEvent, item: ControlItem): void {
   if (item.disabled) return
   // 签名拖入画布时走弹窗手写（见 useDragAdd 的 onDrop 特例），这里正常发起拖拽即可
   // 圆形/页码复用已有类型：圆形=rect+shape 补丁；页码=text+{{page}} 内容
+  // 附录图片墙拖入：复用 labelgrid 拖拽路径,落点是普通空 labelgrid;
+  //              用户后续在 LabelGridProps 切到「附录」即可激活三件套(也可先点再拖位置)。
   let dragType: ControlType
   if (item.type === 'zone-header' || item.type === 'zone-footer') {
     dragType = 'zone'
@@ -103,6 +119,8 @@ function onDragStart(e: DragEvent, item: ControlItem): void {
     dragType = 'rect'
   } else if (item.type === 'pageno') {
     dragType = 'text'
+  } else if (item.type === 'appendix-imagewall') {
+    dragType = 'labelgrid'
   } else {
     dragType = item.type as ControlType
   }
@@ -139,6 +157,9 @@ function onClick(item: ControlItem): void {
   } else if (item.type === 'labelgrid') {
     // 标签网格：点击插入一张默认 3 列商品标签（拖拽同理，走 startControlDrag）
     store.addControlOfType('labelgrid', { leftMm: 60, topMm: 60 })
+  } else if (item.type === 'appendix-imagewall') {
+    // 附录图片墙：点击插入预置三件套(labelgrid + mode=appendix)
+    store.addControlOfType('labelgrid', { leftMm: 60, topMm: 60 }, undefined, undefined, item.factoryInit)
   }
 }
 </script>

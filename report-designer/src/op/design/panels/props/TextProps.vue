@@ -37,6 +37,11 @@ const store = useDesignerStore()
 const control = computed(() => store.selectedControl as TextControl | null)
 const ds = useFieldCatalogStore()
 
+/** 首卡行上下文：当本控件在 LabelGrid 内时,弹窗顶部多展示 row.* 分组 */
+const hostLabelGrid = computed(() =>
+  control.value ? store.findAncestorLabelGrid(control.value.id) : null,
+)
+
 /** 字体下拉选项（内置预设 + 连接客户端后的电脑系统字体分组） */
 const sysFonts = useSystemFonts()
 
@@ -208,6 +213,7 @@ watch(
       binding-default="order.orderNo"
       :expression-default="'{{order.total}}'"
       format-scope="text"
+      :host-label-grid="hostLabelGrid"
       @update:mode="onModeChange"
       @update:value="patch({ value: $event })"
       @update:binding="patch({ binding: $event })"

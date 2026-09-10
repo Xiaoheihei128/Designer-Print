@@ -16,6 +16,11 @@ const store = useDesignerStore()
 const control = computed(() => store.selectedControl as BarcodeControl | QrcodeControl | null)
 const isBarcode = computed(() => control.value?.type === 'barcode')
 
+/** 首卡行上下文：当本控件在 LabelGrid 内时,弹窗顶部多展示 row.* 分组 */
+const hostLabelGrid = computed(() =>
+  control.value ? store.findAncestorLabelGrid(control.value.id) : null,
+)
+
 function patch(p: Record<string, unknown>): void {
   if (control.value) store.updateControl(control.value.id, p)
 }
@@ -117,6 +122,7 @@ const barcodeFormats = [
       binding-default="order.orderNo"
       :expression-default="'{{order.orderNo}}'"
       format-scope="code"
+      :host-label-grid="hostLabelGrid"
       @update:mode="onModeChange"
       @update:value="patch({ value: $event || undefined })"
       @update:binding="patch({ binding: $event })"

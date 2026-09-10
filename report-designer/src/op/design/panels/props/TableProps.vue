@@ -260,32 +260,38 @@ const summary = computed(() => control.value?.options?.summaryRow ?? null)
 const hasSummary = computed(() => summary.value !== null)
 
 /* --------------- P0-2 按纸张补空行（fixBottomRows） --------------- */
-// 把 fixBottomRows 的三态（off / fill / { min }）映射到 NSelect 的下拉：
-// - 'off'  → "关闭"
-// - 'fill' → "填满至页底"
-// - 其它   → "最少 N 行"（附带 NInputNumber 改 min）
-const fixBottomModeOptions: Array<{ label: string; value: 'off' | 'fill' | 'min' }> = [
+// 把 fixBottomRows 的三态（off / fill / { count }）映射到 NSelect 的下拉：
+// - 'off'    → "关闭"
+// - 'fill'   → "填满至页底（自动）"——按可用预算自动算 N 行
+// - 对象形式 → "固定 N 行"（附带 NInputNumber 改 count，count 模式不走让位、严格按 N 行）
+const fixBottomModeOptions: Array<{ label: string; value: 'off' | 'fill' | 'count' }> = [
   { label: '关闭', value: 'off' },
-  { label: '填满至页底', value: 'fill' },
-  { label: '最少 N 行', value: 'min' },
+  { label: '填满至页底（自动）', value: 'fill' },
+  { label: '固定 N 行', value: 'count' },
 ]
 const fixBottomMode = computed(() => {
   const v = control.value?.options?.fixBottomRows
   if (v === undefined || v === 'off') return 'off'
   if (v === 'fill') return 'fill'
-  return 'min'
+  return 'count' // 对象形式 → 固定 N 行
 })
-const fixBottomMin = computed(() => {
+const fixBottomCount = computed(() => {
   const v = control.value?.options?.fixBottomRows
-  return typeof v === 'object' ? v.min : 10
+  return typeof v === 'object' ? v.count : 1
 })
-function onFixBottomModeChange(mode: 'off' | 'fill' | 'min'): void {
+function onFixBottomModeChange(mode: 'off' | 'fill' | 'count'): void {
   if (mode === 'off') patchOptions({ fixBottomRows: 'off' })
   else if (mode === 'fill') patchOptions({ fixBottomRows: 'fill' })
-  else patchOptions({ fixBottomRows: { min: fixBottomMin.value || 10 } })
+  else patchOptions({ fixBottomRows: { count: fixBottomCount.value || 1 } })
 }
-function onFixBottomMinChange(n: number | null): void {
-  patchOptions({ fixBottomRows: { min: Math.max(1, n ?? 10) } })
+function onFixBottomCountChange(n: number | null): void {
+  patchOptions({ fixBottomRows: { count: Math.max(0, n ?? 1) } })
+}
+
+/** 模板引用：让"N ="前缀点击后 focus 到 NInputNumber */
+const fixBottomInputRef = ref<{ focus: () => void }>()
+function focusFixBottomInput(): void {
+  fixBottomInputRef.value?.focus()
 }
 
 /** 开关合计行：开启时给一个兜底配置，关闭时清空 summaryRow 与遗留的 summary[]（单真相源） */
@@ -415,24 +421,44 @@ function patchGroupBy(v: string | null): void {
         style="min-width: 140px"
         @update:value="onFixBottomModeChange"
       />
+    </div>
+    <!-- 第二行：count 模式 N 行 / fill 模式离页底留白 mm，与下拉错开独占一行，输入更显眼 -->
+    <div v-if="fixBottomMode === 'count'" class="props-row">
+      <span class="props-label" style="min-width: 88px">&nbsp;</span>
       <NInputNumber
-        v-if="fixBottomMode === 'min'"
+        ref="fixBottomInputRef"
         size="small"
-        :value="fixBottomMin"
-        :min="1"
-        placeholder="N"
-        style="width: 80px"
-        @update:value="onFixBottomMinChange"
-      />
+        :value="fixBottomCount"
+        :min="0"
+        :show-button="false"
+        placeholder="N 行数"
+        style="width: 160px"
+        @update:value="onFixBottomCountChange"
+      >
+        <template #prefix>
+          <span
+            style="font-size: 12px; color: var(--op-text-3, #999); cursor: pointer; user-select: none"
+            title="点击输入行数"
+            @mousedown.prevent
+            @click="focusFixBottomInput"
+          >N&nbsp;=</span>
+        </template>
+      </NInputNumber>
+    </div>
+    <div v-else-if="fixBottomMode === 'fill'" class="props-row">
+      <span class="props-label" style="min-width: 88px">&nbsp;</span>
       <NInputNumber
-        v-if="fixBottomMode === 'fill'"
         size="small"
         :value="control.options?.fixBottomMargin ?? 0"
         :min="0"
         placeholder="mm"
-        style="width: 80px"
+        style="width: 160px"
         @update:value="patchOptions({ fixBottomMargin: $event ?? 0 })"
-      />
+      >
+        <template #prefix>
+          <span style="font-size: 12px; color: var(--op-text-3, #999)">留白</span>
+        </template>
+      </NInputNumber>
     </div>
   </div>
 

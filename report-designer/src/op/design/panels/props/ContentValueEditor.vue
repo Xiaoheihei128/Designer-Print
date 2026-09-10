@@ -20,7 +20,7 @@
  */
 import { computed, ref, watch } from 'vue'
 import { NButton, NInput, NPopover, NRadioButton, NRadioGroup, NSelect, NTag } from 'naive-ui'
-import type { CellFormat, Segment } from '@op/types/control'
+import type { CellFormat, LabelGridControl, Segment } from '@op/types/control'
 import { resolveSegments } from '@op/core/layout-engine/segments'
 import { isAggToken } from '@op/core/layout-engine/aggregate'
 import { EXPRESSION_CATALOG } from '@op/design/expression-catalog'
@@ -84,6 +84,12 @@ const props = withDefaults(
      * - 'all': 全部 — 默认(向后兼容)
      */
     formatScope?: 'text' | 'code' | 'cell' | 'all'
+    /**
+     * 首卡行上下文:父级控件(如 TextProps / CodeProps / CellToolbar)若在本控件
+     * 所在位置查到 LabelGrid 宿主,传入后 VariableModal 顶部多展示 row.* 分组。
+     * 留空 = 无 row 上下文,行为与原先一致。
+     */
+    hostLabelGrid?: LabelGridControl | null
   }>(),
   {
     mode: undefined,
@@ -627,7 +633,7 @@ function onExprConfirm(snippet: string): void {
       </div>
     </template>
 
-    <VariableModal v-model:show="varModalShow" :binding="binding ?? ''" @confirm="onVarConfirm" />
+    <VariableModal v-model:show="varModalShow" :binding="binding ?? ''" :host-label-grid="hostLabelGrid ?? null" @confirm="onVarConfirm" />
     <ExpressionModal v-model:show="exprModalShow" :expression="expression ?? ''" @confirm="onExprConfirm" />
   </div>
 </template>
