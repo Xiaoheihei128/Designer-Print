@@ -223,6 +223,36 @@ export const useDesignerStore = defineStore('designer', () => {
     return undefined
   }
 
+  /**
+   * 查找指定控件所属的 LabelGrid 宿主(仅直系,不支持嵌套)。
+   *
+   * 优先 `childOf` 字段(添加进 LabelGrid 时已写,见 line 711);失败回退遍历
+   * `controls.value`(用于控件还没被 addControlIntoLabelGrid 处理的边界,以及
+   * 第三方/老模板 JSON 直接加载的场景)。
+   *
+   * 用于 binding picker 在「首卡子控件 → row.* 字段」上下文里展示派生选项
+   * (VariableModal.rowScopedFields)。
+   *
+   * @returns LabelGrid 控件本体;不属于任何网格时返回 null
+   */
+  function findAncestorLabelGrid(controlId: string): LabelGridControl | null {
+    if (!controlId) return null
+    // 路径 1:childOf 直查(快路径,O(1))
+    const byChildOf = controls.value.find((c) => c.id === controlId)?.childOf
+    if (byChildOf) {
+      const host = controls.value.find((c) => c.id === byChildOf)
+      if (host && host.type === 'labelgrid') return host as LabelGridControl
+    }
+    // 路径 2:遍历兜底(覆盖老模板或被直接编辑的场景)
+    for (const g of controls.value) {
+      if (g.type !== 'labelgrid') continue
+      if ((g as LabelGridControl).children?.some((ch) => ch.id === controlId)) {
+        return g as LabelGridControl
+      }
+    }
+    return null
+  }
+
   function replaceControl(updated: AnyControl): void {
     const i = controls.value.findIndex((c) => c.id === updated.id)
     if (i >= 0) {
@@ -372,8 +402,13 @@ export const useDesignerStore = defineStore('designer', () => {
     at: { leftMm: number; topMm: number },
     init?: Partial<AnyControl>,
     zoneHostId?: string,
+    /**
+     * 工厂级初始化(Step 2 Commit 8):透传给 createDefaultControl 的 init 参数。
+     * 仅 labelgrid 在 mode='appendix' 时消费;其它控件忽略。
+     */
+    factoryInit?: Parameters<typeof createDefaultControl>[2],
   ): void {
-    const base = createDefaultControl(type, at)
+    const base = createDefaultControl(type, at, factoryInit)
     if (!base) return
     let control = init ? ({ ...base, ...init } as AnyControl) : base
     // 圆形默认正圆：确保外接框为正方形（宽=高），避免默认矩形尺寸导致椭圆
@@ -702,6 +737,12 @@ export const useDesignerStore = defineStore('designer', () => {
   ): void {
     const cur = controls.value.find((c) => c.id === gridId) as LabelGridControl | undefined
     if (!cur) return
+    // ★ Commit 6:appendix 模式首卡 children 锁死三件套,不允许额外添加
+    if (cur.mode === 'appendix') {
+      // eslint-disable-next-line no-console
+      console.warn(`[labelgrid:${gridId}] appendix 模式首卡 children 已锁,addControlIntoLabelGrid 被拒`)
+      return
+    }
     const cardLeft = Math.max(0, atAbsolute.leftMm - (cur.left ?? 0))
     const cardTop = Math.max(0, atAbsolute.topMm - (cur.top ?? 0))
     let child = createDefaultControl(type, { leftMm: cardLeft, topMm: cardTop })
@@ -739,6 +780,12 @@ export const useDesignerStore = defineStore('designer', () => {
   function removeLabelGridChild(gridId: string, childId: string): void {
     const cur = controls.value.find((c) => c.id === gridId) as LabelGridControl | undefined
     if (!cur) return
+    // ★ Commit 6:appendix 模式首卡 children 锁死三件套,不允许删除
+    if (cur.mode === 'appendix') {
+      // eslint-disable-next-line no-console
+      console.warn(`[labelgrid:${gridId}] appendix 模式首卡 children 已锁,removeLabelGridChild 被拒`)
+      return
+    }
     const prev = cur.children ?? []
     const next = prev.filter((c) => c.id !== childId)
     if (next.length === prev.length) return
@@ -755,6 +802,12 @@ export const useDesignerStore = defineStore('designer', () => {
   function clearLabelGridChildren(gridId: string): void {
     const cur = controls.value.find((c) => c.id === gridId) as LabelGridControl | undefined
     if (!cur || (cur.children?.length ?? 0) === 0) return
+    // ★ Commit 6:appendix 模式首卡 children 锁死三件套,不允许清空
+    if (cur.mode === 'appendix') {
+      // eslint-disable-next-line no-console
+      console.warn(`[labelgrid:${gridId}] appendix 模式首卡 children 已锁,clearLabelGridChildren 被拒`)
+      return
+    }
     const prev = cur.children ?? []
     setLabelGridChildren(gridId, [])
     const history = useHistoryStore()
@@ -1262,6 +1315,7 @@ export const useDesignerStore = defineStore('designer', () => {
     addControlIntoLabelGrid,
     removeLabelGridChild,
     clearLabelGridChildren,
+    findAncestorLabelGrid,
     updateControl,
     updateControlSilent,
     reflowBody,
@@ -1292,9 +1346,20 @@ export const useDesignerStore = defineStore('designer', () => {
 
 /* --------------------------- 默认控件工厂 --------------------------- */
 
-function createDefaultControl(
+/** 暴露给测试 & ControlLibrary:内部 init 工厂(不写 undo / 不广播 dirty)。
+ *  生产路径仍走 `addControlOfType` 走 store.addControl 链路。 */
+export function createDefaultControl(
   type: ControlType,
   at: { leftMm: number; topMm: number },
+  /**
+   * 初始化选项（Step 2 Commit 5 引入）：
+   * - `mode: 'appendix'` 时 labelgrid 自动塞入三件套 children + 配 dataSource
+   * - `photoField` / `titleField` 指定 row.* 字段路径(默认 'Photo' / 'AnalysisItem')
+   * - `appendixHeader` 非空时不在 createDefaultControl 阶段插 body(由 caller 后续追加 TextControl)
+   *
+   * 不传 init → 现状行为,完全不变。
+   */
+  init?: { mode?: 'standard' | 'appendix'; photoField?: string; titleField?: string; appendixHeader?: string },
 ): AnyControl | null {
   const id = genId()
   // 坐标兜底：at.leftMm/topMm 可能因上游时序（如拖拽时 viewport 未就绪）为 NaN/undefined，
@@ -1411,6 +1476,81 @@ function createDefaultControl(
       const cols = 3
       const gap = 3
       const rows = 3
+
+      /* ---- appendix 模式：自动塞入首卡三件套 + dataSource ---- */
+      // 触发条件：显式 init.mode === 'appendix'。
+      // 三件套:ImageControl(row.photoField) + TextControl(rowIndex+1)号 +
+      //         TextControl(row.titleField),坐标按 cardW/cardH 归一化。
+      // dataSource:appendix 模式必填,默认 'ReportItems'(主流场景)。
+      // 设计约束:appendix 模式下首卡 children 由本函数生成,**不应被用户自由编辑**
+      // —— 由后续 LabelGridProps UI 在切回 standard 时弹 confirm 提示会清空三件套。
+      if (init?.mode === 'appendix') {
+        const photoField = init.photoField ?? 'Photo'
+        const titleField = init.titleField ?? 'AnalysisItem'
+        const photoId = genId('img')
+        const noId = genId('txt')
+        const titleId = genId('txt')
+        // 三件套占首卡:
+        //   - 图片:卡片宽-6,卡高 65%,顶部 3mm
+        //   - 编号:左下,卡宽 30%,卡高 25%
+        //   - 标题:右下,卡宽 60%,卡高 25%
+        const appendixChildren: AnyControl[] = [
+          {
+            id: photoId,
+            type: 'image',
+            left: 3,
+            top: 3,
+            width: cardW - 6,
+            height: cardH * 0.65,
+            childOf: id,
+            value: { mode: 'binding', content: `row.${photoField}` },
+            fit: 'contain',
+          },
+          {
+            id: noId,
+            type: 'text',
+            left: 3,
+            top: cardH * 0.7,
+            width: cardW * 0.3,
+            height: cardH * 0.25,
+            childOf: id,
+            contentType: 'expression',
+            expression: '{{rowIndex + 1}}号',
+            style: { fontSize: 9, bold: true },
+          },
+          {
+            id: titleId,
+            type: 'text',
+            left: cardW * 0.35,
+            top: cardH * 0.7,
+            width: cardW * 0.6,
+            height: cardH * 0.25,
+            childOf: id,
+            contentType: 'variable',
+            binding: `row.${titleField}`,
+            style: { fontSize: 9 },
+          },
+        ]
+        return {
+          ...base,
+          type,
+          width: cardW * cols + gap * (cols - 1),
+          height: cardH * rows + gap * (rows - 1),
+          columns: cols,
+          gapX: gap,
+          gapY: gap,
+          cardWidth: cardW,
+          cardHeight: cardH,
+          showLines: true,
+          children: appendixChildren,
+          dataSource: 'ReportItems',
+          mode: 'appendix',
+          cardBorder: true,
+          appendixHeader: init.appendixHeader,
+          name: '附录图片墙',
+        }
+      }
+
       return {
         ...base,
         type,
@@ -1423,6 +1563,9 @@ function createDefaultControl(
         cardHeight: cardH,
         showLines: true,
         children: [],
+        // init.mode=standard → 显式写 mode 字段（语义清晰,序列化稳定）
+        // 无 init / mode=undefined → 不写,保持老模板「mode 缺失走 standard」兼容路径
+        mode: init?.mode,
         name: `标签网格（${cols} 列）`,
       }
     }

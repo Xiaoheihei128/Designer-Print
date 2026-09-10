@@ -208,6 +208,7 @@ export type WarningCode =
   | 'DATASOURCE_EMPTY' // 表格数据为空
   | 'DATASOURCE_MISSING' // 表格未设置 dataSource
   | 'CONTENT_OVERFLOW' // 内容超出可用高度被截断
+  | 'TABLE_USER_HEIGHT_MISMATCH' // 用户设的表格高度远小于/大于实际渲染高度,导致下方/内部控件被错分
   | 'IMAGE_UNRESOLVED' // 图片无法解析
   | 'BARCODE_FAILED' // 条码/二维码生成失败
   | 'CHART_FAILED' // 图表 SVG 生成失败

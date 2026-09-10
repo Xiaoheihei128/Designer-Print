@@ -640,6 +640,53 @@ export interface LabelGridControl extends ControlBase {
    * → 每卡流水号/条码/二维码各不相同。缺省 = 纯布局平铺（每卡相同）。
    */
   dataSource?: string
+
+  /* ---------------- 模式化包装：附录图片墙（Step 2 Commit 4 引入） ---------------- */
+
+  /**
+   * 模式:
+   * - `'standard'`(默认 / 缺省)= 通用标签网格,首卡 children 自由编辑
+   * - `'appendix'`              = 附录图片墙预设,children 自动锁死三件套
+   *                               (图片 + 编号 + 标题),新增附录专用选项(forceNewPage、
+   *                               cornerRadius、cardBorder、appendixHeader)。
+   *
+   * 老模板 `mode` 字段缺失 → 走标准路径,**零迁移**。
+   */
+  mode?: 'standard' | 'appendix'
+  /**
+   * appendix 模式:把整个网格推到下一页顶部。控制台显示首卡依然在原位,但运行期
+   * 渲染时强制 pageIndex = currentPage+1,originTop = 0。数据从一页溢出到下一页
+   * 的正常行为不受影响。仅在 mode=appendix 生效。
+   *
+   * @deprecated 自 2026-09 升级为 `pageBreak: 'always'`,保留字段以兼容老模板。
+   *   true → 'always',false/undefined → 'auto'。
+   */
+  forceNewPage?: boolean
+  /**
+   * appendix 模式:分页策略。
+   * - `'always'`:无条件把整个网格推到下一页顶部(等同老 forceNewPage=true)
+   * - `'auto'`:能放下就紧跟当前页;放不下整组推到下一页顶部(默认,等同老 forceNewPage=false)
+   * - `'never'`:始终紧跟当前页;放不下时让引擎裁切(由用户承担后果)
+   *
+   * 仅在 mode='appendix' 生效。'auto' 配合「单据末页放得下就紧跟,放不下独占新页」的真实业务诉求。
+   */
+  pageBreak?: 'auto' | 'always' | 'never'
+  /**
+   * appendix 模式:卡片圆角(mm)。>0 时绘制走 ctx.roundRect 路径,Canvas API 原生支持。
+   * 仅在 cardBorder=true 时视觉有效。
+   */
+  cornerRadius?: number
+  /**
+   * appendix 模式:卡片边框开关。true=画边框(等同 showLines),false=白底无框。
+   * 默认 true。仅在 mode=appendix 生效。
+   */
+  cardBorder?: boolean
+  /**
+   * appendix 模式:拖入时在 body 顶部自动插入的 TextControl 内容,留空=不插入。
+   * 例:"附录:样本照片"。仅在 createDefaultControl 时一次性消费一次,后续编辑
+   * 不会重复插入。
+   */
+  appendixHeader?: string
 }
 
 /* --------------------------------- 联合 ---------------------------------- */
