@@ -1161,6 +1161,103 @@ describe('buildTableModel —— vMerge 集成', () => {
   })
 })
 
+/* ============= vMerge + sliceTable 跨页(Path B: 续行锚点由 paginateFlowTable 注入) ============= */
+
+describe('sliceTable —— vMerge 跨页 (Path B: 跨页允许,paginateFlowTable 注入续行 anchor)', () => {
+  const measurer = createCjkMeasurer()
+
+  function buildModel(rows: Array<Record<string, unknown>>): Model {
+    const control: TableControl = {
+      id: 'vmerge-cross-page',
+      type: 'table',
+      left: 0,
+      top: 0,
+      width: 100,
+      height: 50,
+      dataSource: 'items',
+      columns: [
+        { id: 'name', title: '客户', field: 'name', width: 50 },
+        { id: 'qty', title: '数量', field: 'qty', width: 50 },
+      ],
+      data: rows,
+      options: {
+        repeatHeader: true,
+        repeatFooter: false,
+        vMerge: { columns: ['name'], breakOnGroup: true },
+      },
+    } as unknown as TableControl
+    const ctx: EvalContext = { data: { items: rows } } as EvalContext
+    return buildTableModel({ control, ctx, measurer, widthMm: 100, heightMm: 50 })
+  }
+
+  /** 把整表按指定可用高切完,返回所有片 */
+  function sliceAll(model: Model, avail: number) {
+    const slices = []
+    let start = 0
+    while (start < model.rows.length) {
+      const s = sliceTable(model, { avail, start })
+      slices.push(s)
+      if (s.isLast || s.nextStart === start) break
+      start = s.nextStart
+    }
+    return slices
+  }
+
+  it('Path B: 跨页时 sliceTable 按几何切,vmerge 列正确保留 rowSpan + consumed 标记', () => {
+    // 3 行同 name(A) 合并组 → 第 4 行换 B
+    // 关键: Path B 允许跨页,合并组可被拦腰切断,新片首行是 consumed 行
+    // (paginateFlowTable 负责注入续行 anchor,sliceTable 只做几何切片)
+    const model = buildModel([
+      { name: 'A', qty: 1 },
+      { name: 'A', qty: 2 },
+      { name: 'A', qty: 3 },
+      { name: 'B', qty: 4 },
+    ])
+    const oneRowH = model.rows.find((r) => r.kind === 'data')!.height
+    const headerH = model.headerRows.reduce((s, r) => s + r.height, 0)
+    // avail 只够放下锚点 + 1 个被吞行,第 3 个被吞行塞不下 → 切片可能切到 2 行
+    const avail = headerH + oneRowH * 3
+    const slices = sliceAll(model, avail)
+    // 验证:第 1 片锚点 rowSpan=3,被吞行有 consumed=true
+    const s1 = slices[0]!
+    expect(s1.rows.length).toBeGreaterThan(0)
+    expect(s1.rows[0]!.cells.find((c) => c.rowSpan)?.rowSpan).toBe(3)
+    expect(s1.rows[1]!.cells.some((c) => c.consumed)).toBe(true)
+    // 如果切了 2 行: 末行是 consumed 行(Path B 允许, paginateFlowTable 会注入 anchor 补救)
+    // 如果切了 4 行: 合并组完整+B 行, 不跨页
+    if (!s1.isLast && s1.rows.length === 2) {
+      // 跨页情况: 末行是 consumed, paginateFlowTable 会处理
+      expect(s1.rows[s1.rows.length - 1]!.cells.some((c) => c.consumed)).toBe(true)
+    }
+  })
+
+  it('Path B: vmerge 组占满整页时,跨页后新片首行是 consumed 行(paginateFlowTable 注入续行 anchor)', () => {
+    // 5 行同 name → 整个 vmerge 组 rowSpan=5
+    // avail 只够放下 2 行 → 第 1 片装 2 行(锚点+1 被吞行),第 2 片首行是 consumed
+    const model = buildModel(
+      Array.from({ length: 5 }, (_, i) => ({ name: 'AAA', qty: i + 1 })),
+    )
+    const oneRowH = model.rows.find((r) => r.kind === 'data')!.height
+    const headerH = model.headerRows.reduce((s, r) => s + r.height, 0)
+    // 二分找刚好放 2 行的预算:header + 1行 + 2行 + 0.2边框 + 小 buffer
+    // 切片预算 = avail - headerH - pageFooterH,pageFooterH=0(repeatFooter=false),
+    // 但 sliceTable 内循环按 used + (rowH+rowBorder) > budget 判定,加 rowBorder 0.2 预留
+    const avail = headerH + (oneRowH + 0.2) * 2 + 0.5
+    const slices = sliceAll(model, avail)
+    // 验证:必须产生至少 2 片
+    expect(slices.length).toBeGreaterThanOrEqual(2)
+    const s1 = slices[0]!
+    const s2 = slices[1]!
+    // 第 1 片首行是 anchor (rowSpan=5)
+    expect(s1.rows[0]!.cells.find((c) => c.rowSpan)?.rowSpan).toBe(5)
+    // 跨页场景:第 2 片首行是 consumed 行(Path B 触发条件)
+    expect(s2.rows[0]!.cells.some((c) => c.consumed)).toBe(true)
+    // 第 2 片首行 vmerge 列 text 必须是 'AAA'(被吞行的值 = 合并组延续值)
+    const vmergeColIdx = s2.rows[0]!.cells.findIndex((c) => c.consumed === true)
+    expect(s2.rows[0]!.cells[vmergeColIdx]!.text).toBe('AAA')
+  })
+})
+
 /* ============= Bug7 修复：cell.segments 单 text 段 + 聚合 token → buildFooterRow 识别 ============= */
 
 describe('Bug7 修复：cell.segments 单 text 段 agg token → 走 buildFooterRow 渲染大写', () => {
