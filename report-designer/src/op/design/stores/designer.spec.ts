@@ -238,46 +238,54 @@ describe('createDefaultControl —— LabelGrid appendix 预设', () => {
     expect(grid.cardBorder).toBe(true)
     expect(grid.name).toBe('附录图片墙')
 
-    // 三件套:image + 编号 + 标题
+    // 三件套:image + 编号 + 标题(用户可在子控件上自选 row.* 字段,不再硬编码)
     expect(grid.children).toHaveLength(3)
     const [img, no, title] = grid.children
     expect(img.type).toBe('image')
     expect((img as { childOf?: string }).childOf).toBe(grid.id)
+    // ★ binding 留空(用户在子控件属性面板选 row.* 字段即可)
     expect((img as { value?: { mode: string; content: string } }).value).toEqual({
       mode: 'binding',
-      content: 'row.Photo',
+      content: '',
     })
     expect(no.type).toBe('text')
     expect((no as { contentType?: string; expression?: string }).contentType).toBe('expression')
     expect((no as { expression?: string }).expression).toBe('{{rowIndex + 1}}号')
     expect((no as { childOf?: string }).childOf).toBe(grid.id)
     expect(title.type).toBe('text')
-    expect((title as { binding?: string }).binding).toBe('row.AnalysisItem')
+    // 标题 binding 空,用户自行选 row.* 字段
+    expect((title as { binding?: string }).binding ?? '').toBe('')
     expect((title as { childOf?: string }).childOf).toBe(grid.id)
   })
 
-  it('init.photoField / titleField 可覆盖默认 row.* 字段路径', async () => {
+  it('init.photoField / titleField 参数已废弃(保留类型兼容但不再注入 row.* 路径)', async () => {
     const { createDefaultControl } = await import('./designer')
     const c = createDefaultControl(
       'labelgrid',
       { leftMm: 0, topMm: 0 },
+      // @ts-expect-error photoField / titleField 已废弃,此处故意传入验证被忽略
       { mode: 'appendix', photoField: 'SamplePic', titleField: 'ItemName' },
     )
     const grid = c as LabelGridControl
     const img = grid.children[0] as { value?: { mode: string; content: string } }
     const title = grid.children[2] as { binding?: string }
-    expect(img.value?.content).toBe('row.SamplePic')
-    expect(title.binding).toBe('row.ItemName')
+    // 用户在子控件上自选,这里仍然是空字符串(不强制写入旧字段)
+    expect(img.value?.content).toBe('')
+    expect(title.binding ?? '').toBe('')
   })
 
-  it('init.appendixHeader 非空：写入附录标题字段', async () => {
+  it('init.appendixHeader 非空：映射到 appendixTitle.text + titleRepeat=true', async () => {
     const { createDefaultControl } = await import('./designer')
     const c = createDefaultControl(
       'labelgrid',
       { leftMm: 0, topMm: 0 },
       { mode: 'appendix', appendixHeader: '附录:样本照片' },
     )
-    expect((c as LabelGridControl).appendixHeader).toBe('附录:样本照片')
+    const grid = c as LabelGridControl
+    // 老字段不再写回(渲染入口迁到 appendixTitle),append 在面板上编辑 appendixTitle.text
+    expect(grid.appendixHeader).toBeUndefined()
+    expect(grid.appendixTitle?.text).toBe('附录:样本照片')
+    expect(grid.titleRepeat).toBe(true)
   })
 
   it('init.mode="standard"：等价无 init，不进 appendix 分支', async () => {
@@ -311,7 +319,7 @@ describe('createDefaultControl —— LabelGrid appendix 预设', () => {
  *  Commit 6:appendix 模式锁首卡 children actions
  * ============================================================ */
 
-describe('appendix 模式 —— 首卡 children 锁', () => {
+describe('appendix 模式 —— 首卡 children 完全可编辑', () => {
   // 局部警告抑制（action 内 console.warn 会刷屏）
   let warnSpy: ReturnType<typeof vi.spyOn>
   beforeEach(() => {
@@ -321,9 +329,8 @@ describe('appendix 模式 —— 首卡 children 锁', () => {
     warnSpy.mockRestore()
   })
 
-  it('addControlIntoLabelGrid 在 appendix 模式下被拒(不增 children)', () => {
+  it('addControlIntoLabelGrid 在 appendix 模式下不再被拒(允许增 children)', () => {
     const store = useDesignerStore()
-    // 准备一个 appendix 模式 LabelGrid(2 children)
     const grid: LabelGridControl = {
       id: 'grid-app',
       type: 'labelgrid',
@@ -340,14 +347,14 @@ describe('appendix 模式 —— 首卡 children 锁', () => {
       ],
     }
     store.controls.push(grid)
-    // 尝试往首卡里加一个 text 控件 → 应被拒
+    // 尝试往首卡里加一个 text 控件 → 应成功
     store.addControlIntoLabelGrid('grid-app', 'text', { leftMm: 10, topMm: 10 })
     const after = store.controls.find((c) => c.id === 'grid-app') as LabelGridControl
-    expect(after.children).toHaveLength(2)
-    expect(warnSpy).toHaveBeenCalled()
+    expect(after.children).toHaveLength(3)
+    expect(warnSpy).not.toHaveBeenCalled()
   })
 
-  it('removeLabelGridChild 在 appendix 模式下被拒(不删 children)', () => {
+  it('removeLabelGridChild 在 appendix 模式下不再被拒(允许删 children)', () => {
     const store = useDesignerStore()
     const grid: LabelGridControl = {
       id: 'grid-app2',
@@ -361,11 +368,11 @@ describe('appendix 模式 —— 首卡 children 锁', () => {
     store.controls.push(grid)
     store.removeLabelGridChild('grid-app2', 'img-app2')
     const after = store.controls.find((c) => c.id === 'grid-app2') as LabelGridControl
-    expect(after.children).toHaveLength(1)
-    expect(warnSpy).toHaveBeenCalled()
+    expect(after.children).toHaveLength(0)
+    expect(warnSpy).not.toHaveBeenCalled()
   })
 
-  it('clearLabelGridChildren 在 appendix 模式下被拒', () => {
+  it('clearLabelGridChildren 在 appendix 模式下不再被拒', () => {
     const store = useDesignerStore()
     const grid: LabelGridControl = {
       id: 'grid-app3',
@@ -379,8 +386,8 @@ describe('appendix 模式 —— 首卡 children 锁', () => {
     store.controls.push(grid)
     store.clearLabelGridChildren('grid-app3')
     const after = store.controls.find((c) => c.id === 'grid-app3') as LabelGridControl
-    expect(after.children).toHaveLength(1)
-    expect(warnSpy).toHaveBeenCalled()
+    expect(after.children).toHaveLength(0)
+    expect(warnSpy).not.toHaveBeenCalled()
   })
 
   it('standard 模式(无 mode 字段)→ 所有动作照常工作(向后兼容)', () => {

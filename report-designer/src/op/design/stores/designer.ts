@@ -737,12 +737,7 @@ export const useDesignerStore = defineStore('designer', () => {
   ): void {
     const cur = controls.value.find((c) => c.id === gridId) as LabelGridControl | undefined
     if (!cur) return
-    // ★ Commit 6:appendix 模式首卡 children 锁死三件套,不允许额外添加
-    if (cur.mode === 'appendix') {
-      // eslint-disable-next-line no-console
-      console.warn(`[labelgrid:${gridId}] appendix 模式首卡 children 已锁,addControlIntoLabelGrid 被拒`)
-      return
-    }
+    // ★ appendix 模式首卡 children 完全可编辑(与 standard 一致),不再拒绝添加
     const cardLeft = Math.max(0, atAbsolute.leftMm - (cur.left ?? 0))
     const cardTop = Math.max(0, atAbsolute.topMm - (cur.top ?? 0))
     let child = createDefaultControl(type, { leftMm: cardLeft, topMm: cardTop })
@@ -780,12 +775,7 @@ export const useDesignerStore = defineStore('designer', () => {
   function removeLabelGridChild(gridId: string, childId: string): void {
     const cur = controls.value.find((c) => c.id === gridId) as LabelGridControl | undefined
     if (!cur) return
-    // ★ Commit 6:appendix 模式首卡 children 锁死三件套,不允许删除
-    if (cur.mode === 'appendix') {
-      // eslint-disable-next-line no-console
-      console.warn(`[labelgrid:${gridId}] appendix 模式首卡 children 已锁,removeLabelGridChild 被拒`)
-      return
-    }
+    // ★ appendix 模式首卡 children 完全可编辑(与 standard 一致),不再拒绝删除
     const prev = cur.children ?? []
     const next = prev.filter((c) => c.id !== childId)
     if (next.length === prev.length) return
@@ -802,12 +792,7 @@ export const useDesignerStore = defineStore('designer', () => {
   function clearLabelGridChildren(gridId: string): void {
     const cur = controls.value.find((c) => c.id === gridId) as LabelGridControl | undefined
     if (!cur || (cur.children?.length ?? 0) === 0) return
-    // ★ Commit 6:appendix 模式首卡 children 锁死三件套,不允许清空
-    if (cur.mode === 'appendix') {
-      // eslint-disable-next-line no-console
-      console.warn(`[labelgrid:${gridId}] appendix 模式首卡 children 已锁,clearLabelGridChildren 被拒`)
-      return
-    }
+    // ★ appendix 模式首卡 children 完全可编辑(与 standard 一致),不再拒绝清空
     const prev = cur.children ?? []
     setLabelGridChildren(gridId, [])
     const history = useHistoryStore()
@@ -966,14 +951,48 @@ export const useDesignerStore = defineStore('designer', () => {
 
   /** 从画布序列化出完整 template.json（协议结构） */
   function buildTemplate(): TemplateData<AnyControl> {
-    const synced = designer.value?.serialize()
-    if (synced) {
-      controls.value = synced.body
-      zones.value = synced.zones
+    // ★ safety net:fabric 序列化只覆盖几何字段(PrintLabelGrid.toControl 已加
+    // appendixTitle/maxItems/titleRepeat/pageBreak,但用户浏览器可能仍在用旧实例)。
+    // 在用 synced.body 覆盖 store 前,从旧 store 备份这些"非几何配置字段"并补回去,
+    // 保证面板输入永远不会因 fabric 反序列化被静默丢。
+    //
+    // ★ 不再写回 controls.value:PreviewPanel 的 deep watch 会因 controls.value 整体替换
+    // 再次触发 doRender → buildTemplate → 覆盖 → 死循环 → 浏览器崩溃。
+    // buildTemplate 是「读」语义,直接消费 merged body 出 template 即可。
+    const configBackup = new Map<string, Partial<AnyControl>>()
+    for (const c of controls.value) {
+      if (c.type === 'labelgrid') {
+        const lg = c as LabelGridControl
+        configBackup.set(c.id, {
+          appendixTitle: lg.appendixTitle,
+          maxItems: lg.maxItems,
+          titleRepeat: lg.titleRepeat,
+          pageBreak: lg.pageBreak,
+        })
+      }
     }
+    const synced = designer.value?.serialize()
+    let body: AnyControl[]
+    let zones: ZoneControl[]
+    if (synced) {
+      body = synced.body.map((c) => {
+        const backup = configBackup.get(c.id)
+        if (!backup) return c
+        if (c.type === 'labelgrid') {
+          return { ...c, ...backup } as AnyControl
+        }
+        return c
+      })
+      zones = synced.zones
+    } else {
+      body = controls.value
+      zones = zones.value
+    }
+    // zones 类型受 TS 类型推断影响,显式标注
+    const zoneArr: ZoneControl[] = zones
     const sections: TemplateData<AnyControl>['document']['sections'] = []
-    const header = zones.value.find((z) => z.zone === 'header')
-    const footer = zones.value.find((z) => z.zone === 'footer')
+    const header = zoneArr.find((z) => z.zone === 'header')
+    const footer = zoneArr.find((z) => z.zone === 'footer')
     if (header) {
       sections.push({
         type: 'header',
@@ -982,7 +1001,7 @@ export const useDesignerStore = defineStore('designer', () => {
         components: header.children,
       })
     }
-    sections.push({ type: 'body', components: controls.value })
+    sections.push({ type: 'body', components: body })
     if (footer) {
       sections.push({
         type: 'footer',
@@ -1485,14 +1504,12 @@ export function createDefaultControl(
       // 设计约束:appendix 模式下首卡 children 由本函数生成,**不应被用户自由编辑**
       // —— 由后续 LabelGridProps UI 在切回 standard 时弹 confirm 提示会清空三件套。
       if (init?.mode === 'appendix') {
-        const photoField = init.photoField ?? 'Photo'
-        const titleField = init.titleField ?? 'AnalysisItem'
         const photoId = genId('img')
         const noId = genId('txt')
         const titleId = genId('txt')
-        // 三件套占首卡:
+        // 三件套占首卡(用户拖入快捷模板;binding 留空由用户在子控件上自选变量):
         //   - 图片:卡片宽-6,卡高 65%,顶部 3mm
-        //   - 编号:左下,卡宽 30%,卡高 25%
+        //   - 编号:左下,卡宽 30%,卡高 25%(rowIndex 是内置变量,无需用户配置)
         //   - 标题:右下,卡宽 60%,卡高 25%
         const appendixChildren: AnyControl[] = [
           {
@@ -1503,7 +1520,7 @@ export function createDefaultControl(
             width: cardW - 6,
             height: cardH * 0.65,
             childOf: id,
-            value: { mode: 'binding', content: `row.${photoField}` },
+            value: { mode: 'binding', content: '' },
             fit: 'contain',
           },
           {
@@ -1527,7 +1544,7 @@ export function createDefaultControl(
             height: cardH * 0.25,
             childOf: id,
             contentType: 'variable',
-            binding: `row.${titleField}`,
+            binding: '',
             style: { fontSize: 9 },
           },
         ]
@@ -1546,7 +1563,9 @@ export function createDefaultControl(
           dataSource: 'ReportItems',
           mode: 'appendix',
           cardBorder: true,
-          appendixHeader: init.appendixHeader,
+          // ★ appendixHeader 旧字段映射到 appendixTitle.text(每页重复渲染)
+          appendixTitle: init.appendixHeader ? { text: init.appendixHeader } : undefined,
+          titleRepeat: true,
           name: '附录图片墙',
         }
       }

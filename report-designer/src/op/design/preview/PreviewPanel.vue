@@ -241,6 +241,23 @@ watch(
   },
 )
 
+// ★ 用户在右侧面板改字段(grid 配置/子控件等)后,预览自动刷新。
+// debounce 100ms:连续改字段(键盘/拖动)只渲一次;buildTemplate 是只读语义,
+// 不会再写回 controls.value,不会触发死循环。
+let pendingRender: ReturnType<typeof setTimeout> | null = null
+watch(
+  () => store.controls,
+  () => {
+    if (!props.show) return
+    if (pendingRender) clearTimeout(pendingRender)
+    pendingRender = setTimeout(() => {
+      pendingRender = null
+      void doRender()
+    }, 100)
+  },
+  { deep: true },
+)
+
 function close(): void {
   emit('update:show', false)
 }
