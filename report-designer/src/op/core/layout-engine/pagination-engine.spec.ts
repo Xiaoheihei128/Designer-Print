@@ -693,6 +693,98 @@ describe('layout —— 段级形态(qrcode)端到端', () => {
     const html = renderHtml(result)
     expect(html).toMatch(/<svg/)
   })
+
+  // ★ Bug 回归:静态表格(无 dataSource,用户手画的 layout grid)里的 cell 段级 qrcode
+  //   必须能正常渲染 SVG。
+  //   之前 placeStaticTables 调用 buildTableModel 时漏传 svgLookup,导致 cell.parts 退化为空,
+  //   qrcode 段永远拿不到 svg,预览画布上对应行/列要么空白要么退化成文本。
+  //   本用例确保修复后:静态表 + cell.segments 形态段 → 渲染出 SVG。
+  it('★ 静态表格(无 dataSource)cell 含 qrcode 段 → HTML 包含 <svg>', async () => {
+    const table: TableControl = {
+      id: 'tbl',
+      type: 'table',
+      left: 10,
+      top: 10,
+      width: 100,
+      height: 30,
+      // ★ 关键:无 dataSource,这是「静态表」分支(走 placeStaticTables)
+      columns: [{ field: 'qr', title: '码', width: 100 }],
+      cells: [
+        [],
+        [
+          {
+            segments: [
+              { kind: 'field', path: 'Header.MaterialCode', format: { kind: 'qrcode', errorLevel: 'M' } },
+            ],
+          },
+        ],
+      ],
+    } as TableControl
+    const template: TemplateData<AnyControl> = {
+      version: '1',
+      document: {
+        type: 'report',
+        page: {
+          width: 210,
+          height: 297,
+          unit: 'mm',
+          orientation: 'portrait',
+          margin: { top: 0, right: 10, bottom: 0, left: 10 },
+        },
+        sections: [{ type: 'body', components: [table] }],
+      },
+    }
+    const measurer = createCjkMeasurer()
+    // data 不需要 items 数组(无 dataSource),只放顶层字段
+    const data = { Header: { MaterialCode: 'RM-2026-00123' } }
+    const result = await layout(template, data, { measurer })
+    const html = renderHtml(result)
+    expect(html).toMatch(/<svg/)
+    // 修复前:cell parts 退化为空 text,html 里只有「(空二维码)」或裸空字符串,根本不会渲染 svg。
+    // 修复后:静态表路径也走 svgLookup,QR 段能命中 svgCache,正确输出 svg。
+  })
+
+  // 顺便验证静态表 + barcode 形态也走同一条修复路径
+  it('★ 静态表格 cell 含 barcode 段 → HTML 包含 <svg>', async () => {
+    const table: TableControl = {
+      id: 'tbl',
+      type: 'table',
+      left: 10,
+      top: 10,
+      width: 100,
+      height: 30,
+      columns: [{ field: 'bc', title: '条', width: 100 }],
+      cells: [
+        [],
+        [
+          {
+            segments: [
+              { kind: 'field', path: 'Header.BatchNo', format: { kind: 'barcode', bcid: 'code128', showText: false } },
+            ],
+          },
+        ],
+      ],
+    } as TableControl
+    const template: TemplateData<AnyControl> = {
+      version: '1',
+      document: {
+        type: 'report',
+        page: {
+          width: 210,
+          height: 297,
+          unit: 'mm',
+          orientation: 'portrait',
+          margin: { top: 0, right: 10, bottom: 0, left: 10 },
+        },
+        sections: [{ type: 'body', components: [table] }],
+      },
+    }
+    const measurer = createCjkMeasurer()
+    const data = { Header: { BatchNo: 'LOT-2026-08-001' } }
+    const result = await layout(template, data, { measurer })
+    const html = renderHtml(result)
+    expect(html).toMatch(/<svg/)
+  })
 })
 
 /* -------------------- userHeight 误分类警告 + labelgrid+flowTable 共存 -------------------- */

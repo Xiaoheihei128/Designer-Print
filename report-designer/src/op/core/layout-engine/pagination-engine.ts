@@ -249,7 +249,7 @@ async function placeControls(
 }
 
 /** 静态表格（无数据源或非任何 flowTable）整表渲染，不参与分页 */
-function placeStaticTables(
+async function placeStaticTables(
   components: AnyControl[],
   /** 所有 flow table 的 id 集合(多流式分页场景下≥1 个),这些表格不渲染为静态表 */
   flowTableIds: Iterable<string>,
@@ -258,11 +258,28 @@ function placeStaticTables(
   measurer: TextMeasurer,
   topShift = 0,
   rowCtx?: RowCtxMap,
-): { placed: PlacedTable[]; warnings: RenderWarning[] } {
+): Promise<{ placed: PlacedTable[]; warnings: RenderWarning[] }> {
   const placed: PlacedTable[] = []
   const warnings: RenderWarning[] = []
   // 避免每次循环查 Set 构造
   const flowIdSet = flowTableIds instanceof Set ? flowTableIds : new Set(flowTableIds)
+
+  // ★ 段级形态 SVG 预生成：与 flowTables 路径 (commit 6) 一致。
+  //   静态表格(用户手画的 layout grid/无 dataSource 的表)里 cell.segments 形态段
+  //   (qrcode/barcode) 也需要 svgLookup 才能在 buildTableModel → staticCellText →
+  //   resolveSegments 中命中 svgCache。漏传 → cell parts 退化为空 text，二维码不显示。
+  //   同一组静态表共用一份 svgLookup（key=path:value 全局唯一），不分张表。
+  const allValuesByPath = new Map<string, Set<string>>()
+  const dataRoot = (ctx.data ?? {}) as Record<string, unknown>
+  collectRowPaths(dataRoot, '', allValuesByPath)
+  const allCellSegments: Segment[][] = []
+  for (const control of components) {
+    if (control.type !== 'table' || flowIdSet.has(control.id)) continue
+    for (const segs of collectCellSegmentsForTable(control)) allCellSegments.push(segs)
+  }
+  const svgCacheMap = await precomputeCodeSvgsForCells(allCellSegments, allValuesByPath)
+  const svgLookup = (_segIdx: number, path: string, value: string) =>
+    svgCacheMap.get(`${path}:${value}`)
 
   for (const control of components) {
     if (control.type !== 'table' || flowIdSet.has(control.id)) continue
@@ -271,7 +288,14 @@ function placeStaticTables(
 
     const widthMm = toMm(control.width, unit)
     const heightMm = toMm(control.height, unit)
-    const model = buildTableModel({ control, ctx: cctx, measurer, widthMm, heightMm })
+    const model = buildTableModel({
+      control,
+      ctx: cctx,
+      measurer,
+      widthMm,
+      heightMm,
+      svgLookup,
+    })
     warnings.push(...model.warnings)
     placed.push({
       kind: 'table',
@@ -944,7 +968,7 @@ export async function layout(
   }
   for (const c of refinedPlaced) pushNode(0, c)
 
-  const staticTables = placeStaticTables(
+  const staticTables = await placeStaticTables(
     [...plan.above, ...plan.overlap],
     // 多流式分页:把所有 flow table id 一起跳过,
     // 避免 main1 的 above/overlap 静态表路径把 main2 当静态表渲染(导致重复)
@@ -1189,7 +1213,7 @@ export async function layout(
       }
     }
 
-    const belowStatic = placeStaticTables(
+    const belowStatic = await placeStaticTables(
       plan.below,
       // 多流式分页:plan.below 可能包含后续 flow table,
       // 它们由多阶段循环独立分页,不在此渲染为静态表。
@@ -1875,7 +1899,7 @@ async function layoutStaticOnly(
     const shift = -idx * bodyH
     const { placed, warnings: w } = await placeControls(list, ctx, unit, shift, rowCtx)
     warnings.push(...w)
-    const tables = placeStaticTables(list, [], ctx, unit, measurer, shift, rowCtx)
+    const tables = await placeStaticTables(list, [], ctx, unit, measurer, shift, rowCtx)
     warnings.push(...tables.warnings)
     bodyByPage.set(idx, [...placed, ...tables.placed])
   }
