@@ -1,30 +1,30 @@
 <script setup lang="ts">
 /**
- * LabelGridQuickPanel —— 标签网格属性快速面板（底部弹出）
+ * LabelGridQuickPanel —— 标签网格属性快速面板（底部弹出，NTabs 导航版）
  *
  * 触发链：右键画布上的 labelgrid → CanvasDesigner mouse:down button=2 →
  *   onLabelGridEdit(controlId) → designer.ts onLabelGridEdit → uiStore.openLabelGridQuickPanel
  *   → 本组件 v-if 渲染。
  *
- * 设计决策（vs 原右栏 LabelGridProps）：
- *   - 字段多（30+）混在一个 flat 面板里查找效率差 → 按 NCollapse 折叠分组
- *   - 右栏常驻 CommonProps（X/Y/W/H/锁定/打印）无需每次重弹
- *   - 数据面板 NCollapse 默认全展开，用户按需折叠；预留「高级」折叠区
- *     后续塞新选项(对齐策略/换页节奏等)不污染主分组
- *   - targetId 显式记录而非读 selectedIds，切换选中控件不关闭面板
- *     （用户决策：跨控件切换编辑不丢数据）
+ * v2 重构 (2026-09-11)：
+ *   - NTabs 顶部导航替代 NCollapse 折叠面板
+ *     原因：折叠面板占纵向空间大，分类一眼看不到，要滚动才能找到对应分组；
+ *     改为 NTabs 后单层可见，导航一眼到位。
+ *   - 7 个 tab（standard 模式 6 个，appendix 模式 7 个），默认「卡片布局」
+ *   - 每个 tab 内只放对应类别的字段，切换 tab 无需折叠/展开
+ *   - 高度从 320px 收到 260px，腾出更多画布空间
  */
 import { computed, ref, watch } from 'vue'
 import {
   NButton,
-  NCollapse,
-  NCollapseItem,
   NInput,
   NInputNumber,
   NRadioButton,
   NRadioGroup,
   NSelect,
   NSwitch,
+  NTabPane,
+  NTabs,
   NTag,
   NText,
   NTooltip,
@@ -171,23 +171,19 @@ function clearChildren(): void {
   if (target.value) store.clearLabelGridChildren(target.value.id)
 }
 
-/* ------------------------------ NCollapse 默认展开项 ------------------------------ */
+/* ------------------------------ NTabs 导航 ------------------------------ */
 
-/**
- * 默认全展开：用户首见就看到完整能力；按需折叠节省纵向空间。
- * 「高级」项默认收起，预留给后续扩展（页边距策略/换页节奏等），暂用 NCollapse 内嵌分组实现，
- * 不破坏外层 6 分组的稳定键名。
- */
-const expanded = ref<string[]>([
-  'layout',
-  'appearance',
-  'data',
-  'pagination',
-  'title',
-  'children',
-  'advanced',
-])
-const advancedExpanded = ref<string[]>(['mode'])
+/** 默认 tab = 卡片布局 */
+type TabName = 'layout' | 'appearance' | 'data' | 'pagination' | 'title' | 'children' | 'advanced'
+const activeTab = ref<TabName>('layout')
+
+/** 切换控件时回到「卡片布局」tab —— 用户决策：进入面板先看到最重要（布局）的字段 */
+watch(
+  () => target.value?.id,
+  () => {
+    activeTab.value = 'layout'
+  },
+)
 
 /* ------------------------------ 自愈：控件不在则关 ------------------------------ */
 
@@ -231,358 +227,374 @@ defineExpose({ close })
       </div>
     </div>
 
-    <!-- 6 个主分组 + 高级折叠：NCollapse 默认全展开；分组键名稳定，便于扩展 -->
-    <NCollapse
-      v-model:expanded-names="expanded"
-      :trigger-areas="['main', 'arrow']"
-      class="lgq-collapse"
+    <!-- NTabs 顶部条 + 内容区 -->
+    <NTabs
+      v-model:value="activeTab"
+      type="line"
+      size="small"
+      :tabs-padding="4"
+      class="lgq-tabs"
     >
       <!-- 1. 卡片布局：列/行/卡宽/卡高/间距 -->
-      <NCollapseItem name="layout" title="卡片布局">
-        <div class="lgq-row">
-          <span class="lgq-label">列数</span>
-          <NInputNumber
-            size="small"
-            button-placement="both"
-            :value="target.columns ?? 3"
-            :min="1"
-            :max="50"
-            :step="1"
-            style="width: 96px"
-            @update:value="patchGeometry({ columns: $event ?? 1 })"
-          />
-          <NTooltip>
-            <template #trigger>
-              <NButton size="tiny" quaternary style="margin-left: 6px" @click="fillColumns">
-                铺满
-              </NButton>
-            </template>
-            按卡片宽度把列数拉到内容区上限（{{ maxColumns }} 列）
-          </NTooltip>
-          <span class="lgq-label" style="margin-left: 16px">行数</span>
-          <NInputNumber
-            size="small"
-            button-placement="both"
-            :value="visibleRows"
-            :min="1"
-            :max="200"
-            :step="1"
-            style="width: 96px"
-            @update:value="setRows($event ?? 1)"
-          />
-          <NText depth="3" style="font-size: 12px; margin-left: 6px">多行自动跨页</NText>
-        </div>
-
-        <div class="grid grid-cols-4 gap-2 mt-1">
+      <NTabPane name="layout" tab="卡片布局" display-directive="show">
+        <div class="lgq-pane">
           <div class="lgq-row">
-            <span class="lgq-label">卡宽</span>
+            <span class="lgq-label">列数</span>
             <NInputNumber
               size="small"
               button-placement="both"
-              :value="geo.cardWidth"
+              :value="target.columns ?? 3"
               :min="1"
-              :step="0.5"
-              :precision="1"
-              @update:value="patchGeometry({ cardWidth: $event ?? 1 })"
-            />
-          </div>
-          <div class="lgq-row">
-            <span class="lgq-label">卡高</span>
-            <NInputNumber
-              size="small"
-              button-placement="both"
-              :value="geo.cardHeight"
-              :min="1"
-              :step="0.5"
-              :precision="1"
-              @update:value="patchGeometry({ cardHeight: $event ?? 1 })"
-            />
-          </div>
-          <div class="lgq-row">
-            <span class="lgq-label">横间距</span>
-            <NInputNumber
-              size="small"
-              button-placement="both"
-              :value="geo.gapX"
-              :min="0"
-              :step="0.5"
-              :precision="1"
-              @update:value="patchGeometry({ gapX: $event ?? 0 })"
-            />
-          </div>
-          <div class="lgq-row">
-            <span class="lgq-label">纵间距</span>
-            <NInputNumber
-              size="small"
-              button-placement="both"
-              :value="geo.gapY"
-              :min="0"
-              :step="0.5"
-              :precision="1"
-              @update:value="patchGeometry({ gapY: $event ?? 0 })"
-            />
-          </div>
-        </div>
-
-        <div class="lgq-row" style="margin-top: 6px; gap: 6px">
-          <NButton size="tiny" secondary @click="fitCardToContent">卡片贴合内容</NButton>
-          <NText depth="3" style="font-size: 12px">
-            每页 {{ geo.columns * visibleRows }} 张 · 模板含 {{ target.children.length }} 个元素
-          </NText>
-        </div>
-      </NCollapseItem>
-
-      <!-- 2. 网格外观：网格线 / 线型 / 卡片边框 / 圆角 -->
-      <NCollapseItem name="appearance" title="网格外观">
-        <div class="grid grid-cols-4 gap-2">
-          <div class="lgq-row">
-            <span class="lgq-label">显示网格线</span>
-            <NSwitch
-              size="small"
-              :value="target.showLines ?? true"
-              @update:value="patch({ showLines: $event })"
-            />
-          </div>
-          <div class="lgq-row">
-            <span class="lgq-label">线型</span>
-            <NSelect
-              size="small"
-              :value="target.lineStyle ?? 'solid'"
-              :disabled="!(target.showLines ?? true)"
-              :options="[
-                { label: '实线', value: 'solid' },
-                { label: '虚线', value: 'dashed' },
-              ]"
-              style="width: 96px"
-              @update:value="patch({ lineStyle: $event })"
-            />
-          </div>
-          <div class="lgq-row">
-            <span class="lgq-label">卡片边框</span>
-            <NSwitch
-              size="small"
-              :value="target.cardBorder ?? true"
-              @update:value="patch({ cardBorder: $event })"
-            />
-          </div>
-          <div class="lgq-row">
-            <span class="lgq-label">圆角(mm)</span>
-            <NInputNumber
-              size="small"
-              button-placement="both"
-              :value="target.cornerRadius ?? 0"
-              :min="0"
-              :max="20"
-              :step="0.5"
-              :precision="1"
-              :disabled="!(target.cardBorder ?? true)"
-              style="width: 96px"
-              @update:value="patch({ cornerRadius: $event ?? 0 })"
-            />
-          </div>
-        </div>
-      </NCollapseItem>
-
-      <!-- 3. 数据：数据源 + 最大卡片数 -->
-      <NCollapseItem name="data" title="数据">
-        <div class="lgq-row">
-          <span class="lgq-label">
-            数据源
-            <span v-if="currentMode === 'appendix'" style="color: var(--brand-error, #d03050)">*</span>
-          </span>
-          <NSelect
-            size="small"
-            :value="target.dataSource ?? null"
-            :options="dataSourceOptions"
-            :placeholder="
-              currentMode === 'appendix' ? '附录模式必填（请选择明细表）' : '选择明细表数组路径（留空 = 纯布局）'
-            "
-            :disabled="currentMode === 'appendix' && dataSourceOptions.length === 0"
-            filterable
-            tag
-            clearable
-            style="width: 280px"
-            @update:value="(v: string | null) => patch({ dataSource: (v ?? '').trim() || undefined })"
-          />
-        </div>
-        <div class="lgq-row" style="margin-top: 4px">
-          <span class="lgq-label">最大卡片数</span>
-          <NInputNumber
-            size="small"
-            button-placement="both"
-            :value="target.maxItems ?? null"
-            :min="1"
-            :max="9999"
-            :step="1"
-            placeholder="不限"
-            style="width: 120px"
-            @update:value="patch({ maxItems: $event ?? undefined })"
-          />
-          <NText depth="3" style="font-size: 11px; margin-left: 6px">仅配数据源时生效</NText>
-        </div>
-      </NCollapseItem>
-
-      <!-- 4. 分页策略 -->
-      <NCollapseItem name="pagination" title="分页">
-        <div class="lgq-row">
-          <span class="lgq-label">分页策略</span>
-          <NSelect
-            size="small"
-            :value="target.pageBreak ?? (target.forceNewPage ? 'always' : 'auto')"
-            :options="[
-              { label: '自适应(放得下就跟末页)', value: 'auto' },
-              { label: '强制新页(整组推到下一页)', value: 'always' },
-              { label: '始终紧跟末页(超出裁切)', value: 'never' },
-            ]"
-            style="width: 240px"
-            @update:value="
-              (v: 'auto' | 'always' | 'never') =>
-                patch({ pageBreak: v, forceNewPage: v === 'always' })
-            "
-          />
-        </div>
-      </NCollapseItem>
-
-      <!-- 5. 附录标题（仅 appendix） -->
-      <NCollapseItem
-        v-if="currentMode === 'appendix'"
-        name="title"
-        title="附录标题"
-      >
-        <div class="lgq-row" style="align-items: flex-start">
-          <span class="lgq-label">文本</span>
-          <NInput
-            type="textarea"
-            size="small"
-            :value="target.appendixTitle?.text ?? ''"
-            placeholder="留空则不渲染。例如:附录:样本照片"
-            :autosize="{ minRows: 2, maxRows: 4 }"
-            style="flex: 1; margin-left: 8px"
-            @update:value="(v: string) => patchTitleText(v)"
-          />
-        </div>
-
-        <div class="grid grid-cols-4 gap-2 mt-2">
-          <div class="lgq-row">
-            <span class="lgq-label">字号(pt)</span>
-            <NInputNumber
-              size="small"
-              button-placement="both"
-              :value="target.appendixTitle?.style?.fontSize ?? 12"
-              :min="6"
-              :max="120"
+              :max="50"
               :step="1"
               style="width: 96px"
-              @update:value="patchTitleStyle({ fontSize: $event ?? 12 })"
+              @update:value="patchGeometry({ columns: $event ?? 1 })"
+            />
+            <NTooltip>
+              <template #trigger>
+                <NButton size="tiny" quaternary style="margin-left: 6px" @click="fillColumns">
+                  铺满
+                </NButton>
+              </template>
+              按卡片宽度把列数拉到内容区上限（{{ maxColumns }} 列）
+            </NTooltip>
+            <span class="lgq-label" style="margin-left: 16px">行数</span>
+            <NInputNumber
+              size="small"
+              button-placement="both"
+              :value="visibleRows"
+              :min="1"
+              :max="200"
+              :step="1"
+              style="width: 96px"
+              @update:value="setRows($event ?? 1)"
+            />
+            <NText depth="3" style="font-size: 12px; margin-left: 6px">多行自动跨页</NText>
+          </div>
+
+          <div class="grid grid-cols-4 gap-2">
+            <div class="lgq-row">
+              <span class="lgq-label">卡宽</span>
+              <NInputNumber
+                size="small"
+                button-placement="both"
+                :value="geo.cardWidth"
+                :min="1"
+                :step="0.5"
+                :precision="1"
+                @update:value="patchGeometry({ cardWidth: $event ?? 1 })"
+              />
+            </div>
+            <div class="lgq-row">
+              <span class="lgq-label">卡高</span>
+              <NInputNumber
+                size="small"
+                button-placement="both"
+                :value="geo.cardHeight"
+                :min="1"
+                :step="0.5"
+                :precision="1"
+                @update:value="patchGeometry({ cardHeight: $event ?? 1 })"
+              />
+            </div>
+            <div class="lgq-row">
+              <span class="lgq-label">横间距</span>
+              <NInputNumber
+                size="small"
+                button-placement="both"
+                :value="geo.gapX"
+                :min="0"
+                :step="0.5"
+                :precision="1"
+                @update:value="patchGeometry({ gapX: $event ?? 0 })"
+              />
+            </div>
+            <div class="lgq-row">
+              <span class="lgq-label">纵间距</span>
+              <NInputNumber
+                size="small"
+                button-placement="both"
+                :value="geo.gapY"
+                :min="0"
+                :step="0.5"
+                :precision="1"
+                @update:value="patchGeometry({ gapY: $event ?? 0 })"
+              />
+            </div>
+          </div>
+
+          <div class="lgq-row" style="margin-top: 6px; gap: 6px">
+            <NButton size="tiny" secondary @click="fitCardToContent">卡片贴合内容</NButton>
+            <NText depth="3" style="font-size: 12px">
+              每页 {{ geo.columns * visibleRows }} 张 · 模板含 {{ target.children.length }} 个元素
+            </NText>
+          </div>
+        </div>
+      </NTabPane>
+
+      <!-- 2. 网格外观：网格线 / 线型 / 卡片边框 / 圆角 -->
+      <NTabPane name="appearance" tab="网格外观" display-directive="show">
+        <div class="lgq-pane">
+          <div class="grid grid-cols-2 gap-x-6 gap-y-2">
+            <div class="lgq-row">
+              <span class="lgq-label">显示网格线</span>
+              <NSwitch
+                size="small"
+                :value="target.showLines ?? true"
+                @update:value="patch({ showLines: $event })"
+              />
+            </div>
+            <div class="lgq-row">
+              <span class="lgq-label">线型</span>
+              <NSelect
+                size="small"
+                :value="target.lineStyle ?? 'solid'"
+                :disabled="!(target.showLines ?? true)"
+                :options="[
+                  { label: '实线', value: 'solid' },
+                  { label: '虚线', value: 'dashed' },
+                ]"
+                style="width: 110px"
+                @update:value="patch({ lineStyle: $event })"
+              />
+            </div>
+            <div class="lgq-row">
+              <span class="lgq-label">卡片边框</span>
+              <NSwitch
+                size="small"
+                :value="target.cardBorder ?? true"
+                @update:value="patch({ cardBorder: $event })"
+              />
+            </div>
+            <div class="lgq-row">
+              <span class="lgq-label">圆角(mm)</span>
+              <NInputNumber
+                size="small"
+                button-placement="both"
+                :value="target.cornerRadius ?? 0"
+                :min="0"
+                :max="20"
+                :step="0.5"
+                :precision="1"
+                :disabled="!(target.cardBorder ?? true)"
+                style="width: 110px"
+                @update:value="patch({ cornerRadius: $event ?? 0 })"
+              />
+            </div>
+          </div>
+        </div>
+      </NTabPane>
+
+      <!-- 3. 数据：数据源 + 最大卡片数 -->
+      <NTabPane name="data" tab="数据" display-directive="show">
+        <div class="lgq-pane">
+          <div class="lgq-row">
+            <span class="lgq-label">
+              数据源
+              <span v-if="currentMode === 'appendix'" style="color: var(--brand-error, #d03050)">*</span>
+            </span>
+            <NSelect
+              size="small"
+              :value="target.dataSource ?? null"
+              :options="dataSourceOptions"
+              :placeholder="
+                currentMode === 'appendix' ? '附录模式必填（请选择明细表）' : '选择明细表数组路径（留空 = 纯布局）'
+              "
+              :disabled="currentMode === 'appendix' && dataSourceOptions.length === 0"
+              filterable
+              tag
+              clearable
+              style="width: 320px"
+              @update:value="(v: string | null) => patch({ dataSource: (v ?? '').trim() || undefined })"
             />
           </div>
-          <div class="lgq-row">
-            <span class="lgq-label">加粗</span>
-            <NSwitch
+          <div class="lgq-row" style="margin-top: 4px">
+            <span class="lgq-label">最大卡片数</span>
+            <NInputNumber
               size="small"
-              :value="(target.appendixTitle?.style?.fontWeight ?? 'normal') === 'bold'"
+              button-placement="both"
+              :value="target.maxItems ?? null"
+              :min="1"
+              :max="9999"
+              :step="1"
+              placeholder="不限"
+              style="width: 140px"
+              @update:value="patch({ maxItems: $event ?? undefined })"
+            />
+            <NText depth="3" style="font-size: 11px; margin-left: 6px">仅配数据源时生效</NText>
+          </div>
+        </div>
+      </NTabPane>
+
+      <!-- 4. 分页策略 -->
+      <NTabPane name="pagination" tab="分页" display-directive="show">
+        <div class="lgq-pane">
+          <div class="lgq-row">
+            <span class="lgq-label">分页策略</span>
+            <NSelect
+              size="small"
+              :value="target.pageBreak ?? (target.forceNewPage ? 'always' : 'auto')"
+              :options="[
+                { label: '自适应(放得下就跟末页)', value: 'auto' },
+                { label: '强制新页(整组推到下一页)', value: 'always' },
+                { label: '始终紧跟末页(超出裁切)', value: 'never' },
+              ]"
+              style="width: 280px"
               @update:value="
-                (v: boolean) => patchTitleStyle({ fontWeight: v ? 'bold' : 'normal' })
+                (v: 'auto' | 'always' | 'never') =>
+                  patch({ pageBreak: v, forceNewPage: v === 'always' })
               "
             />
           </div>
-          <div class="lgq-row">
-            <span class="lgq-label">颜色</span>
-            <NColorPicker
+        </div>
+      </NTabPane>
+
+      <!-- 5. 附录标题（仅 appendix） -->
+      <NTabPane
+        v-if="currentMode === 'appendix'"
+        name="title"
+        tab="附录标题"
+        display-directive="show"
+      >
+        <div class="lgq-pane">
+          <div class="lgq-row" style="align-items: flex-start">
+            <span class="lgq-label">文本</span>
+            <NInput
+              type="textarea"
               size="small"
-              :modes="['hex']"
-              :show-alpha="false"
-              style="width: 96px"
-              :value="target.appendixTitle?.style?.fill ?? '#000000'"
-              @update:value="patchTitleStyle({ fill: $event })"
+              :value="target.appendixTitle?.text ?? ''"
+              placeholder="留空则不渲染。例如:附录:样本照片"
+              :autosize="{ minRows: 1, maxRows: 2 }"
+              style="flex: 1; margin-left: 8px"
+              @update:value="(v: string) => patchTitleText(v)"
             />
           </div>
-          <div class="lgq-row">
-            <span class="lgq-label">对齐</span>
-            <NSelect
-              size="small"
-              style="width: 96px"
-              :value="target.appendixTitle?.style?.textAlign ?? 'left'"
-              :options="[
-                { label: '左', value: 'left' },
-                { label: '居中', value: 'center' },
-                { label: '右', value: 'right' },
-              ]"
-              @update:value="patchTitleStyle({ textAlign: $event })"
-            />
-          </div>
-        </div>
 
-        <div class="lgq-row" style="margin-top: 6px">
-          <span class="lgq-label">每页重复</span>
-          <NSwitch
-            size="small"
-            :value="target.titleRepeat !== false"
-            @update:value="patch({ titleRepeat: $event })"
-          />
-          <NText depth="3" style="font-size: 11px; margin-left: 6px">
-            关闭则仅 grid 起始页显示标题
-          </NText>
-        </div>
-      </NCollapseItem>
-
-      <!-- 6. 首卡内容：children 列表 + 删除 + 清空（两 mode 共用） -->
-      <NCollapseItem name="children" :title="`首卡内容（${target.children.length}）`">
-        <template v-if="target.children.length">
-          <div class="lgq-child-list">
-            <div v-for="ch in target.children" :key="ch.id" class="lgq-child-item">
-              <span class="truncate text-12px" style="flex: 1">{{ childName(ch) }}</span>
-              <NButton text size="tiny" class="child-del" @click.stop="removeChild(ch.id)">
-                <span class="i-carbon-close text-12px text-brand-text-3" />
-              </NButton>
-            </div>
-          </div>
-          <NButton size="tiny" tertiary type="error" style="margin-top: 6px" @click="clearChildren">
-            清空首卡
-          </NButton>
-        </template>
-        <NText v-else depth="3" style="font-size: 12px">
-          模板为空：从控件库拖入组件即可（自动复制到每张卡）。appendix 模式可拖入图/编号/标题三件套。
-        </NText>
-      </NCollapseItem>
-
-      <!-- 7. 高级（默认折叠，预留扩展位） -->
-      <NCollapseItem name="advanced" title="高级">
-        <NCollapse v-model:expanded-names="advancedExpanded">
-          <NCollapseItem name="mode" title="模式切换">
+          <div class="grid grid-cols-4 gap-2" style="margin-top: 6px">
             <div class="lgq-row">
-              <span class="lgq-label">模式</span>
-              <NRadioGroup
-                :value="currentMode"
+              <span class="lgq-label">字号(pt)</span>
+              <NInputNumber
                 size="small"
-                @update:value="(v: 'standard' | 'appendix') => setMode(v)"
-              >
-                <NRadioButton value="standard">标准</NRadioButton>
-                <NRadioButton value="appendix">附录图片墙</NRadioButton>
-              </NRadioGroup>
-            </div>
-            <NText depth="3" style="font-size: 12px; line-height: 1.5; margin-top: 4px">
-              切换模式不替换 children。两 mode 都用本面板，差异仅在「附录标题」分组是否显示。
-            </NText>
-          </NCollapseItem>
-          <NCollapseItem name="compat" title="兼容字段">
-            <div class="lgq-row">
-              <span class="lgq-label">appendixHeader</span>
-              <NInput
-                size="small"
-                :value="target.appendixHeader ?? ''"
-                placeholder="旧版一次性标题文本（不再渲染）"
-                style="width: 280px"
-                @update:value="(v: string) => patch({ appendixHeader: v || undefined })"
+                button-placement="both"
+                :value="target.appendixTitle?.style?.fontSize ?? 12"
+                :min="6"
+                :max="120"
+                :step="1"
+                style="width: 96px"
+                @update:value="patchTitleStyle({ fontSize: $event ?? 12 })"
               />
             </div>
-            <NText depth="3" style="font-size: 12px; line-height: 1.5">
-              旧字段保留以便向后兼容 JSON 模板；不再用作渲染源，标题请改用上方「附录标题」分组。
+            <div class="lgq-row">
+              <span class="lgq-label">加粗</span>
+              <NSwitch
+                size="small"
+                :value="(target.appendixTitle?.style?.fontWeight ?? 'normal') === 'bold'"
+                @update:value="
+                  (v: boolean) => patchTitleStyle({ fontWeight: v ? 'bold' : 'normal' })
+                "
+              />
+            </div>
+            <div class="lgq-row">
+              <span class="lgq-label">颜色</span>
+              <NColorPicker
+                size="small"
+                :modes="['hex']"
+                :show-alpha="false"
+                style="width: 96px"
+                :value="target.appendixTitle?.style?.fill ?? '#000000'"
+                @update:value="patchTitleStyle({ fill: $event })"
+              />
+            </div>
+            <div class="lgq-row">
+              <span class="lgq-label">对齐</span>
+              <NSelect
+                size="small"
+                style="width: 96px"
+                :value="target.appendixTitle?.style?.textAlign ?? 'left'"
+                :options="[
+                  { label: '左', value: 'left' },
+                  { label: '居中', value: 'center' },
+                  { label: '右', value: 'right' },
+                ]"
+                @update:value="patchTitleStyle({ textAlign: $event })"
+              />
+            </div>
+          </div>
+
+          <div class="lgq-row" style="margin-top: 6px">
+            <span class="lgq-label">每页重复</span>
+            <NSwitch
+              size="small"
+              :value="target.titleRepeat !== false"
+              @update:value="patch({ titleRepeat: $event })"
+            />
+            <NText depth="3" style="font-size: 11px; margin-left: 6px">
+              关闭则仅 grid 起始页显示标题
             </NText>
-          </NCollapseItem>
-        </NCollapse>
-      </NCollapseItem>
-    </NCollapse>
+          </div>
+        </div>
+      </NTabPane>
+
+      <!-- 6. 首卡内容：children 列表 + 删除 + 清空（两 mode 共用） -->
+      <NTabPane
+        :name="'children'"
+        :tab="`首卡内容（${target.children.length}）`"
+        display-directive="show"
+      >
+        <div class="lgq-pane">
+          <template v-if="target.children.length">
+            <div class="lgq-child-list">
+              <div v-for="ch in target.children" :key="ch.id" class="lgq-child-item">
+                <span class="truncate text-12px" style="flex: 1">{{ childName(ch) }}</span>
+                <NButton text size="tiny" class="child-del" @click.stop="removeChild(ch.id)">
+                  <span class="i-carbon-close text-12px text-brand-text-3" />
+                </NButton>
+              </div>
+            </div>
+            <NButton size="tiny" tertiary type="error" style="margin-top: 6px" @click="clearChildren">
+              清空首卡
+            </NButton>
+          </template>
+          <NText v-else depth="3" style="font-size: 12px">
+            模板为空：从控件库拖入组件即可（自动复制到每张卡）。appendix 模式可拖入图/编号/标题三件套。
+          </NText>
+        </div>
+      </NTabPane>
+
+      <!-- 7. 高级：模式切换 + 兼容字段 -->
+      <NTabPane name="advanced" tab="高级" display-directive="show">
+        <div class="lgq-pane">
+          <div class="lgq-row">
+            <span class="lgq-label">模式</span>
+            <NRadioGroup
+              :value="currentMode"
+              size="small"
+              @update:value="(v: 'standard' | 'appendix') => setMode(v)"
+            >
+              <NRadioButton value="standard">标准</NRadioButton>
+              <NRadioButton value="appendix">附录图片墙</NRadioButton>
+            </NRadioGroup>
+            <NText depth="3" style="font-size: 12px; margin-left: 6px">
+              切换模式不替换 children
+            </NText>
+          </div>
+
+          <div class="lgq-row" style="margin-top: 8px">
+            <span class="lgq-label">appendixHeader</span>
+            <NInput
+              size="small"
+              :value="target.appendixHeader ?? ''"
+              placeholder="旧版一次性标题文本（不再渲染）"
+              style="width: 320px"
+              @update:value="(v: string) => patch({ appendixHeader: v || undefined })"
+            />
+          </div>
+          <NText depth="3" style="font-size: 11px; line-height: 1.5; margin-top: 4px">
+            旧字段保留以便向后兼容 JSON 模板；不再用作渲染源，标题请改用「附录标题」分组。
+          </NText>
+        </div>
+      </NTabPane>
+    </NTabs>
   </div>
 </template>
 
@@ -590,7 +602,8 @@ defineExpose({ close })
 .lgq-panel {
   display: flex;
   flex-direction: column;
-  height: 320px;
+  /* 高度从 320px 收到 260px：腾出更多画布空间；同时容纳 6~7 行控件不滚动 */
+  height: 260px;
   background: var(--brand-surface, #fff);
   border-top: 1px solid var(--brand-border, #e5e7eb);
   box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.05);
@@ -600,7 +613,7 @@ defineExpose({ close })
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 12px;
+  padding: 4px 12px;
   border-bottom: 1px solid var(--brand-border, #e5e7eb);
   background: var(--brand-fill-1, #f7f8fa);
   flex: 0 0 auto;
@@ -615,14 +628,37 @@ defineExpose({ close })
   align-items: center;
   gap: 6px;
 }
-.lgq-collapse {
+/* NTabs 容器：标签条贴顶，panes 在 flex 中占满剩余空间 */
+.lgq-tabs {
   flex: 1 1 auto;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* naive-ui 默认 tabs-nav 高度 42px,改成 32px 让面板更紧凑 */
+.lgq-tabs :deep(.n-tabs-nav) {
+  padding: 0 12px;
+}
+.lgq-tabs :deep(.n-tabs-tab) {
+  font-size: 12px;
+  padding: 6px 10px;
+}
+.lgq-tabs :deep(.n-tabs-tab-label) {
+  font-size: 12px;
+}
+/* panes 容器：占满 tabs 剩余空间,允许内部溢出滚动 */
+.lgq-tabs :deep(.n-tabs-pane-wrapper) {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.lgq-tabs :deep(.n-tab-pane) {
+  padding: 0 !important;
+  height: 100%;
   overflow-y: auto;
 }
-.lgq-collapse :deep(.n-collapse-item__header-main) {
-  font-size: 13px;
-  font-weight: 500;
+/* pane 内 padding */
+.lgq-pane {
+  padding: 8px 12px 10px;
 }
 .lgq-row {
   display: flex;
