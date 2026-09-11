@@ -43,6 +43,7 @@ import type { Segment } from '@op/types/control'
 import {
   bodyStepMm,
   expandLabelGrids,
+  measureAppendixTitleHeight,
   resolveGridGeometry,
   visibleCardRows,
   withRowCtx,
@@ -816,7 +817,10 @@ export async function layout(
     const totalRows = Math.max(1, Math.ceil(total / geo.columns))
     const gridRealH = totalRows * stepY - gapY
     // ★ appendixTitle 占据 titleHeight mm,在 grid 之上,需累加到实际占高
-    const titleHeight = lc.appendixTitle?.text?.trim() ? 6 : 0
+    // 高度按 style 真实渲染口径算(不写死 6),保证大字号/加粗不与首行重叠
+    const titleHeight = lc.appendixTitle?.text?.trim()
+      ? measureAppendixTitleHeight(lc.appendixTitle?.style)
+      : 0
     return Math.max(max, gridRealH + titleHeight)
   }, 0)
   // ★ 合并:reserveBelow 必须把「非 'always' grid 真实展开高」也算进去 —— 否则
@@ -1671,7 +1675,10 @@ function decideGridTarget(
     : naturalTotal
   const totalRows = Math.max(1, Math.ceil(total / geo.columns))
   // ★ appendixTitle 占据 titleHeight mm,需累加到 fits 判断的总高
-  const titleHeight = lc.appendixTitle?.text?.trim() ? 6 : 0
+  // 高度按 style 真实渲染口径算(不写死 6),保证大字号/加粗不与首行重叠
+  const titleHeight = lc.appendixTitle?.text?.trim()
+    ? measureAppendixTitleHeight(lc.appendixTitle?.style)
+    : 0
   const requiredHeight = totalRows * stepY - gapY + titleHeight
 
   // ★ 与表格切片一致:新页起点 = zoneTop(headerHeight,页眉下方),避免 grid 覆盖页眉;

@@ -24,7 +24,7 @@
  * 关键约束：卡片**不允许跨页**。展开时按页容量成行推进，行不够就整行下移到下一页，
  * 生成的 top 是「跨页绝对坐标」（page * bodyStep + 页内 top），与切页算法自洽。
  */
-import type { AnyControl, LabelGridControl } from '@op/types/control'
+import type { AnyControl, LabelGridControl, TextStyle } from '@op/types/control'
 import type { PageUnit } from '@op/types/template'
 import { fromMm, toMm } from '@op/core/units'
 import { isControlPrintable } from './data-binder'
@@ -96,6 +96,40 @@ export function visibleCardRows(heightUnit: number, geo: GridGeometry): number {
   const step = geo.cardHeight + geo.gapY
   if (step <= 0) return 1
   return Math.max(1, Math.floor((heightUnit + geo.gapY) / step))
+}
+
+/* --------------------- appendixTitle 测高（共用给分页引擎） --------------------- */
+
+/** CSS pt → mm 的换算常量（25.4mm/inch ÷ 72pt/inch） */
+const PT_TO_MM = 25.4 / 72
+
+/**
+ * 量 appendixTitle 在 CSS 渲染下的盒行高。
+ *
+ * 旧实现用写死 `titleHeight = 6mm`，与 `TextControl` 默认字号对齐。但用户把字号调到
+ * 18pt + bold 时，CSS line-height 实际渲染高度 ≈ 7.4mm，盒高只有 6mm → 文字向下
+ * 溢出 → 与卡片首行重叠（用户反馈：「字体加粗后变高，导致附录图片墙与附录标题
+ * 文本重叠」）。
+ *
+ * 新算法按 TextStyle 真实渲染口径算盒高：
+ *   heightMm = fontSize(pt→mm) × lineHeight × (bold ? 1.05 : 1) + 0.5mm padding
+ *
+ * - `fontSize` 默认 12pt（与 renderer-html/css-generator.TEXT_DEFAULT_FONT_SIZE 对齐）
+ * - `lineHeight` 默认 1.16（同 TEXT_DEFAULT_LINE_HEIGHT）
+ * - bold 微增 ascender/descender 5%（CSS font-weight=bold 行高并不显著增大，但浏览器
+ *   字体回退/中文混排时仍会有 1~2px 抖动；给一点 buffer 防止抖动跨进卡片首行）
+ * - 0.5mm 上下 padding 让标题与首行卡片有视觉气口（贴边视觉发紧）
+ * - 最小 4mm（极小字号不至于塌成 0 高度）
+ *
+ * 同一公式给 label-grid 展开器（卡片起点 + TextControl.height）+ pagination-engine
+ * （reserveBelowGrid / decideGridTarget 的 fits 判断）三处共用，保证布局与渲染一致。
+ */
+export function measureAppendixTitleHeight(style: TextStyle | undefined): number {
+  const fs = style?.fontSize ?? 12
+  const fsMm = fs * PT_TO_MM
+  const lh = style?.lineHeight ?? 1.16
+  const boldMul = style?.fontWeight === 'bold' ? 1.05 : 1
+  return Math.max(4, fsMm * lh * boldMul + 0.5)
 }
 
 /* ------------------------------- 展开主流程 ------------------------------- */
@@ -275,7 +309,9 @@ export function expandLabelGrids(
     // 不占 grid 内空间、不进 pageRanges(容器边框仍紧贴卡片首行,与原本一致)。
     const titleText = control.appendixTitle?.text?.trim() ?? ''
     const showTitle = !!titleText
-    const titleHeight = 6 // mm,与 TextControl 默认一致
+    // 高度按 style 真实渲染口径算(不写死),保证大字号/加粗时盒子够装得下文字
+    // 不与首行卡片重叠(见 measureAppendixTitleHeight 注释)
+    const titleHeight = showTitle ? measureAppendixTitleHeight(control.appendixTitle?.style) : 0
 
     let pageIndex = 0
     let originTop = gridTop
@@ -285,7 +321,12 @@ export function expandLabelGrids(
     const zoneTop = pageCapacity?.zoneTop ?? 0
     const usableBottom = pageCapacity?.usableBottom ?? bodyStep
     const usablePerPage = Math.max(1, usableBottom - zoneTop)
-    let capacity = rowCapacity(bodyStep - gridTop)
+    // ★ 起始页就把 titleHeight 算进 originTop:title 占据 zoneTop..zoneTop+titleHeight,
+    // 首行卡片起点必须 ≥ zoneTop+titleHeight,否则卡片覆盖 title(用户反馈:
+    // 「字体加粗后变高,导致附录图片墙与附录标题文本重叠」)。
+    // 若用户 gridTop > zoneTop+titleHeight(主动把 grid 下移避开 title)则尊重设计意图。
+    if (showTitle) originTop = Math.max(originTop, zoneTop + titleHeight)
+    let capacity = rowCapacity(usablePerPage - (originTop - zoneTop))
     // ★ 分页引擎下传的目标页位置 hint(仅 mode=appendix 生效):
     //   展开器完全信任 caller 算出的 hint.pageIndex + hint.originTop(由 caller
     //   decideGridTarget 已根据 pageBreak 三态预算:always/auto 优先新页放得下就跟,

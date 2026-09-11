@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest'
 import {
   bodyStepMm,
   expandLabelGrids,
+  measureAppendixTitleHeight,
   resolveGridGeometry,
   withRowCtx,
 } from '@op/core/layout-engine/label-grid'
@@ -610,6 +611,80 @@ describe('expandLabelGrids —— appendix 模式', () => {
     const res = expandLabelGrids([grid], ctx, 'mm', bodyStepMm(metrics), MAX_PAGES)
     const titles = res.components.filter((c) => c.id.includes('~title~'))
     expect(titles).toHaveLength(0)
+  })
+
+  it('measureAppendixTitleHeight 按 TextStyle 真实渲染口径算盒高(不写死 6mm)', () => {
+    // 默认字号 12pt × 1.16 lineHeight + 0.5 padding ≈ 4.4 + 0.5 ≈ 4.9mm
+    // (旧写死 6mm 略宽裕,新算法在无 style 时下限 4mm,可正常显示)
+    const def = measureAppendixTitleHeight(undefined)
+    expect(def).toBeGreaterThanOrEqual(4)
+    expect(def).toBeLessThanOrEqual(6)
+    // 18pt + bold:CSS line-height 渲染 ≈ 7.4mm,盒高必须 ≥ 7mm 才能装下
+    const bigBold = measureAppendixTitleHeight({ fontSize: 18, fontWeight: 'bold' })
+    expect(bigBold).toBeGreaterThanOrEqual(7)
+    // bold 比 normal 略高(5% ascender 抖动 buffer)
+    const bigNonBold = measureAppendixTitleHeight({ fontSize: 18 })
+    expect(bigBold).toBeGreaterThan(bigNonBold)
+    // lineHeight 放大时高度跟着放大
+    const loose = measureAppendixTitleHeight({ fontSize: 12, lineHeight: 2 })
+    expect(loose).toBeGreaterThan(measureAppendixTitleHeight({ fontSize: 12 }))
+    // 极小字号兜底 4mm(防止塌成 0 高度)
+    const tiny = measureAppendixTitleHeight({ fontSize: 4 })
+    expect(tiny).toBe(4)
+  })
+
+  it('appendix 模式 + 大字号加粗 title → title.bottom ≤ 首卡 top(无穿插)', () => {
+    // 用户反馈:18pt + bold 时,旧 titleHeight=6mm 装不下,CSS 文字向下溢出覆盖首行卡片
+    const grid = makeGrid({
+      left: 0,
+      top: 0,
+      dataSource: 'items',
+      mode: 'appendix',
+      appendixTitle: {
+        text: '销购合同',
+        style: { fontSize: 18, fontWeight: 'bold', fill: '#cc0000' },
+      },
+    })
+    const ctx: EvalContext = { data: { items } }
+    const res = expandLabelGrids([grid], ctx, 'mm', bodyStepMm(metrics), MAX_PAGES)
+    const titles = res.components.filter((c) => c.id.startsWith('grid1~title~'))
+    expect(titles.length).toBeGreaterThan(0)
+    for (const t of titles) {
+      // title 高度按 style 真实算,不再是写死 6
+      const expected = measureAppendixTitleHeight(grid.appendixTitle?.style)
+      expect(t.height).toBe(expected)
+      // title 起点 = pageIndex*bodyStep + zoneTop(=0);首卡起点 = 同上 + titleHeight
+      const firstCardTop = t.top + t.height
+      const cardsOnSamePage = res.components
+        .filter(
+          (c) =>
+            c.id.startsWith('grid1~') &&
+            !c.id.includes('~title~') &&
+            c.top >= t.top &&
+            c.top < t.top + bodyStepMm(metrics),
+        )
+        .map((c) => c.top)
+      if (cardsOnSamePage.length > 0) {
+        expect(Math.min(...cardsOnSamePage)).toBeGreaterThanOrEqual(firstCardTop)
+      }
+    }
+  })
+
+  it('appendix 模式 + 默认字号 title → title 高度 ≥ 4mm 兜底(不塌)', () => {
+    // 不传 style 时,展开器用默认公式算(不再写死 6,但保证可见高度)
+    const grid = makeGrid({
+      left: 0,
+      top: 0,
+      dataSource: 'items',
+      mode: 'appendix',
+      appendixTitle: { text: '附录' },
+    })
+    const ctx: EvalContext = { data: { items } }
+    const res = expandLabelGrids([grid], ctx, 'mm', bodyStepMm(metrics), MAX_PAGES)
+    const title = res.components.find((c) => c.id.startsWith('grid1~title~')) as any
+    expect(title).toBeDefined()
+    expect(title.height).toBeGreaterThanOrEqual(4)
+    expect(title.height).toBe(measureAppendixTitleHeight(undefined))
   })
 
   it('appendix 模式 + 7 条数据 + 行满换页 → auto 语义下 3 行全部塞得下,留在 page 0 (forceNewPage=false)', () => {
