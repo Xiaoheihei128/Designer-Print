@@ -18,6 +18,7 @@ import { useFieldCatalogStore } from '@op/design/stores/fieldCatalog'
 import { usePreviewDataStore } from '@op/design/stores/previewData'
 import {
   deriveRowScopedFields,
+  deriveRowScopedGroupLabel,
   type RowScopedField,
 } from '@op/design/utils/row-binding-fields'
 
