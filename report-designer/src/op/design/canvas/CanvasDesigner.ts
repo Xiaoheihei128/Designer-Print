@@ -1082,10 +1082,25 @@ export class CanvasDesigner {
     // 用户决策把 LabelGridProps 改到底部 NCollapse 折叠面板，由右键打开。
     const labelGridMouseDownHandler = (opt: TPointerEventInfo) => {
       const target = opt.target
-      if (!(target instanceof PrintLabelGrid)) return
+      // ★ 关键修复：labelgrid 的首卡子控件(图/编号/标题)作为独立 Fabric 对象添加在画布上,
+      //   右键命中子控件时 opt.target 不是 PrintLabelGrid 本身,
+      //   顺着 childOf 找回宿主 labelgrid —— 否则在 appendix 图片墙里
+      //   大量点击区域被子控件覆盖,会"右键没反应"。
+      let grid: PrintLabelGrid | undefined
+      if (target instanceof PrintLabelGrid) {
+        grid = target
+      } else {
+        const t = target as unknown as { childOf?: string } | null
+        const hostId = t?.childOf
+        if (hostId) {
+          const hostObj = this.getControlById(hostId)
+          if (hostObj instanceof PrintLabelGrid) grid = hostObj
+        }
+      }
+      if (!grid) return
       const button = opt.e && 'button' in opt.e ? opt.e.button : 0
       if (button === 2) {
-        this.events.onLabelGridEdit?.(target.controlId)
+        this.events.onLabelGridEdit?.(grid.controlId)
       }
     }
     c.on('mouse:down', labelGridMouseDownHandler)
