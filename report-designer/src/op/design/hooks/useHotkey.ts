@@ -60,8 +60,12 @@ export function useHotkey(): void {
       }
       return
     }
-    // Escape = 退出平移模式（优先）/ 取消选中
+    // Escape = 关闭标签网格快速面板（最优先）/ 退出平移模式 / 取消选中
     if (e.key === 'Escape') {
+      if (uiStore.labelGridQuickPanelOpen) {
+        uiStore.closeLabelGridQuickPanel()
+        return
+      }
       if (uiStore.panMode) {
         uiStore.setPanMode(false)
         return

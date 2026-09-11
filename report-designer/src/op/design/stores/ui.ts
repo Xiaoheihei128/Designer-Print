@@ -93,6 +93,34 @@ export const useUiStore = defineStore('ui', () => {
     rightPanelMode.value = 'normal'
   }
 
+  /* --------------------- 标签网格属性快速面板（底部弹出） --------------------- */
+  /**
+   * 与 rightPanelMode 独立轨道：标签网格的属性不放在右栏，而是画布下方弹出式面板。
+   * 触发：右键 labelgrid 控件（CanvasDesigner mouse:down button=2）→ open。
+   * targetId 显式记录，切换选中控件不会关闭面板（数据持久归属最初右键的 grid）。
+   * 控件被删除或 Esc → close。
+   */
+  const labelGridQuickPanelOpen = ref(false)
+  const labelGridQuickPanelTargetId = ref<string | null>(null)
+  function openLabelGridQuickPanel(controlId: string): void {
+    labelGridQuickPanelOpen.value = true
+    labelGridQuickPanelTargetId.value = controlId
+  }
+  function closeLabelGridQuickPanel(): void {
+    labelGridQuickPanelOpen.value = false
+    labelGridQuickPanelTargetId.value = null
+  }
+  /** 控件被删除 / id 已不存在时由面板 watch 调用，保持 UI 状态与 store 一致 */
+  function syncLabelGridQuickPanelTarget(currentIds: ReadonlySet<string>): void {
+    if (
+      labelGridQuickPanelOpen.value &&
+      labelGridQuickPanelTargetId.value &&
+      !currentIds.has(labelGridQuickPanelTargetId.value)
+    ) {
+      closeLabelGridQuickPanel()
+    }
+  }
+
   /** 实际生效主题（system 下解析出的 light/dark；svip 直通不解析） */
   const effectiveTheme = computed<EffectiveTheme>(() => {
     if (themePreference.value === 'svip') return 'svip'
@@ -195,5 +223,11 @@ export const useUiStore = defineStore('ui', () => {
     tableQuickPanelActiveTab,
     openTableQuickPanel,
     closeTableQuickPanel,
+    // 标签网格属性快速面板
+    labelGridQuickPanelOpen,
+    labelGridQuickPanelTargetId,
+    openLabelGridQuickPanel,
+    closeLabelGridQuickPanel,
+    syncLabelGridQuickPanelTarget,
   }
 })

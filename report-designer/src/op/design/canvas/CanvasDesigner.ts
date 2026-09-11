@@ -12,7 +12,7 @@ import type { AnyControl, LabelGridControl, ZoneControl } from '@op/types/contro
 import type { PageSetup, WatermarkConfig } from '@op/types/template'
 import { MM_TO_PX, ZOOM_MAX, ZOOM_MIN } from '@op/utils/constants'
 import { toMm } from '@op/core/units'
-import { createFabricControl, isPrintObject, PrintText, PrintZone, type IPrintObject } from './controls'
+import { createFabricControl, isPrintObject, PrintLabelGrid, PrintText, PrintZone, type IPrintObject } from './controls'
 import type { PrintTextEditedPayload } from './controls/PrintText'
 import { SmartGuides } from './guides/SmartGuides'
 import { PrintTable } from './controls/PrintTable'
@@ -62,6 +62,12 @@ export interface CanvasDesignerEvents {
    * editing:exited 触发时 raw 写不回 store，segments 没变 → 右侧 watch 不触发。
    */
   onCanvasTextEdited?: (info: PrintTextEditedPayload) => void
+  /**
+   * 右键（button=2）命中标签网格（labelgrid）：触发底部弹出属性快速面板。
+   * shell 层订阅该事件后调 uiStore.openLabelGridQuickPanel(id)。
+   * 右键表格走 onCellEdit，二者互斥；左键走默认选中路径。
+   */
+  onLabelGridEdit?: (controlId: string) => void
 }
 
 type PrintFabricObject = FabricObject & IPrintObject
@@ -1068,6 +1074,21 @@ export class CanvasDesigner {
     c.on('object:modified', bump)
     c.on('object:added', bump)
     c.on('object:removed', bump)
+
+    // 标签网格交互：
+    //   - 左键(button=0)：走默认 Fabric 选中路径（无需特殊处理）
+    //   - 右键(button=2)：触发底部属性快速面板（与表格 CellToolbar 平行通道）
+    // 背景：标签网格属性在右栏扁平 prop 不便查阅（字段多、分类杂），
+    // 用户决策把 LabelGridProps 改到底部 NCollapse 折叠面板，由右键打开。
+    const labelGridMouseDownHandler = (opt: TPointerEventInfo) => {
+      const target = opt.target
+      if (!(target instanceof PrintLabelGrid)) return
+      const button = opt.e && 'button' in opt.e ? opt.e.button : 0
+      if (button === 2) {
+        this.events.onLabelGridEdit?.(target.controlId)
+      }
+    }
+    c.on('mouse:down', labelGridMouseDownHandler)
 
     // 表格单元格交互（替代原 mouse:dblclick）：
     //   - 左键(button=0)：进入"待绑态"（虚线框 + 提示气泡，等用户点字段）

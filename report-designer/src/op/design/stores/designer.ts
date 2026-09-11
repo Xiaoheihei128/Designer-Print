@@ -27,6 +27,7 @@ import { assertTemplate } from '@op/core/spec/validator'
 import { genId } from '@op/utils/id'
 import { useHistoryStore } from './history'
 import { type ImportColumn } from '@op/design/utils/data-import'
+import { useUiStore } from './ui'
 import { seedSummaryTail, syncTableHeight, patchCell, ensureCells } from '@op/core/layout-engine/table-cells'
 
 /** 水印默认配置（开启后居中单个、45°、浅灰） */
@@ -347,6 +348,11 @@ export const useDesignerStore = defineStore('designer', () => {
           updateControlSilent(info.controlId, info.control as AnyControl)
         }
         setPendingBind(info.controlId, info.row, info.col)
+      },
+      onLabelGridEdit: (controlId) => {
+        // 右键标签网格 → 打开底部属性快速面板。targetId 显式记录,
+        // 切换选中控件不关闭(数据仍归属最初右键的 grid); 控件被删/ Esc 由面板 watch + useHotkey 触发 close。
+        useUiStore().openLabelGridQuickPanel(controlId)
       },
       onCanvasTextEdited: (info) => {
         // ★ 画布文本编辑退出反向同步（修修复：attachCanvasTextListener 此前零调用方）

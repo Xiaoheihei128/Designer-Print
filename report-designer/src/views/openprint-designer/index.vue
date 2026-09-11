@@ -25,6 +25,7 @@ import LeftPanel from '@op/design/panels/LeftPanel.vue'
 import RightPanel from '@op/design/panels/RightPanel.vue'
 import CanvasStage from '@op/design/canvas/CanvasStage.vue'
 import SignaturePadModal from '@op/design/panels/SignaturePadModal.vue'
+import LabelGridQuickPanel from '@op/design/panels/quick/LabelGridQuickPanel.vue'
 import { useUiStore } from '@op/design/stores/ui'
 import { darkThemeOverrides, lightThemeOverrides, svipThemeOverrides } from '@op/theme/naive-theme'
 import { getBackendConfig } from '@op/config/backend'
@@ -146,6 +147,10 @@ const themeOverrides = computed(() => {
                 <RightPanel />
               </aside>
             </div>
+
+            <!-- 标签网格属性快速面板：底部弹出式（右键画布 labelgrid 触发）。
+                 占据底部 320px 自适应收缩 main 区高度；左/右栏仍保留,常驻显示 CommonProps。 -->
+            <LabelGridQuickPanel v-if="uiStore.labelGridQuickPanelOpen" />
 
             <!-- 弹出式手写签名画板 -->
             <SignaturePadModal />

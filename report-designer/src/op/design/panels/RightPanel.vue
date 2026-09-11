@@ -28,7 +28,6 @@ import RichTextProps from '@op/design/panels/props/RichTextProps.vue'
 import ChartProps from '@op/design/panels/props/ChartProps.vue'
 import MathProps from '@op/design/panels/props/MathProps.vue'
 import SignatureProps from '@op/design/panels/props/SignatureProps.vue'
-import LabelGridProps from '@op/design/panels/props/LabelGridProps.vue'
 import TableQuickPanel from '@op/design/panels/quick/TableQuickPanel.vue'
 import { useUiStore } from '@op/design/stores/ui'
 
@@ -83,8 +82,6 @@ const propsComponent = computed<Component | null>(() => {
       return MathProps
     case 'signature':
       return SignatureProps
-    case 'labelgrid':
-      return LabelGridProps
     default:
       return null
   }
