@@ -14,7 +14,7 @@
  * 四处，否则保存/加载会静默丢字段（历史坑：PrintTable.data）。
  */
 import { FabricImage } from 'fabric'
-import type { AnyControl, LabelGridControl } from '@op/types/control'
+import type { AnyControl, LabelGridControl, TextStyle } from '@op/types/control'
 import { mm, readBaseGeometry, type IPrintObject } from './PrintObject'
 import { ptToPx } from '@op/core/units'
 import { resolveGridGeometry, visibleCardRows } from '@op/core/layout-engine/label-grid'
@@ -62,7 +62,8 @@ export class PrintLabelGrid extends FabricImage implements IPrintObject {
   /* ★ 渲染期可配置字段（panel 改动后必须经 fabric → toControl 回流,否则 buildTemplate 会被覆盖丢字段） */
   maxItems?: number
   titleRepeat?: boolean
-  appendixTitle?: { text?: string; style?: unknown }
+  // style 字段复用 TextStyle,展开器直接把 appendixTitle.style 套到 TextControl 上
+  appendixTitle?: { text?: string; style?: TextStyle }
 
   constructor(control: LabelGridControl) {
     super(document.createElement('canvas'), {

@@ -973,7 +973,8 @@ export const useDesignerStore = defineStore('designer', () => {
     }
     const synced = designer.value?.serialize()
     let body: AnyControl[]
-    let zones: ZoneControl[]
+    // 局部变量名避开外层 ref `zones`,否则遮蔽后 zones.value 无法被 TS 推断
+    let zonesOut: ZoneControl[]
     if (synced) {
       body = synced.body.map((c) => {
         const backup = configBackup.get(c.id)
@@ -983,13 +984,12 @@ export const useDesignerStore = defineStore('designer', () => {
         }
         return c
       })
-      zones = synced.zones
+      zonesOut = synced.zones
     } else {
       body = controls.value
-      zones = zones.value
+      zonesOut = zones.value
     }
-    // zones 类型受 TS 类型推断影响,显式标注
-    const zoneArr: ZoneControl[] = zones
+    const zoneArr: ZoneControl[] = zonesOut
     const sections: TemplateData<AnyControl>['document']['sections'] = []
     const header = zoneArr.find((z) => z.zone === 'header')
     const footer = zoneArr.find((z) => z.zone === 'footer')
@@ -1533,7 +1533,7 @@ export function createDefaultControl(
             childOf: id,
             contentType: 'expression',
             expression: '{{rowIndex + 1}}号',
-            style: { fontSize: 9, bold: true },
+            style: { fontSize: 9, fontWeight: 'bold' },
           },
           {
             id: titleId,

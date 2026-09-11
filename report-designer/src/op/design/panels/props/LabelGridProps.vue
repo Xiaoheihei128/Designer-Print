@@ -23,6 +23,7 @@ import {
   NSwitch,
   NRadioGroup,
   NRadioButton,
+  NColorPicker,
 } from 'naive-ui'
 import type { LabelGridControl } from '@op/types/control'
 import { useDesignerStore } from '@op/design/stores/designer'
@@ -138,6 +139,37 @@ function removeChild(id: string): void {
 /** 清空首卡内容 */
 function clearChildren(): void {
   if (control.value) store.clearLabelGridChildren(control.value.id)
+}
+
+/* -------------------------------- 标题文本排版 --------------------------------
+ * style 字段复用 TextStyle(fontSize / fill / fontWeight / textAlign 等),
+ * 展开器已经把 appendixTitle.style 套到物化的 TextControl 上(label-grid.ts:370/395),
+ * 这里只负责面板输入:patch 单字段,保持附录结构其它字段不变。
+ */
+
+/** 改 title 文本(text 字段):保留原 style,仅替换 text */
+function patchTitleText(text: string): void {
+  const c = control.value
+  if (!c) return
+  patch({
+    appendixTitle: {
+      text,
+      style: c.appendixTitle?.style,
+    },
+  })
+}
+
+/** 改 title 排版(单 style 字段):保留 text,合并新 style */
+function patchTitleStyle(p: Record<string, unknown>): void {
+  const c = control.value
+  if (!c) return
+  const cur = c.appendixTitle
+  patch({
+    appendixTitle: {
+      text: cur?.text ?? '',
+      style: { ...cur?.style, ...p },
+    },
+  })
 }
 
 /* -------------------------------- 模式化包装 -------------------------------- */
@@ -388,13 +420,61 @@ function setMode(next: 'standard' | 'appendix'): void {
           placeholder="留空则不渲染。例如:附录:样本照片"
           :autosize="{ minRows: 2, maxRows: 4 }"
           style="flex: 1; margin-left: 8px"
-          @update:value="(v: string) => {
-            const cur = control.appendixTitle
-            patch({
-              appendixTitle: { text: v, style: cur?.style },
-            })
-          }"
+          @update:value="(v: string) => patchTitleText(v)"
         />
+      </div>
+
+      <!-- ★ 标题文本排版:字号 / 加粗 / 颜色 / 对齐
+           字段名复用 TextStyle,展开器直接把 appendixTitle.style 套到 TextControl 上
+           (label-grid.ts:370/395),面板输入即所见即所得。 -->
+      <div class="grid grid-cols-2 gap-2" style="margin-top: 4px">
+        <div class="props-row">
+          <span class="props-label">字号(pt)</span>
+          <NInputNumber
+            size="small"
+            button-placement="both"
+            :value="control.appendixTitle?.style?.fontSize ?? 12"
+            :min="6"
+            :max="120"
+            :step="1"
+            style="width: 96px"
+            @update:value="patchTitleStyle({ fontSize: $event ?? 12 })"
+          />
+        </div>
+        <div class="props-row">
+          <span class="props-label">加粗</span>
+          <NSwitch
+            size="small"
+            :value="(control.appendixTitle?.style?.fontWeight ?? 'normal') === 'bold'"
+            @update:value="(v: boolean) =>
+              patchTitleStyle({ fontWeight: v ? 'bold' : 'normal' })"
+          />
+        </div>
+        <div class="props-row">
+          <span class="props-label">颜色</span>
+          <NColorPicker
+            size="small"
+            :modes="['hex']"
+            :show-alpha="false"
+            style="width: 96px"
+            :value="control.appendixTitle?.style?.fill ?? '#000000'"
+            @update:value="patchTitleStyle({ fill: $event })"
+          />
+        </div>
+        <div class="props-row">
+          <span class="props-label">对齐</span>
+          <NSelect
+            size="small"
+            style="width: 96px"
+            :value="control.appendixTitle?.style?.textAlign ?? 'left'"
+            :options="[
+              { label: '左', value: 'left' },
+              { label: '居中', value: 'center' },
+              { label: '右', value: 'right' },
+            ]"
+            @update:value="patchTitleStyle({ textAlign: $event })"
+          />
+        </div>
       </div>
 
       <div class="props-row">

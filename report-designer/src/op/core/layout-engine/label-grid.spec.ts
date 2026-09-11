@@ -562,6 +562,56 @@ describe('expandLabelGrids —— appendix 模式', () => {
     expect(appendixWarnings).toHaveLength(0)
   })
 
+  it('appendix 模式 + appendixTitle.style → 透传到物化的 TextControl(字号/加粗/颜色/对齐)', () => {
+    // 面板输入项:字号(fontSize) + 加粗(fontWeight) + 颜色(fill) + 对齐(textAlign)
+    // 展开器把 control.appendixTitle.style 套到每页贴的 title TextControl 上,
+    // 保证面板所见即所得(label-grid.ts:370/395)。
+    const grid = makeGrid({
+      left: 0,
+      top: 0,
+      dataSource: 'items',
+      mode: 'appendix',
+      appendixTitle: {
+        text: '附录:样本照片',
+        style: {
+          fontSize: 18,
+          fontWeight: 'bold',
+          fill: '#cc0000',
+          textAlign: 'center',
+        },
+      },
+    })
+    const ctx: EvalContext = { data: { items } }
+    const res = expandLabelGrids([grid], ctx, 'mm', bodyStepMm(metrics), MAX_PAGES)
+    // 找到物化的 title(按 id 后缀 ~title~N)
+    const titles = res.components.filter((c) => c.id.startsWith('grid1~title~'))
+    expect(titles.length).toBeGreaterThan(0)
+    for (const t of titles) {
+      expect(t.type).toBe('text')
+      expect(t.value).toBe('附录:样本照片')
+      expect(t.style).toEqual({
+        fontSize: 18,
+        fontWeight: 'bold',
+        fill: '#cc0000',
+        textAlign: 'center',
+      })
+    }
+  })
+
+  it('appendixTitle.text 为空时不生成 title 控件(无论 style 是否有值)', () => {
+    const grid = makeGrid({
+      left: 0,
+      top: 0,
+      dataSource: 'items',
+      mode: 'appendix',
+      appendixTitle: { text: '', style: { fontSize: 24 } },
+    })
+    const ctx: EvalContext = { data: { items } }
+    const res = expandLabelGrids([grid], ctx, 'mm', bodyStepMm(metrics), MAX_PAGES)
+    const titles = res.components.filter((c) => c.id.includes('~title~'))
+    expect(titles).toHaveLength(0)
+  })
+
   it('appendix 模式 + 7 条数据 + 行满换页 → auto 语义下 3 行全部塞得下,留在 page 0 (forceNewPage=false)', () => {
     // bodyStep=100, gridTop=0,可用 100mm,7 数据/3 列 = 3 行 × 33mm = 99mm → 放得下 → 紧跟
     const grid = makeGrid({
