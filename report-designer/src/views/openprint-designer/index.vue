@@ -134,9 +134,11 @@ const themeOverrides = computed(() => {
                 <LeftPanel />
               </aside>
 
-              <!-- 中央画布 -->
-              <main class="min-w-0 flex-1 bg-brand-bg">
+              <!-- 中央画布（relative 容器：标签网格快速面板作为底部居中浮窗
+                   锚定在 main 区域内，固定宽度不横跨左右栏） -->
+              <main class="relative min-w-0 flex-1 bg-brand-bg">
                 <CanvasStage />
+                <LabelGridQuickPanel v-if="uiStore.labelGridQuickPanelOpen" />
               </main>
 
               <!-- 右侧属性面板 -->
@@ -147,10 +149,6 @@ const themeOverrides = computed(() => {
                 <RightPanel />
               </aside>
             </div>
-
-            <!-- 标签网格属性快速面板：底部弹出式（右键画布 labelgrid 触发）。
-                 占据底部 320px 自适应收缩 main 区高度；左/右栏仍保留,常驻显示 CommonProps。 -->
-            <LabelGridQuickPanel v-if="uiStore.labelGridQuickPanelOpen" />
 
             <!-- 弹出式手写签名画板 -->
             <SignaturePadModal />
