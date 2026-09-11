@@ -55,9 +55,14 @@ export class PrintLabelGrid extends FabricImage implements IPrintObject {
   /* 模式化包装（mode/forceNewPage/cornerRadius/cardBorder/appendixHeader）—— 见 LabelGridControl */
   mode?: 'standard' | 'appendix'
   forceNewPage?: boolean
+  pageBreak?: 'auto' | 'always' | 'never'
   cornerRadius?: number
   cardBorder?: boolean
   appendixHeader?: string
+  /* ★ 渲染期可配置字段（panel 改动后必须经 fabric → toControl 回流,否则 buildTemplate 会被覆盖丢字段） */
+  maxItems?: number
+  titleRepeat?: boolean
+  appendixTitle?: { text?: string; style?: unknown }
 
   constructor(control: LabelGridControl) {
     super(document.createElement('canvas'), {
@@ -79,9 +84,13 @@ export class PrintLabelGrid extends FabricImage implements IPrintObject {
     this.children = control.children ?? []
     this.mode = control.mode
     this.forceNewPage = control.forceNewPage
+    this.pageBreak = control.pageBreak
     this.cornerRadius = control.cornerRadius
     this.cardBorder = control.cardBorder
     this.appendixHeader = control.appendixHeader
+    this.maxItems = control.maxItems
+    this.titleRepeat = control.titleRepeat
+    this.appendixTitle = control.appendixTitle
     this.printable = control.printable ?? true
     this.visibleIf = control.visibleIf
     this.controlName = control.name
@@ -311,9 +320,13 @@ export class PrintLabelGrid extends FabricImage implements IPrintObject {
       children: this.children,
       mode: this.mode,
       forceNewPage: this.forceNewPage,
+      pageBreak: this.pageBreak,
       cornerRadius: this.cornerRadius,
       cardBorder: this.cardBorder,
       appendixHeader: this.appendixHeader,
+      maxItems: this.maxItems,
+      titleRepeat: this.titleRepeat,
+      appendixTitle: this.appendixTitle,
       printable: this.printable,
       visibleIf: this.visibleIf,
       name: this.controlName,
@@ -332,9 +345,13 @@ export class PrintLabelGrid extends FabricImage implements IPrintObject {
     this.children = control.children ?? []
     this.mode = control.mode
     this.forceNewPage = control.forceNewPage
+    this.pageBreak = control.pageBreak
     this.cornerRadius = control.cornerRadius
     this.cardBorder = control.cardBorder
     this.appendixHeader = control.appendixHeader
+    this.maxItems = control.maxItems
+    this.titleRepeat = control.titleRepeat
+    this.appendixTitle = control.appendixTitle
     this.printable = control.printable ?? true
     this.visibleIf = control.visibleIf
     this.controlName = control.name
