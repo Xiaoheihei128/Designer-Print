@@ -22,6 +22,13 @@ export interface FontFamilyDef {
   family: string
   /** 展示名（属性面板下拉用） */
   label: string
+  /**
+   * 别名（同一字体可被多个 font-family 引用，常见于中英别名）。
+   * builtinFontFaceCss 会为每个别名额外输出一份 @font-face，
+   * 让 css-generator / 旧模板里的英文引用（如 "Source Han Sans CN"）也能命中内置字体。
+   * 不传则只用 family 名注册。
+   */
+  aliases?: string[]
   /** 优先级（属性面板排序） */
   order: number
   faces: FontFaceEntry[]
@@ -32,18 +39,26 @@ export const FONT_CATALOG: FontFamilyDef[] = [
   {
     family: '思源黑体',
     label: '思源黑体',
+    // 别名覆盖三处引用：
+    //   - css-generator.TEXT_DEFAULT_FONT_FAMILY = '"Source Han Sans CN", ...'
+    //   - measure.ts = '"Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Source Han Sans SC", ...'
+    //   - 旧模板直接写 "Source Han Sans CN"/"Source Han Sans SC"
+    // 这两个英文名其实是同一字体的不同发行版命名，CSS 引用都被同一 woff2 服务。
+    aliases: ['Source Han Sans CN', 'Source Han Sans SC'],
     order: 1,
     faces: [{ src: '/fonts/SourceHanSansCN-Normal.woff2', weight: 400 }],
   },
   {
     family: '思源宋体',
     label: '思源宋体',
+    aliases: ['Source Han Serif CN'],
     order: 2,
     faces: [{ src: '/fonts/SourceHanSerifCN-Regular.ttf', weight: 400 }],
   },
   {
     family: '寒蝉正楷体',
     label: '寒蝉正楷体',
+    // 寒蝉无标准英文别名,留空
     order: 3,
     faces: [{ src: '/fonts/ChillKai.woff2', weight: 400 }],
   },

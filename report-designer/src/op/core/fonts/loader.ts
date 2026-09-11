@@ -53,18 +53,30 @@ export async function loadBuiltinFonts(defs: FontFamilyDef[] = FONT_CATALOG): Pr
   return loaded
 }
 
-/** 生成内置字体的 @font-face CSS 块（baseUrl 用于拼字体绝对/相对路径） */
+/** 生成内置字体的 @font-face CSS 块（baseUrl 用于拼字体绝对/相对路径）
+ *
+ * ★ 每个 face 输出 N 份 @font-face —— family 名 + 所有别名(aliases)。
+ * 原因：css-generator.TEXT_DEFAULT_FONT_FAMILY 写的是英文 "Source Han Sans CN"，
+ * 而 catalog family 是中文 "思源黑体"，两者不匹配时 @font-face 不生效，
+ * 浏览器回落系统字体 —— 沙箱 iframe 里 print() 又取不到系统字体，PDF 退化到
+ * Type3 空字形，整个 PDF 变成空白页（用户反馈的核心 bug）。别名让英文引用也命中内置 woff2。
+ */
 export function builtinFontFaceCss(baseUrl: string): string {
   return FONT_CATALOG.map((def) =>
     def.faces
-      .map((face) => {
+      .flatMap((face) => {
         const src = face.src.startsWith('/') ? `${baseUrl.replace(/\/+$/, '')}${face.src}` : face.src
         const ext = src.split('?')[0]?.split('.').pop()?.toLowerCase()
         const format = ext === 'ttf' ? 'truetype' : ext === 'otf' ? 'opentype' : ext === 'woff' ? 'woff' : 'woff2'
-        return (
-          `@font-face{font-family:"${def.family}";` +
-          `src:url(${src}) format("${format}");` +
-          `font-weight:${face.weight ?? 'normal'};font-style:${face.style ?? 'normal'};}`
+        const weight = face.weight ?? 'normal'
+        const style = face.style ?? 'normal'
+        // 同一字体可被多个 font-family 名引用,每个名各发一份 @font-face
+        const names = [def.family, ...(def.aliases ?? [])]
+        return names.map(
+          (name) =>
+            `@font-face{font-family:"${name}";` +
+            `src:url(${src}) format("${format}");` +
+            `font-weight:${weight};font-style:${style};}`,
         )
       })
       .join(''),

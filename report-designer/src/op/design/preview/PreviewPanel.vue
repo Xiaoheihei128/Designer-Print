@@ -218,7 +218,28 @@ function injectFonts(): void {
 
 /* ------------------------------- 打印 ------------------------------- */
 
-function doPrint(): void {
+/**
+ * 等待 iframe 内字体加载完（最多 timeoutMs），避免打印时字体未就绪 →
+ * 浏览器回落系统字体 → 沙箱 iframe 内 print() 取不到系统字体 → Type3 空字形 → 空白 PDF。
+ *
+ * 这里沿用 user-data 路径：catalog @font-face 是同步注入的，injectFonts 后 document.fonts
+ * 会开始 fetch；fontface.ready Promise 触发即可，N ms 内一定 ready，超时就放弃（不阻塞打印）。
+ */
+async function awaitIframeFontsReady(timeoutMs = 3000): Promise<void> {
+  const doc = iframeRef.value?.contentDocument
+  const fonts = doc?.fonts
+  if (!fonts || typeof fonts.ready?.then !== 'function') return
+  try {
+    await Promise.race([
+      fonts.ready,
+      new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
+    ])
+  } catch {
+    /* 字体加载失败不阻塞打印流程 */
+  }
+}
+
+async function doPrint(): Promise<void> {
   const win = iframeRef.value?.contentWindow
   if (!win) {
     message.warning('预览尚未就绪')
@@ -227,6 +248,8 @@ function doPrint(): void {
   // 打印时强制 1:1，否则浏览器会把预览缩放一起打进去
   const doc = iframeRef.value?.contentDocument
   doc?.documentElement.style.setProperty('--op-scale', '1')
+  // ★ 等字体就绪再 print（见 awaitIframeFontsReady 注释）
+  await awaitIframeFontsReady()
   win.focus()
   win.print()
   applyScale()
