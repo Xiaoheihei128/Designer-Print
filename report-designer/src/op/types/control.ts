@@ -687,6 +687,23 @@ export interface LabelGridControl extends ControlBase {
    * 不会重复插入。
    */
   appendixHeader?: string
+  /**
+   * 标签网格最多渲染的卡片数(只对配置 dataSource 且 dataArr.length &gt; maxItems 时生效)。
+   * 溢出时发 LABEL_GRID_TRUNCATED 警告。undefined / 0 / 负数 = 无限制。
+   */
+  maxItems?: number
+  /**
+   * appendix 模式:每页在 grid 起点上方贴一个 TextControl 的内容(类似页眉,
+   * 优先级低于页眉)。text 为空 → 不渲染。
+   */
+  appendixTitle?: {
+    text?: string
+    style?: TextStyle
+  }
+  /**
+   * appendixTitle 是否每页重复显示。默认 true(每页都贴);false = 仅 grid 起始页贴一次。
+   */
+  titleRepeat?: boolean
 }
 
 /* --------------------------------- 联合 ---------------------------------- */

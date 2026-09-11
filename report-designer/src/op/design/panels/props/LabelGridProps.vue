@@ -15,6 +15,7 @@
 import { computed } from 'vue'
 import {
   NButton,
+  NInput,
   NInputNumber,
   NSelect,
   NText,
@@ -144,57 +145,12 @@ function clearChildren(): void {
 /** 当前模式(老模板 mode 缺失视为 standard) */
 const currentMode = computed<'standard' | 'appendix'>(() => control.value?.mode ?? 'standard')
 
-/** appendix 模式下「图片源字段」下拉选项 = grid.dataSource 对应明细表的 image 类型字段 */
-const photoFieldOptions = computed(() => {
-  if (!control.value?.dataSource) return []
-  const tables = ds.activeSource?.tables ?? []
-  const arrayTable = tables.find(
-    (t) => t.isArray && (t.pathPrefix ?? '').replace(/\[\]\.?,?$/, '') === control.value!.dataSource,
-  )
-  if (!arrayTable) return []
-  return ds.flatFields
-    .filter((f) => f.tableId === arrayTable.id && f.type === 'image')
-    .map((f) => {
-      const leaf = f.path.slice(arrayTable.pathPrefix!.replace(/\[\]\.?,?$/, '').length + 2).replace(/^\./, '')
-      return { label: `${f.label}（row.${leaf}）`, value: leaf }
-    })
-})
-
-/** appendix 模式下「标题字段」下拉选项 = 同上,文本类型字段 */
-const titleFieldOptions = computed(() => {
-  if (!control.value?.dataSource) return []
-  const tables = ds.activeSource?.tables ?? []
-  const arrayTable = tables.find(
-    (t) => t.isArray && (t.pathPrefix ?? '').replace(/\[\]\.?,?$/, '') === control.value!.dataSource,
-  )
-  if (!arrayTable) return []
-  return ds.flatFields
-    .filter((f) => f.tableId === arrayTable.id && (f.type === 'string' || f.type === 'number'))
-    .map((f) => {
-      const leaf = f.path.slice(arrayTable.pathPrefix!.replace(/\[\]\.?,?$/, '').length + 2).replace(/^\./, '')
-      return { label: `${f.label}（row.${leaf}）`, value: leaf }
-    })
-})
-
-/** 模式切换:从 standard → appendix 替换 children 为三件套;反向只改 mode 字段 */
+/** 模式切换:仅翻 mode 字段,不再替换 children(用户完全自由编辑) */
 function setMode(next: 'standard' | 'appendix'): void {
   const c = control.value
   if (!c) return
   if (c.mode === next || (c.mode === undefined && next === 'standard')) return
-  if (next === 'appendix') {
-    // 走 createDefaultControl 拿三件套(单源),只取 children + photoField/titleField
-    const fresh = createDefaultControl('labelgrid', { leftMm: 0, topMm: 0 }, { mode: 'appendix' })
-    if (fresh && fresh.type === 'labelgrid') {
-      store.updateControl(c.id, {
-        mode: 'appendix',
-        dataSource: c.dataSource ?? (fresh as LabelGridControl).dataSource,
-        children: (fresh as LabelGridControl).children,
-      })
-    }
-  } else {
-    // appendix → standard:只清 mode 字段,保留 children(用户后续可自由编辑)
-    store.updateControl(c.id, { mode: 'standard' })
-  }
+  store.updateControl(c.id, { mode: next })
 }
 </script>
 
@@ -216,8 +172,9 @@ function setMode(next: 'standard' | 'appendix'): void {
     </div>
     <div v-if="currentMode === 'appendix'" class="props-row">
       <NText depth="3" style="font-size: 12px; line-height: 1.5">
-        附录模式：首卡 children 自动锁死为「图片 + 编号 + 标题」三件套,卡片数跟随数据源。
-        切回标准会保留现有 children。
+        附录模式：首卡 children 完全可编辑（增删清空皆可,可在子控件上自选
+        <code>{{ BIND_ROW_EXAMPLE }}</code> / <code>{{ BIND_ROW_INDEX_EXAMPLE }}</code>
+        / 图片源字段）。切回标准会保留现有 children。
       </NText>
     </div>
 
@@ -368,9 +325,9 @@ function setMode(next: 'standard' | 'appendix'): void {
       </NText>
     </div>
 
-    <!-- ★ standard 模式:首卡元素可编辑 -->
+    <!-- ★ 首卡元素(standard + appendix 共用,均可增删清空) -->
     <div
-      v-if="currentMode === 'standard' && control.children.length"
+      v-if="control.children.length"
       class="props-row"
       style="flex-direction: column; align-items: stretch; gap: 4px; margin-top: 8px"
     >
@@ -390,59 +347,52 @@ function setMode(next: 'standard' | 'appendix'): void {
       </NButton>
     </div>
 
-    <!-- ★ appendix 模式:首卡元素锁死,展示三件套预览 + 4 个附录专用开关 -->
+    <!-- ★ appendix 模式专属:最大卡片数 + 每页标题 + 标题文本 + 分页/边框开关 -->
     <div
       v-if="currentMode === 'appendix'"
       class="props-row"
       style="flex-direction: column; align-items: stretch; gap: 6px; margin-top: 8px"
     >
-      <div class="props-label">
-        首卡元素（已锁定 {{ control.children.length }} 件）· 切回「标准」可解锁
-      </div>
-      <div
-        v-for="ch in control.children"
-        :key="ch.id"
-        class="child-item"
-      >
-        <span class="truncate text-12px" style="flex: 1">{{ childName(ch) }}</span>
-        <NText depth="3" style="font-size: 11px">🔒</NText>
+      <div class="props-row" style="margin-top: 6px">
+        <span class="props-label">最大卡片数</span>
+        <NInputNumber
+          size="small"
+          button-placement="both"
+          :value="control.maxItems ?? null"
+          :min="1"
+          :max="9999"
+          :step="1"
+          placeholder="不限"
+          style="width: 120px"
+          @update:value="patch({ maxItems: $event ?? undefined })"
+        />
+        <NText depth="3" style="font-size: 11px; margin-left: 6px">
+          仅配数据源时生效
+        </NText>
       </div>
 
       <div class="props-row" style="margin-top: 6px">
-        <span class="props-label">图片源字段</span>
-        <NSelect
-          size="small"
-          :value="(() => {
-            const img = control.children.find((c) => c.type === 'image') as { value?: { content?: string } } | undefined
-            const p = img?.value?.content ?? ''
-            return p.startsWith('row.') ? p.slice(4) : p
-          })()"
-          :options="photoFieldOptions"
-          placeholder="选择图片字段"
-          style="width: 180px"
-          @update:value="(leaf: string) => {
-            const img = control.children.find((c) => c.type === 'image') as { id: string; value?: { mode: string; content: string } } | undefined
-            if (img) patch({ children: control.children.map((c) => c.id === img.id ? { ...c, value: { mode: 'binding', content: 'row.' + leaf } } : c) })
-          }"
+        <span class="props-label">每页标题</span>
+        <NSwitch
+          :value="control.titleRepeat !== false"
+          @update:value="patch({ titleRepeat: $event })"
         />
       </div>
 
-      <div class="props-row">
-        <span class="props-label">标题字段</span>
-        <NSelect
+      <div class="props-row" style="align-items: flex-start">
+        <span class="props-label">标题文本</span>
+        <NInput
+          type="textarea"
           size="small"
-          :value="(() => {
-            const txt = control.children.find((c, i) => c.type === 'text' && i > 0) as { binding?: string } | undefined
-            const b = txt?.binding ?? ''
-            return b.startsWith('row.') ? b.slice(4) : b
-          })()"
-          :options="titleFieldOptions"
-          placeholder="选择标题字段"
-          style="width: 180px"
-          @update:value="(leaf: string) => {
-            // 标题是 children 里第二个 text(编号 = {{rowIndex+1}} 号 在前)
-            const idx = control.children.findIndex((c, i) => c.type === 'text' && i > 0)
-            if (idx >= 0) patch({ children: control.children.map((c, i) => i === idx ? { ...c, contentType: 'variable', binding: 'row.' + leaf } : c) })
+          :value="control.appendixTitle?.text ?? ''"
+          placeholder="留空则不渲染。例如:附录:样本照片"
+          :autosize="{ minRows: 2, maxRows: 4 }"
+          style="flex: 1; margin-left: 8px"
+          @update:value="(v: string) => {
+            const cur = control.appendixTitle
+            patch({
+              appendixTitle: { text: v, style: cur?.style },
+            })
           }"
         />
       </div>
@@ -486,10 +436,9 @@ function setMode(next: 'standard' | 'appendix'): void {
       </div>
 
       <div class="props-row" style="align-items: flex-start">
-        <span class="props-label">附录标题</span>
         <NText depth="3" style="font-size: 12px; line-height: 1.5; flex: 1">
-          通过在画布上方的「文本」控件手写（例："附录:样本照片"）。本字段仅在
-          <code>createDefaultControl</code> 时一次性消费,后续编辑请直接拖入 TextControl。
+          标题位于每页 grid 起点上方,优先级低于页眉;关闭「每页标题」则仅首页显示;
+          文本为空则不渲染该区块。卡片内子控件可在画布上直接选中修改属性 / 选 row.* 字段。
         </NText>
       </div>
     </div>

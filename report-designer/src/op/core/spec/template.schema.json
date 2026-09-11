@@ -111,11 +111,22 @@
           "additionalProperties": true
         },
         "dataSource": { "type": "string" },
-        "mode": { "enum": ["standard", "appendix"], "description": "LabelGrid 模式:standard=通用 / appendix=附录图片墙预设(首卡 children 锁死三件套)" },
+        "mode": { "enum": ["standard", "appendix"], "description": "LabelGrid 模式:standard=通用 / appendix=附录图片墙预设(首卡 children 完全可编辑)" },
         "forceNewPage": { "type": "boolean", "description": "appendix 模式:把网格推到下一页顶部" },
         "cornerRadius": { "type": "number", "description": "appendix 模式:卡片圆角(mm),>0 走 roundRect 路径" },
         "cardBorder": { "type": "boolean", "description": "appendix 模式:卡片边框开关,默认 true" },
-        "appendixHeader": { "type": "string", "description": "appendix 模式:拖入时自动插入 body 顶部的 TextControl 内容" },
+        "appendixHeader": { "type": "string", "description": "appendix 模式:拖入时一次性映射为 appendixTitle.text 初始值(旧字段,保留兼容)" },
+        "maxItems": { "type": "number", "minimum": 1, "description": "标签网格最多渲染的卡片数(配 dataSource 时生效,溢出告警 LABEL_GRID_TRUNCATED)" },
+        "appendixTitle": {
+          "type": "object",
+          "description": "appendix 模式:每页在 grid 起点上方贴一个 TextControl 的内容(类似页眉,优先级低于页眉)",
+          "properties": {
+            "text": { "type": "string" },
+            "style": { "type": "object", "additionalProperties": true }
+          },
+          "additionalProperties": false
+        },
+        "titleRepeat": { "type": "boolean", "description": "appendixTitle 是否每页重复,默认 true" },
         "columns": {
           "description": "table.columns=列定义数组;labelgrid.columns=每行列数(number)。schema 共享一个字段名,按 anyOf 分支",
           "anyOf": [

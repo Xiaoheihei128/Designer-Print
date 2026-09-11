@@ -219,6 +219,7 @@ export type WarningCode =
   | 'PAGE_ROWS_CONFLICT' // fixBottomRows 与 pageRows 同时设置（pageRows 优先）
   | 'LABEL_GRID_DATA_MISSING' // 标签网格 dataSource 不存在或不是数组（回退纯布局平铺）
   | 'LABEL_GRID_DATA_EMPTY' // 标签网格 dataSource 为空数组（回退纯布局平铺）
+  | 'LABEL_GRID_TRUNCATED' // 标签网格 maxItems 限制生效,卡片被截断
 
 export interface RenderWarning {
   code: WarningCode

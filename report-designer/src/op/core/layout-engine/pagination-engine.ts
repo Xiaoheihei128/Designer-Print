@@ -808,10 +808,16 @@ export async function layout(
     const stepY = cardH + gapY
     const arr = gridDataArrayForReserve(lc.dataSource, baseCtx)
     const visibleRows = Math.max(1, visibleCardRows(toMm(lc.height ?? 0, unit), geo))
-    const total = arr !== null && arr.length > 0 ? arr.length : geo.columns * visibleRows
+    const naturalTotal = arr !== null && arr.length > 0 ? arr.length : geo.columns * visibleRows
+    // ★ maxItems 钳制与展开器一致
+    const total = lc.maxItems && lc.maxItems > 0
+      ? Math.min(naturalTotal, lc.maxItems)
+      : naturalTotal
     const totalRows = Math.max(1, Math.ceil(total / geo.columns))
     const gridRealH = totalRows * stepY - gapY
-    return Math.max(max, gridRealH)
+    // ★ appendixTitle 占据 titleHeight mm,在 grid 之上,需累加到实际占高
+    const titleHeight = lc.appendixTitle?.text?.trim() ? 6 : 0
+    return Math.max(max, gridRealH + titleHeight)
   }, 0)
   // ★ 合并:reserveBelow 必须把「非 'always' grid 真实展开高」也算进去 —— 否则
   // paginateFlowTable 算 tableLastPage 时只预留 textFlow 的 delta,grid 占的真实高
@@ -1658,9 +1664,15 @@ function decideGridTarget(
   const stepY = cardH + gapY
   const arr = gridDataArrayForReserve(lc.dataSource, ctx)
   const visibleRows = Math.max(1, visibleCardRows(toMm(lc.height ?? 0, unit), geo))
-  const total = arr !== null && arr.length > 0 ? arr.length : geo.columns * visibleRows
+  const naturalTotal = arr !== null && arr.length > 0 ? arr.length : geo.columns * visibleRows
+  // ★ maxItems 钳制与展开器一致
+  const total = lc.maxItems && lc.maxItems > 0
+    ? Math.min(naturalTotal, lc.maxItems)
+    : naturalTotal
   const totalRows = Math.max(1, Math.ceil(total / geo.columns))
-  const requiredHeight = totalRows * stepY - gapY
+  // ★ appendixTitle 占据 titleHeight mm,需累加到 fits 判断的总高
+  const titleHeight = lc.appendixTitle?.text?.trim() ? 6 : 0
+  const requiredHeight = totalRows * stepY - gapY + titleHeight
 
   // ★ 与表格切片一致:新页起点 = zoneTop(headerHeight,页眉下方),避免 grid 覆盖页眉;
   // 「还剩多少空间」也要扣除 headerHeight/footerHeight,不能算入页眉/页脚区。

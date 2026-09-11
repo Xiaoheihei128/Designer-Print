@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OpenPrint</title>
+<style>/* ============ OpenPrint 渲染样式（自动生成，勿手改） ============ */
+:root {
+  --op-page-w: 210mm;
+  --op-page-h: 297mm;
+  --op-scale: 1;
+  --op-table-border: #333333;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #f0f2f5;
+  /* 让底色/斑马纹在打印时不被浏览器"省墨"策略抹掉 */
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+.op-doc {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10mm; padding: 10mm 0;
+}
+
+/* 缩放外壳：transform 不占布局空间，靠外壳撑出滚动区域 */
+.op-page-wrap {
+  width: calc(var(--op-page-w) * var(--op-scale));
+  height: calc(var(--op-page-h) * var(--op-scale));
+  flex: none;
+}
+
+.op-page {
+  position: relative;
+  width: var(--op-page-w);
+  height: var(--op-page-h);
+  overflow: hidden;
+  background: #ffffff;
+  transform: scale(var(--op-scale));
+  transform-origin: top left;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.12);
+}
+
+/* 水印装饰层：绝对铺满页面、不拦截事件、置于内容之下 */
+.op-watermark {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+.op-watermark.op-wm-single {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.op-wm-single > span {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  white-space: nowrap;
+}
+
+/* 整页相对坐标：正文控件直接相对物理页 0,0 定位；边距仅作可视化参考线，不参与渲染偏移 */
+.op-content {
+  position: absolute;
+  left: 0mm;
+  top: 0mm;
+  width: 210mm;
+  /* 正文区 = 整页：控件可落在任意位置（含原边距带），所见即所得 */
+  height: 297mm;
+}
+
+.op-section {
+  position: absolute;
+  width: 210mm;
+  /* 不裁剪：边距只作设计辅助参考线，渲染时边距内/外内容均可见（所见即所得） */
+  overflow: visible;
+}
+/* 页眉/页脚：直接挂在 .op-page 上，整页相对（左右贴物理页边） */
+.op-header { top: 0mm; left: 0mm; height: 0mm; }
+.op-footer { bottom: 0mm; left: 0mm; height: 0mm; }
+/* 正文：填满 .op-content（整页），不再叠加边距偏移 */
+.op-body { top: 0mm; left: 0mm; width: 100%; height: 100%; }
+
+/* -------------------------------- 控件 -------------------------------- */
+
+.op-node {
+  position: absolute;
+  transform-origin: left top;
+}
+
+/* 标签网格参考线：与 .op-node 同一坐标原点（.op-content 左上角），
+   若无 position:absolute 会按文档流竖排成一列，造成「网格线挤成一列」的视觉 bug */
+.op-gridlines {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.op-gridline {
+  position: absolute;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+.op-text {
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  font-family: "Source Han Sans CN", "PingFang SC", sans-serif;
+  font-size: 12pt;
+  line-height: 1.16;
+  color: #000000;
+}
+
+.op-richtext {
+  overflow: hidden;
+  font-family: "Source Han Sans CN", "PingFang SC", sans-serif;
+  font-size: 12pt;
+  line-height: 1.5;
+  color: #000000;
+}
+.op-richtext > *:first-child { margin-top: 0; }
+.op-richtext > *:last-child { margin-bottom: 0; }
+.op-richtext img { max-width: 100%; }
+
+.op-image { display: block; }
+.op-image > img { display: block; width: 100%; height: 100%; }
+
+/* 条码 / 二维码：SVG 矢量填满控件框（宽高独立，所见即所得）。
+   条码的 preserveAspectRatio="none" 由 data-binder 注入 SVG 自身（自然尺寸≈控件尺寸，拉伸量≈1）；
+   二维码保留默认 contain（100%×100% meet）居中。 */
+.op-code > svg { display: block; width: 100%; height: 100%; }
+
+/* ★ 段级形态容器（cell 内嵌的 svg/img）：
+   - 容器是 <span> 默认 display:inline → inline 元素忽略 width/height 样式，
+     SVG 用 viewBox 原始尺寸渲染，撑爆 cell，行被 CSS overflow:hidden 切。
+   - 改 inline-block:让 height/width 样式生效,SVG 内的 100% 才有计算基。
+   - max-width:100% + vertical-align:middle:与同行文字基线对齐,混排场景(文字+二维码段)不跑版。 */
+.op-code-seg, .op-image-seg {
+  display: inline-block;
+  vertical-align: middle;
+  max-width: 100%;
+}
+.op-code-seg > svg { display: block; width: 100%; height: 100%; }
+
+.op-line > span {
+  position: absolute;
+  display: block;
+}
+
+/* 解析失败占位：必须看得见，避免用户拿到"少了一块"的单据而不自知 */
+.op-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed #c0c4cc;
+  color: #a8abb2;
+  font-family: "Source Han Sans CN", "PingFang SC", sans-serif;
+  font-size: 8pt;
+  overflow: hidden;
+}
+
+/* -------------------------------- 表格 -------------------------------- */
+
+.op-table {
+  /* 用 separate + border-spacing:0 + box-sizing:border-box，让外框落在表格盒"内"侧：
+     collapse 模式下外框横跨边缘，被 overlay 的 overflow:hidden 切掉右/下边，
+     表现为"需拖一下才看得到边框"；separate 方案使四边始终完整可见（设计/打印一致）。 */
+  border-collapse: separate;
+  border-spacing: 0;
+  box-sizing: border-box;
+  table-layout: fixed;
+  /* 字体三件套必须与 DomMeasurer 完全一致，否则分页高度会失真 */
+  font-family: "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Source Han Sans SC", sans-serif;
+  font-size: 9pt;
+  line-height: 1.35;
+  color: #1f2329;
+}
+
+.op-table td,
+.op-table th {
+  padding: 1.2mm 2mm;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  font-weight: normal;
+  text-align: left;
+  vertical-align: middle;
+}
+
+/* 垂直对齐：vertical-align 不可继承，只能按表加类下发到每个 td */
+.op-table.va-top td { vertical-align: top; }
+.op-table.va-middle td { vertical-align: middle; }
+.op-table.va-bottom td { vertical-align: bottom; }
+
+.op-table tr.is-header td { font-weight: bold; }
+.op-table tr.is-group td { background: #F5F7FA; font-weight: bold; }
+.op-table tr.is-subtotal td,
+.op-table tr.is-summary td { font-weight: bold; }
+.op-table tr.is-striped td { background: #DCE6F4; }
+/* 静态行（布局网格正文 / 数据表备注尾行）：默认无强调样式，
+   单元格视觉以内联样式为准（与设计期 overlay 同一套 resolveCellStyleFor 取值） */
+.op-table tr.is-static td { /* 占位：保持类名与设计期对齐，避免样式遗漏 */ }
+/* 补空白行（P0-2 按纸张填满）：无内容、无背景，但保留上下边框横线，
+   让补空行视觉上"是表格的一行"（供手写 / 签字栏留白用）。
+   ★ 不覆盖 padding（用默认内边距）：padding:0 + overflow:hidden + 空内容
+   的组合在某些浏览器里会导致 cell 内容区塌陷，:last-child 上的 border-right
+   渲染失败（实测 5 列表格补空行最右列右侧边线缺失）。
+   ★ 显式补 border-right：高优先级兜底，万一 :last-child 规则因空白 td
+   渲染异常没命中，blank 行视觉仍是完整的"表格一列"。 */
+.op-table tr.is-blank td { background: transparent; }
+.op-table.b-all tr.is-blank td:last-child { border-right: 0.2mm solid var(--op-table-border); }
+
+/* ---------- 表格样式预设（Excel 式快速切换；class 由渲染端挂在 table 元素上） ---------- */
+/* 默认（none）：仅表头加粗，无任何背景色（含标题行）。无需规则，class 仅作占位。 */
+
+/* 表头高亮：表头浅灰底 */
+.op-table.ts-header tr.is-header td { background: #F5F7FA; }
+
+/* 斑马纹（单双变色条纹，浅蓝交替，对比更明显） */
+.op-table.ts-zebra tr.is-header td { background: #F5F7FA; }
+.op-table.ts-zebra tbody tr:not(.is-header):nth-child(even) td { background: #DCE6F4; }
+
+/* 斑马纹·蓝（交替行更深蓝） */
+.op-table.ts-zebra-blue tr.is-header td { background: #F5F7FA; }
+.op-table.ts-zebra-blue tbody tr:not(.is-header):nth-child(even) td { background: #C2D4EE; }
+
+/* 斑马纹·灰（中性灰交替） */
+.op-table.ts-zebra-gray tr.is-header td { background: #F5F7FA; }
+.op-table.ts-zebra-gray tbody tr:not(.is-header):nth-child(even) td { background: #E4E7EB; }
+
+/* 绿色表头（绿底白字） */
+.op-table.ts-header-green tr.is-header td { background: #1F9D57; color: #ffffff; }
+
+/* 隔列着色（奇偶列交替底） */
+.op-table.ts-banded-cols tr > *:nth-child(even) { background: #EEF2F8; }
+
+/* 三段式：表头高亮 + 合计 / 总计行强调底（设计期聚合尾行已对齐 is-subtotal/is-summary 类） */
+.op-table.ts-three-segment tr.is-header td { background: #F5F7FA; }
+.op-table.ts-three-segment tr.is-subtotal td,
+.op-table.ts-three-segment tr.is-summary td { background: #EBF2FF; }
+
+/* 深底表头：深蓝底白字 */
+.op-table.ts-header-dark tr.is-header td { background: #2F54EB; color: #ffffff; }
+
+/* 课表：全网格 + 表头淡底高亮（角标斜线由单元格 diagonal 控制） */
+.op-table.ts-timetable tr.is-header td { background: #F5F7FA; }
+
+/* 边框模式：每格画上/左边框，末行补下、末列补右 → 外框落在盒内、不被裁切 */
+.op-table.b-all td { border-top: 0.2mm solid var(--op-table-border); border-left: 0.2mm solid var(--op-table-border); }
+.op-table.b-all tr:last-child td { border-bottom: 0.2mm solid var(--op-table-border); }
+.op-table.b-all td:last-child { border-right: 0.2mm solid var(--op-table-border); }
+/* Bug11 修复：vMerge 锚点（rowspan>1）不在末行，但其视觉下沿落在末行底边。
+   tr:last-child td 不命中锚点 → 末行 vMerge 列无下边框。补一条专属规则 */
+.op-table.b-all td[rowspan] { border-bottom: 0.2mm solid var(--op-table-border); }
+.op-table.b-horizontal td { border-top: 0.2mm solid var(--op-table-border); }
+.op-table.b-horizontal tr:last-child td { border-bottom: 0.2mm solid var(--op-table-border); }
+.op-table.b-horizontal td[rowspan] { border-bottom: 0.2mm solid var(--op-table-border); }
+.op-table.b-outline { border: 0.2mm solid var(--op-table-border); }
+.op-table.b-none td { border: 0; }
+/* 三线表：顶线 + 表头底线 + 底线，无内部横线、无竖线（建模报告 / 财务报表常用） */
+.op-table.b-three-line { border-top: 0.2mm solid var(--op-table-border); border-bottom: 0.2mm solid var(--op-table-border); }
+.op-table.b-three-line tr.is-header:last-child td { border-bottom: 0.2mm solid var(--op-table-border); }
+
+/* vMerge 同值合并（设计画布视觉提示）—— 启用列加蓝色左竖条，
+   让用户在画布上一眼看到「这列会去重纵向合并」；运行期 HTML 输出由
+   rowspan 自然折叠重复单元格，不再额外画线 */
+.op-table td.is-vmerge-col { box-shadow: inset 2px 0 0 rgba(37, 99, 235, 0.55); }
+
+
+/* ------------------------------ 数学公式（KaTeX） ------------------------------ */
+/* 样式规则（不含 @font-face）：预览 + 导出栅格化共用，使公式布局正确。
+   字体由预览（KATEX_FONT_CSS 同源加载）/ 导出（embedFontsInSvg 转 data-URI）分别注入。 */
+.katex{font:normal 1.21em KaTeX_Main,Times New Roman,serif;line-height:1.2;position:relative;text-indent:0;text-rendering:auto}.katex *{-ms-high-contrast-adjust:none!important;border-color:currentColor}.katex .katex-version:after{content:"0.18.4"}.katex .katex-mathml{border:0;-webkit-clip-path:inset(50%);clip-path:inset(50%);height:1px;overflow:hidden;padding:0;position:absolute;width:1px}.katex .katex-html>.katex-newline{display:block}.katex .katex-base{position:relative;white-space:nowrap;width:-webkit-min-content;width:-moz-min-content;width:min-content}.katex .katex-base,.katex .katex-strut{display:inline-block}.katex .textbf{font-weight:700}.katex .textit{font-style:italic}.katex .textrm{font-family:KaTeX_Main}.katex .textsf{font-family:KaTeX_SansSerif}.katex .texttt{font-family:KaTeX_Typewriter}.katex .mathnormal{font-family:KaTeX_Math;font-style:italic}.katex .mathit{font-family:KaTeX_Main;font-style:italic}.katex .mathrm{font-style:normal}.katex .mathbf{font-family:KaTeX_Main;font-weight:700}.katex .boldsymbol{font-family:KaTeX_Math;font-style:italic;font-weight:700}.katex .amsrm,.katex .mathbb,.katex .textbb{font-family:KaTeX_AMS}.katex .mathcal{font-family:KaTeX_Caligraphic}.katex .mathfrak,.katex .textfrak{font-family:KaTeX_Fraktur}.katex .mathboldfrak,.katex .textboldfrak{font-family:KaTeX_Fraktur;font-weight:700}.katex .mathtt{font-family:KaTeX_Typewriter}.katex .mathscr,.katex .textscr{font-family:KaTeX_Script}.katex .mathsf,.katex .textsf{font-family:KaTeX_SansSerif}.katex .mathboldsf,.katex .textboldsf{font-family:KaTeX_SansSerif;font-weight:700}.katex .mathitsf,.katex .mathsfit,.katex .textitsf{font-family:KaTeX_SansSerif;font-style:italic}.katex .mainrm{font-family:KaTeX_Main;font-style:normal}.katex .vlist-t{border-collapse:collapse;display:inline-table;table-layout:fixed}.katex .vlist-r{display:table-row}.katex .vlist{display:table-cell;position:relative;vertical-align:bottom}.katex .vlist>span{display:block;height:0;position:relative}.katex .vlist>span>span{display:inline-block}.katex .vlist>span>.pstrut{overflow:hidden;width:0}.katex .vlist-t2{margin-right:-2px}.katex .vlist-s{display:table-cell;font-size:1px;min-width:2px;vertical-align:bottom;width:2px}.katex .katex-vbox{align-items:baseline;display:inline-flex;flex-direction:column}.katex .katex-thinbox{display:inline-flex;flex-direction:row;max-width:0;width:0}.katex .msupsub{text-align:left}.katex .mfrac>span>span{text-align:center}.katex .mfrac .frac-line{border-bottom-style:solid;display:inline-block;width:100%}.katex .katex-hdashline,.katex .katex-hline,.katex .katex-overline .overline-line,.katex .katex-rule,.katex .katex-underline .underline-line,.katex .mfrac .frac-line{min-height:1px}.katex .mspace{display:inline-block}.katex .katex-smash{display:inline;line-height:0}.katex .clap,.katex .llap,.katex .rlap{position:relative;width:0}.katex .clap>.katex-inner,.katex .llap>.katex-inner,.katex .rlap>.katex-inner{position:absolute}.katex .clap>.katex-fix,.katex .llap>.katex-fix,.katex .rlap>.katex-fix{display:inline-block}.katex .llap>.katex-inner{right:0}.katex .clap>.katex-inner,.katex .rlap>.katex-inner{left:0}.katex .clap>.katex-inner>span{margin-left:-50%;margin-right:50%}.katex .katex-rule{border:0 solid;display:inline-block;position:relative}.katex .katex-hline,.katex .katex-overline .overline-line,.katex .katex-underline .underline-line{border-bottom-style:solid;display:inline-block;width:100%}.katex .katex-hdashline{border-bottom-style:dashed;display:inline-block;width:100%}.katex .sqrt>.katex-root{margin-left:.2777777778em;margin-right:-.5555555556em}.katex .fontsize-ensurer.reset-size1.size1,.katex .katex-sizing.reset-size1.size1{font-size:1em}.katex .fontsize-ensurer.reset-size1.size2,.katex .katex-sizing.reset-size1.size2{font-size:1.2em}.katex .fontsize-ensurer.reset-size1.size3,.katex .katex-sizing.reset-size1.size3{font-size:1.4em}.katex .fontsize-ensurer.reset-size1.size4,.katex .katex-sizing.reset-size1.size4{font-size:1.6em}.katex .fontsize-ensurer.reset-size1.size5,.katex .katex-sizing.reset-size1.size5{font-size:1.8em}.katex .fontsize-ensurer.reset-size1.size6,.katex .katex-sizing.reset-size1.size6{font-size:2em}.katex .fontsize-ensurer.reset-size1.size7,.katex .katex-sizing.reset-size1.size7{font-size:2.4em}.katex .fontsize-ensurer.reset-size1.size8,.katex .katex-sizing.reset-size1.size8{font-size:2.88em}.katex .fontsize-ensurer.reset-size1.size9,.katex .katex-sizing.reset-size1.size9{font-size:3.456em}.katex .fontsize-ensurer.reset-size1.size10,.katex .katex-sizing.reset-size1.size10{font-size:4.148em}.katex .fontsize-ensurer.reset-size1.size11,.katex .katex-sizing.reset-size1.size11{font-size:4.976em}.katex .fontsize-ensurer.reset-size2.size1,.katex .katex-sizing.reset-size2.size1{font-size:.8333333333em}.katex .fontsize-ensurer.reset-size2.size2,.katex .katex-sizing.reset-size2.size2{font-size:1em}.katex .fontsize-ensurer.reset-size2.size3,.katex .katex-sizing.reset-size2.size3{font-size:1.1666666667em}.katex .fontsize-ensurer.reset-size2.size4,.katex .katex-sizing.reset-size2.size4{font-size:1.3333333333em}.katex .fontsize-ensurer.reset-size2.size5,.katex .katex-sizing.reset-size2.size5{font-size:1.5em}.katex .fontsize-ensurer.reset-size2.size6,.katex .katex-sizing.reset-size2.size6{font-size:1.6666666667em}.katex .fontsize-ensurer.reset-size2.size7,.katex .katex-sizing.reset-size2.size7{font-size:2em}.katex .fontsize-ensurer.reset-size2.size8,.katex .katex-sizing.reset-size2.size8{font-size:2.4em}.katex .fontsize-ensurer.reset-size2.size9,.katex .katex-sizing.reset-size2.size9{font-size:2.88em}.katex .fontsize-ensurer.reset-size2.size10,.katex .katex-sizing.reset-size2.size10{font-size:3.4566666667em}.katex .fontsize-ensurer.reset-size2.size11,.katex .katex-sizing.reset-size2.size11{font-size:4.1466666667em}.katex .fontsize-ensurer.reset-size3.size1,.katex .katex-sizing.reset-size3.size1{font-size:.7142857143em}.katex .fontsize-ensurer.reset-size3.size2,.katex .katex-sizing.reset-size3.size2{font-size:.8571428571em}.katex .fontsize-ensurer.reset-size3.size3,.katex .katex-sizing.reset-size3.size3{font-size:1em}.katex .fontsize-ensurer.reset-size3.size4,.katex .katex-sizing.reset-size3.size4{font-size:1.1428571429em}.katex .fontsize-ensurer.reset-size3.size5,.katex .katex-sizing.reset-size3.size5{font-size:1.2857142857em}.katex .fontsize-ensurer.reset-size3.size6,.katex .katex-sizing.reset-size3.size6{font-size:1.4285714286em}.katex .fontsize-ensurer.reset-size3.size7,.katex .katex-sizing.reset-size3.size7{font-size:1.7142857143em}.katex .fontsize-ensurer.reset-size3.size8,.katex .katex-sizing.reset-size3.size8{font-size:2.0571428571em}.katex .fontsize-ensurer.reset-size3.size9,.katex .katex-sizing.reset-size3.size9{font-size:2.4685714286em}.katex .fontsize-ensurer.reset-size3.size10,.katex .katex-sizing.reset-size3.size10{font-size:2.9628571429em}.katex .fontsize-ensurer.reset-size3.size11,.katex .katex-sizing.reset-size3.size11{font-size:3.5542857143em}.katex .fontsize-ensurer.reset-size4.size1,.katex .katex-sizing.reset-size4.size1{font-size:.625em}.katex .fontsize-ensurer.reset-size4.size2,.katex .katex-sizing.reset-size4.size2{font-size:.75em}.katex .fontsize-ensurer.reset-size4.size3,.katex .katex-sizing.reset-size4.size3{font-size:.875em}.katex .fontsize-ensurer.reset-size4.size4,.katex .katex-sizing.reset-size4.size4{font-size:1em}.katex .fontsize-ensurer.reset-size4.size5,.katex .katex-sizing.reset-size4.size5{font-size:1.125em}.katex .fontsize-ensurer.reset-size4.size6,.katex .katex-sizing.reset-size4.size6{font-size:1.25em}.katex .fontsize-ensurer.reset-size4.size7,.katex .katex-sizing.reset-size4.size7{font-size:1.5em}.katex .fontsize-ensurer.reset-size4.size8,.katex .katex-sizing.reset-size4.size8{font-size:1.8em}.katex .fontsize-ensurer.reset-size4.size9,.katex .katex-sizing.reset-size4.size9{font-size:2.16em}.katex .fontsize-ensurer.reset-size4.size10,.katex .katex-sizing.reset-size4.size10{font-size:2.5925em}.katex .fontsize-ensurer.reset-size4.size11,.katex .katex-sizing.reset-size4.size11{font-size:3.11em}.katex .fontsize-ensurer.reset-size5.size1,.katex .katex-sizing.reset-size5.size1{font-size:.5555555556em}.katex .fontsize-ensurer.reset-size5.size2,.katex .katex-sizing.reset-size5.size2{font-size:.6666666667em}.katex .fontsize-ensurer.reset-size5.size3,.katex .katex-sizing.reset-size5.size3{font-size:.7777777778em}.katex .fontsize-ensurer.reset-size5.size4,.katex .katex-sizing.reset-size5.size4{font-size:.8888888889em}.katex .fontsize-ensurer.reset-size5.size5,.katex .katex-sizing.reset-size5.size5{font-size:1em}.katex .fontsize-ensurer.reset-size5.size6,.katex .katex-sizing.reset-size5.size6{font-size:1.1111111111em}.katex .fontsize-ensurer.reset-size5.size7,.katex .katex-sizing.reset-size5.size7{font-size:1.3333333333em}.katex .fontsize-ensurer.reset-size5.size8,.katex .katex-sizing.reset-size5.size8{font-size:1.6em}.katex .fontsize-ensurer.reset-size5.size9,.katex .katex-sizing.reset-size5.size9{font-size:1.92em}.katex .fontsize-ensurer.reset-size5.size10,.katex .katex-sizing.reset-size5.size10{font-size:2.3044444444em}.katex .fontsize-ensurer.reset-size5.size11,.katex .katex-sizing.reset-size5.size11{font-size:2.7644444444em}.katex .fontsize-ensurer.reset-size6.size1,.katex .katex-sizing.reset-size6.size1{font-size:.5em}.katex .fontsize-ensurer.reset-size6.size2,.katex .katex-sizing.reset-size6.size2{font-size:.6em}.katex .fontsize-ensurer.reset-size6.size3,.katex .katex-sizing.reset-size6.size3{font-size:.7em}.katex .fontsize-ensurer.reset-size6.size4,.katex .katex-sizing.reset-size6.size4{font-size:.8em}.katex .fontsize-ensurer.reset-size6.size5,.katex .katex-sizing.reset-size6.size5{font-size:.9em}.katex .fontsize-ensurer.reset-size6.size6,.katex .katex-sizing.reset-size6.size6{font-size:1em}.katex .fontsize-ensurer.reset-size6.size7,.katex .katex-sizing.reset-size6.size7{font-size:1.2em}.katex .fontsize-ensurer.reset-size6.size8,.katex .katex-sizing.reset-size6.size8{font-size:1.44em}.katex .fontsize-ensurer.reset-size6.size9,.katex .katex-sizing.reset-size6.size9{font-size:1.728em}.katex .fontsize-ensurer.reset-size6.size10,.katex .katex-sizing.reset-size6.size10{font-size:2.074em}.katex .fontsize-ensurer.reset-size6.size11,.katex .katex-sizing.reset-size6.size11{font-size:2.488em}.katex .fontsize-ensurer.reset-size7.size1,.katex .katex-sizing.reset-size7.size1{font-size:.4166666667em}.katex .fontsize-ensurer.reset-size7.size2,.katex .katex-sizing.reset-size7.size2{font-size:.5em}.katex .fontsize-ensurer.reset-size7.size3,.katex .katex-sizing.reset-size7.size3{font-size:.5833333333em}.katex .fontsize-ensurer.reset-size7.size4,.katex .katex-sizing.reset-size7.size4{font-size:.6666666667em}.katex .fontsize-ensurer.reset-size7.size5,.katex .katex-sizing.reset-size7.size5{font-size:.75em}.katex .fontsize-ensurer.reset-size7.size6,.katex .katex-sizing.reset-size7.size6{font-size:.8333333333em}.katex .fontsize-ensurer.reset-size7.size7,.katex .katex-sizing.reset-size7.size7{font-size:1em}.katex .fontsize-ensurer.reset-size7.size8,.katex .katex-sizing.reset-size7.size8{font-size:1.2em}.katex .fontsize-ensurer.reset-size7.size9,.katex .katex-sizing.reset-size7.size9{font-size:1.44em}.katex .fontsize-ensurer.reset-size7.size10,.katex .katex-sizing.reset-size7.size10{font-size:1.7283333333em}.katex .fontsize-ensurer.reset-size7.size11,.katex .katex-sizing.reset-size7.size11{font-size:2.0733333333em}.katex .fontsize-ensurer.reset-size8.size1,.katex .katex-sizing.reset-size8.size1{font-size:.3472222222em}.katex .fontsize-ensurer.reset-size8.size2,.katex .katex-sizing.reset-size8.size2{font-size:.4166666667em}.katex .fontsize-ensurer.reset-size8.size3,.katex .katex-sizing.reset-size8.size3{font-size:.4861111111em}.katex .fontsize-ensurer.reset-size8.size4,.katex .katex-sizing.reset-size8.size4{font-size:.5555555556em}.katex .fontsize-ensurer.reset-size8.size5,.katex .katex-sizing.reset-size8.size5{font-size:.625em}.katex .fontsize-ensurer.reset-size8.size6,.katex .katex-sizing.reset-size8.size6{font-size:.6944444444em}.katex .fontsize-ensurer.reset-size8.size7,.katex .katex-sizing.reset-size8.size7{font-size:.8333333333em}.katex .fontsize-ensurer.reset-size8.size8,.katex .katex-sizing.reset-size8.size8{font-size:1em}.katex .fontsize-ensurer.reset-size8.size9,.katex .katex-sizing.reset-size8.size9{font-size:1.2em}.katex .fontsize-ensurer.reset-size8.size10,.katex .katex-sizing.reset-size8.size10{font-size:1.4402777778em}.katex .fontsize-ensurer.reset-size8.size11,.katex .katex-sizing.reset-size8.size11{font-size:1.7277777778em}.katex .fontsize-ensurer.reset-size9.size1,.katex .katex-sizing.reset-size9.size1{font-size:.2893518519em}.katex .fontsize-ensurer.reset-size9.size2,.katex .katex-sizing.reset-size9.size2{font-size:.3472222222em}.katex .fontsize-ensurer.reset-size9.size3,.katex .katex-sizing.reset-size9.size3{font-size:.4050925926em}.katex .fontsize-ensurer.reset-size9.size4,.katex .katex-sizing.reset-size9.size4{font-size:.462962963em}.katex .fontsize-ensurer.reset-size9.size5,.katex .katex-sizing.reset-size9.size5{font-size:.5208333333em}.katex .fontsize-ensurer.reset-size9.size6,.katex .katex-sizing.reset-size9.size6{font-size:.5787037037em}.katex .fontsize-ensurer.reset-size9.size7,.katex .katex-sizing.reset-size9.size7{font-size:.6944444444em}.katex .fontsize-ensurer.reset-size9.size8,.katex .katex-sizing.reset-size9.size8{font-size:.8333333333em}.katex .fontsize-ensurer.reset-size9.size9,.katex .katex-sizing.reset-size9.size9{font-size:1em}.katex .fontsize-ensurer.reset-size9.size10,.katex .katex-sizing.reset-size9.size10{font-size:1.2002314815em}.katex .fontsize-ensurer.reset-size9.size11,.katex .katex-sizing.reset-size9.size11{font-size:1.4398148148em}.katex .fontsize-ensurer.reset-size10.size1,.katex .katex-sizing.reset-size10.size1{font-size:.2410800386em}.katex .fontsize-ensurer.reset-size10.size2,.katex .katex-sizing.reset-size10.size2{font-size:.2892960463em}.katex .fontsize-ensurer.reset-size10.size3,.katex .katex-sizing.reset-size10.size3{font-size:.337512054em}.katex .fontsize-ensurer.reset-size10.size4,.katex .katex-sizing.reset-size10.size4{font-size:.3857280617em}.katex .fontsize-ensurer.reset-size10.size5,.katex .katex-sizing.reset-size10.size5{font-size:.4339440694em}.katex .fontsize-ensurer.reset-size10.size6,.katex .katex-sizing.reset-size10.size6{font-size:.4821600771em}.katex .fontsize-ensurer.reset-size10.size7,.katex .katex-sizing.reset-size10.size7{font-size:.5785920926em}.katex .fontsize-ensurer.reset-size10.size8,.katex .katex-sizing.reset-size10.size8{font-size:.6943105111em}.katex .fontsize-ensurer.reset-size10.size9,.katex .katex-sizing.reset-size10.size9{font-size:.8331726133em}.katex .fontsize-ensurer.reset-size10.size10,.katex .katex-sizing.reset-size10.size10{font-size:1em}.katex .fontsize-ensurer.reset-size10.size11,.katex .katex-sizing.reset-size10.size11{font-size:1.1996142719em}.katex .fontsize-ensurer.reset-size11.size1,.katex .katex-sizing.reset-size11.size1{font-size:.2009646302em}.katex .fontsize-ensurer.reset-size11.size2,.katex .katex-sizing.reset-size11.size2{font-size:.2411575563em}.katex .fontsize-ensurer.reset-size11.size3,.katex .katex-sizing.reset-size11.size3{font-size:.2813504823em}.katex .fontsize-ensurer.reset-size11.size4,.katex .katex-sizing.reset-size11.size4{font-size:.3215434084em}.katex .fontsize-ensurer.reset-size11.size5,.katex .katex-sizing.reset-size11.size5{font-size:.3617363344em}.katex .fontsize-ensurer.reset-size11.size6,.katex .katex-sizing.reset-size11.size6{font-size:.4019292605em}.katex .fontsize-ensurer.reset-size11.size7,.katex .katex-sizing.reset-size11.size7{font-size:.4823151125em}.katex .fontsize-ensurer.reset-size11.size8,.katex .katex-sizing.reset-size11.size8{font-size:.578778135em}.katex .fontsize-ensurer.reset-size11.size9,.katex .katex-sizing.reset-size11.size9{font-size:.6945337621em}.katex .fontsize-ensurer.reset-size11.size10,.katex .katex-sizing.reset-size11.size10{font-size:.8336012862em}.katex .fontsize-ensurer.reset-size11.size11,.katex .katex-sizing.reset-size11.size11{font-size:1em}.katex .delimsizing.size1{font-family:KaTeX_Size1}.katex .delimsizing.size2{font-family:KaTeX_Size2}.katex .delimsizing.size3{font-family:KaTeX_Size3}.katex .delimsizing.size4{font-family:KaTeX_Size4}.katex .delimsizing.mult .delim-size1>span{font-family:KaTeX_Size1}.katex .delimsizing.mult .delim-size4>span{font-family:KaTeX_Size4}.katex .nulldelimiter{display:inline-block;width:.12em}.katex .delimcenter,.katex .op-symbol{position:relative}.katex .op-symbol.small-op{font-family:KaTeX_Size1}.katex .op-symbol.large-op{font-family:KaTeX_Size2}.katex .katex-accent>.vlist-t,.katex .op-limits>.vlist-t{text-align:center}.katex .katex-accent .accent-body{position:relative}.katex .katex-accent .accent-body:not(.accent-full){width:0}.katex .katex-overlay{display:block}.katex .mtable .vertical-separator{display:inline-block;min-width:1px}.katex .mtable .arraycolsep{display:inline-block}.katex .mtable .col-align-c>.vlist-t{text-align:center}.katex .mtable .col-align-l>.vlist-t{text-align:left}.katex .mtable .col-align-r>.vlist-t{text-align:right}.katex .svg-align{text-align:left}.katex svg{fill:currentColor;stroke:currentColor;display:block;height:inherit;position:absolute;width:100%}.katex svg path{stroke:none}.katex svg{fill-rule:nonzero;fill-opacity:1;stroke-width:1;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1}.katex img{border-style:none;max-height:none;max-width:none;min-height:0;min-width:0}.katex .katex-stretchy{display:block;overflow:hidden;position:relative;width:100%}.katex .katex-stretchy:after,.katex .katex-stretchy:before{content:""}.katex .hide-tail{overflow:hidden;position:relative;width:100%}.katex .halfarrow-left{left:0;overflow:hidden;position:absolute;width:50.2%}.katex .halfarrow-right{overflow:hidden;position:absolute;right:0;width:50.2%}.katex .brace-left{left:0;overflow:hidden;position:absolute;width:25.1%}.katex .brace-center{left:25%;overflow:hidden;position:absolute;width:50%}.katex .brace-right{overflow:hidden;position:absolute;right:0;width:25.1%}.katex .x-arrow-pad{padding:0 .5em}.katex .cd-arrow-pad{padding:0 .55556em 0 .27778em}.katex .mover,.katex .munder,.katex .x-arrow{text-align:center}.katex .boxpad{padding:0 .3em}.katex .fbox,.katex .fcolorbox{border:.04em solid;box-sizing:border-box}.katex .cancel-pad{padding:0 .2em}.katex .cancel-lap{margin-left:-.2em;margin-right:-.2em}.katex .katex-sout{border-bottom-style:solid;border-bottom-width:.08em}.katex .angl{border-right:.049em solid;border-top:.049em solid;box-sizing:border-box;margin-right:.03889em}.katex .anglpad{padding:0 .03889em}.katex .eqn-num:before{content:"(" counter(katexEqnNo) ")";counter-increment:katexEqnNo}.katex .mml-eqn-num:before{content:"(" counter(mmlEqnNo) ")";counter-increment:mmlEqnNo}.katex .mtr-glue{width:50%}.katex .cd-vert-arrow{display:inline-block;position:relative}.katex .cd-label-left{display:inline-block;position:absolute;right:calc(50% + .3em);text-align:left}.katex .cd-label-right{display:inline-block;left:calc(50% + .3em);position:absolute;text-align:right}.katex-display{display:block;margin:1em 0;text-align:center}.katex-display>.katex{display:block;text-align:center;white-space:nowrap}.katex-display>.katex>.katex-html{display:block;position:relative}.katex-display>.katex>.katex-html>.katex-tag{position:absolute;right:0}.katex-display.leqno>.katex>.katex-html>.katex-tag{left:0;right:auto}.katex-display.fleqn>.katex{padding-left:2em;text-align:left}body{counter-reset:katexEqnNo mmlEqnNo}
+
+
+/* KaTeX 字体（同源 /fonts/katex/，仅预览 iframe 可用） */
+@font-face{font-display:block;font-family:KaTeX_AMS;font-style:normal;font-weight:400;src:url(/fonts/katex/KaTeX_AMS-Regular.woff2) format("woff2"),url(/fonts/katex/KaTeX_AMS-Regular.woff) format("woff"),url(/fonts/katex/KaTeX_AMS-Regular.ttf) format("truetype")}
+@font-face{font-display:block;font-family:KaTeX_Caligraphic;font-style:normal;font-weight:700;src:url(/fonts/katex/KaTeX_Caligraphic-Bold.woff2) format("woff2"),url(/fonts/katex/KaTeX_Caligraphic-Bold.woff) format("woff"),url(/fonts/katex/KaTeX_Caligraphic-Bold.ttf) format("truetype")}
+@font-face{font-display:block;font-family:KaTeX_Caligraphic;font-style:normal;font-weight:400;src:url(/fonts/katex/KaTeX_Caligraphic-Regular.woff2) format("woff2"),url(/fonts/katex/KaTeX_Caligraphic-Regular.woff) format("woff"),url(/fonts/katex/KaTeX_Caligraphic-Regular.ttf) format("truetype")}
+@font-face{font-display:block;font-family:KaTeX_Fraktur;font-style:normal;font-weight:700;src:url(/fonts/katex/KaTeX_Fraktur-Bold.woff2) format("woff2"),url(/fonts/katex/KaTeX_Fraktur-Bold.woff) format("woff"),url(/fonts/katex/KaTeX_Fraktur-Bold.ttf) format("truetype")}
+@font-face{font-display:block;font-family:KaTeX_Fraktur;font-style:normal;font-weight:400;src:url(/fonts/katex/KaTeX_Fraktur-Regular.woff2) format("woff2"),url(/fonts/katex/KaTeX_Fraktur-Regular.woff) format("woff"),url(/fonts/katex/KaTeX_Fraktur-Regular.ttf) format("truetype")}
+@font-face{font-display:block;font-family:KaTeX_Main;font-style:normal;font-weight:700;src:url(/fonts/katex/KaTeX_Main-Bold.woff2) format("woff2"),url(/fonts/katex/KaTeX_Main-Bold.woff) format("woff"),url(/fonts/katex/KaTeX_Main-Bold.ttf) format("truetype")}
+@font-face{font-display:block;font-family:KaTeX_Main;font-style:italic;font-weight:700;src:url(/fonts/katex/KaTeX_Main-BoldItalic.woff2) format("woff2"),url(/fonts/katex/KaTeX_Main-BoldItalic.woff) format("woff"),url(/fonts/katex/KaTeX_Main-BoldItalic.ttf) format("truetype")}
+@font-face{font-display:block;font-family:KaTeX_Main;font-style:italic;font-weight:400;src:url(/fonts/katex/KaTeX_Main-Italic.woff2) format("woff2"),url(/fonts/katex/KaTeX_Main-Italic.woff) format("woff"),url(/fonts/katex/KaTeX_Main-Italic.ttf) format("truetype")}
+@font-face{font-display:block;font-family:KaTeX_Main;font-style:normal;font-weight:400;src:url(/fonts/katex/KaTeX_Main-Regular.woff2) format("woff2"),url(/fonts/katex/KaTeX_Main-Regular.woff) format("woff"),url(/fonts/katex/KaTeX_Main-Regular.ttf) format("truetype")}
+@font-face{font-display:block;font-family:KaTeX_Math;font-style:italic;font-weight:700;src:url(/fonts/katex/KaTeX_Math-BoldItalic.woff2) format("woff2"),url(/fonts/katex/KaTeX_Math-BoldItalic.woff) format("woff"),url(/fonts/katex/KaTeX_Math-BoldItalic.ttf) format("truetype")}
+@font-face{font-display:block;font-family:KaTeX_Math;font-style:italic;font-weight:400;src:url(/fonts/katex/KaTeX_Math-Italic.woff2) format("woff2"),url(/fonts/katex/KaTeX_Math-Italic.woff) format("woff"),url(/fonts/katex/KaTeX_Math-Italic.ttf) format("truetype")}
+@font-face{font-display:block;font-family:"KaTeX_SansSerif";font-style:normal;font-weight:700;src:url(/fonts/katex/KaTeX_SansSerif-Bold.woff2) format("woff2"),url(/fonts/katex/KaTeX_SansSerif-Bold.woff) format("woff"),url(/fonts/katex/KaTeX_SansSerif-Bold.ttf) format("truetype")}
+@font-face{font-display:block;font-family:"KaTeX_SansSerif";font-style:italic;font-weight:400;src:url(/fonts/katex/KaTeX_SansSerif-Italic.woff2) format("woff2"),url(/fonts/katex/KaTeX_SansSerif-Italic.woff) format("woff"),url(/fonts/katex/KaTeX_SansSerif-Italic.ttf) format("truetype")}
+@font-face{font-display:block;font-family:"KaTeX_SansSerif";font-style:normal;font-weight:400;src:url(/fonts/katex/KaTeX_SansSerif-Regular.woff2) format("woff2"),url(/fonts/katex/KaTeX_SansSerif-Regular.woff) format("woff"),url(/fonts/katex/KaTeX_SansSerif-Regular.ttf) format("truetype")}
+@font-face{font-display:block;font-family:KaTeX_Script;font-style:normal;font-weight:400;src:url(/fonts/katex/KaTeX_Script-Regular.woff2) format("woff2"),url(/fonts/katex/KaTeX_Script-Regular.woff) format("woff"),url(/fonts/katex/KaTeX_Script-Regular.ttf) format("truetype")}
+@font-face{font-display:block;font-family:KaTeX_Size1;font-style:normal;font-weight:400;src:url(/fonts/katex/KaTeX_Size1-Regular.woff2) format("woff2"),url(/fonts/katex/KaTeX_Size1-Regular.woff) format("woff"),url(/fonts/katex/KaTeX_Size1-Regular.ttf) format("truetype")}
+@font-face{font-display:block;font-family:KaTeX_Size2;font-style:normal;font-weight:400;src:url(/fonts/katex/KaTeX_Size2-Regular.woff2) format("woff2"),url(/fonts/katex/KaTeX_Size2-Regular.woff) format("woff"),url(/fonts/katex/KaTeX_Size2-Regular.ttf) format("truetype")}
+@font-face{font-display:block;font-family:KaTeX_Size3;font-style:normal;font-weight:400;src:url(/fonts/katex/KaTeX_Size3-Regular.woff2) format("woff2"),url(/fonts/katex/KaTeX_Size3-Regular.woff) format("woff"),url(/fonts/katex/KaTeX_Size3-Regular.ttf) format("truetype")}
+@font-face{font-display:block;font-family:KaTeX_Size4;font-style:normal;font-weight:400;src:url(/fonts/katex/KaTeX_Size4-Regular.woff2) format("woff2"),url(/fonts/katex/KaTeX_Size4-Regular.woff) format("woff"),url(/fonts/katex/KaTeX_Size4-Regular.ttf) format("truetype")}
+@font-face{font-display:block;font-family:KaTeX_Typewriter;font-style:normal;font-weight:400;src:url(/fonts/katex/KaTeX_Typewriter-Regular.woff2) format("woff2"),url(/fonts/katex/KaTeX_Typewriter-Regular.woff) format("woff"),url(/fonts/katex/KaTeX_Typewriter-Regular.ttf) format("truetype")}
+
+/* ------------------------------ 打印覆盖 ------------------------------ */
+
+@page {
+  size: 210mm 297mm;
+  margin: 0;
+}
+
+@media print {
+  html, body { background: #ffffff; }
+  .op-doc { gap: 0; padding: 0; }
+  .op-page-wrap { width: auto; height: auto; }
+  .op-page {
+    transform: none;
+    box-shadow: none;
+    break-after: page;
+    page-break-after: always;
+  }
+  /* 末页不再换页，否则会多打一张空白纸 */
+  .op-page-wrap:last-child .op-page {
+    break-after: auto;
+    page-break-after: auto;
+  }
+}</style>
+</head>
+<body>
+<div class="op-doc"><div class="op-page-wrap"><div class="op-page" data-page="1"><div class="op-section op-header"><div class="op-node op-text" data-id="m-title" style="left:15mm;top:10mm;width:180mm;height:10mm;font-size:14pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">香叶醇（天然）</div></div><div class="op-content"><div class="op-section op-body"><div class="op-node op-text" data-id="h-title" style="left:80mm;top:10mm;width:50mm;height:10mm;font-size:16pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">附录:样本照片</div><div class="op-node op-image" data-id="appendix~0~card-img" style="left:18mm;top:33mm;width:44mm;height:22mm"><img src="/qqgroup.jpg" alt="" style="object-fit:contain"></div><div class="op-node op-text" data-id="appendix~0~card-no" style="left:18mm;top:56mm;width:10mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">1号</div><div class="op-node op-text" data-id="appendix~0~card-title" style="left:29mm;top:56mm;width:33mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">外观</div><div class="op-node op-image" data-id="appendix~1~card-img" style="left:71mm;top:33mm;width:44mm;height:22mm"><img src="/qqgroup.jpg" alt="" style="object-fit:contain"></div><div class="op-node op-text" data-id="appendix~1~card-no" style="left:71mm;top:56mm;width:10mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">2号</div><div class="op-node op-text" data-id="appendix~1~card-title" style="left:82mm;top:56mm;width:33mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">外观</div><div class="op-node op-image" data-id="appendix~2~card-img" style="left:124mm;top:33mm;width:44mm;height:22mm"><img src="/qqgroup.jpg" alt="" style="object-fit:contain"></div><div class="op-node op-text" data-id="appendix~2~card-no" style="left:124mm;top:56mm;width:10mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">3号</div><div class="op-node op-text" data-id="appendix~2~card-title" style="left:135mm;top:56mm;width:33mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">外观</div><div class="op-node op-image" data-id="appendix~3~card-img" style="left:18mm;top:71mm;width:44mm;height:22mm"><img src="/qqgroup.jpg" alt="" style="object-fit:contain"></div><div class="op-node op-text" data-id="appendix~3~card-no" style="left:18mm;top:94mm;width:10mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">4号</div><div class="op-node op-text" data-id="appendix~3~card-title" style="left:29mm;top:94mm;width:33mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">外观</div><div class="op-node op-image" data-id="appendix~4~card-img" style="left:71mm;top:71mm;width:44mm;height:22mm"><img src="/qqgroup.jpg" alt="" style="object-fit:contain"></div><div class="op-node op-text" data-id="appendix~4~card-no" style="left:71mm;top:94mm;width:10mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">5号</div><div class="op-node op-text" data-id="appendix~4~card-title" style="left:82mm;top:94mm;width:33mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">外观</div><div class="op-node op-image" data-id="appendix~5~card-img" style="left:124mm;top:71mm;width:44mm;height:22mm"><img src="/qqgroup.jpg" alt="" style="object-fit:contain"></div><div class="op-node op-text" data-id="appendix~5~card-no" style="left:124mm;top:94mm;width:10mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">6号</div><div class="op-node op-text" data-id="appendix~5~card-title" style="left:135mm;top:94mm;width:33mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">外观</div><div class="op-node op-image" data-id="appendix~6~card-img" style="left:18mm;top:109mm;width:44mm;height:22mm"><img src="/qqgroup.jpg" alt="" style="object-fit:contain"></div><div class="op-node op-text" data-id="appendix~6~card-no" style="left:18mm;top:132mm;width:10mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">7号</div><div class="op-node op-text" data-id="appendix~6~card-title" style="left:29mm;top:132mm;width:33mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">外观</div><div class="op-node op-image" data-id="appendix~7~card-img" style="left:71mm;top:109mm;width:44mm;height:22mm"><img src="/qqgroup.jpg" alt="" style="object-fit:contain"></div><div class="op-node op-text" data-id="appendix~7~card-no" style="left:71mm;top:132mm;width:10mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">8号</div><div class="op-node op-text" data-id="appendix~7~card-title" style="left:82mm;top:132mm;width:33mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">外观</div><div class="op-node op-image" data-id="appendix~8~card-img" style="left:124mm;top:109mm;width:44mm;height:22mm"><img src="/qqgroup.jpg" alt="" style="object-fit:contain"></div><div class="op-node op-text" data-id="appendix~8~card-no" style="left:124mm;top:132mm;width:10mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">9号</div><div class="op-node op-text" data-id="appendix~8~card-title" style="left:135mm;top:132mm;width:33mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">外观</div><div class="op-node op-image" data-id="appendix~9~card-img" style="left:18mm;top:147mm;width:44mm;height:22mm"><img src="/qqgroup.jpg" alt="" style="object-fit:contain"></div><div class="op-node op-text" data-id="appendix~9~card-no" style="left:18mm;top:170mm;width:10mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">10号</div><div class="op-node op-text" data-id="appendix~9~card-title" style="left:29mm;top:170mm;width:33mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">外观</div><div class="op-node op-image" data-id="appendix~10~card-img" style="left:71mm;top:147mm;width:44mm;height:22mm"><img src="/qqgroup.jpg" alt="" style="object-fit:contain"></div><div class="op-node op-text" data-id="appendix~10~card-no" style="left:71mm;top:170mm;width:10mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">11号</div><div class="op-node op-text" data-id="appendix~10~card-title" style="left:82mm;top:170mm;width:33mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">外观</div><div class="op-node op-image" data-id="appendix~11~card-img" style="left:124mm;top:147mm;width:44mm;height:22mm"><img src="/qqgroup.jpg" alt="" style="object-fit:contain"></div><div class="op-node op-text" data-id="appendix~11~card-no" style="left:124mm;top:170mm;width:10mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">12号</div><div class="op-node op-text" data-id="appendix~11~card-title" style="left:135mm;top:170mm;width:33mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">外观</div><div class="op-node op-image" data-id="appendix~12~card-img" style="left:18mm;top:185mm;width:44mm;height:22mm"><img src="/qqgroup.jpg" alt="" style="object-fit:contain"></div><div class="op-node op-text" data-id="appendix~12~card-no" style="left:18mm;top:208mm;width:10mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">13号</div><div class="op-node op-text" data-id="appendix~12~card-title" style="left:29mm;top:208mm;width:33mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">外观</div><div class="op-node op-image" data-id="appendix~13~card-img" style="left:71mm;top:185mm;width:44mm;height:22mm"><img src="/qqgroup.jpg" alt="" style="object-fit:contain"></div><div class="op-node op-text" data-id="appendix~13~card-no" style="left:71mm;top:208mm;width:10mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">14号</div><div class="op-node op-text" data-id="appendix~13~card-title" style="left:82mm;top:208mm;width:33mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">外观</div><div class="op-node op-image" data-id="appendix~14~card-img" style="left:124mm;top:185mm;width:44mm;height:22mm"><img src="/qqgroup.jpg" alt="" style="object-fit:contain"></div><div class="op-node op-text" data-id="appendix~14~card-no" style="left:124mm;top:208mm;width:10mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">15号</div><div class="op-node op-text" data-id="appendix~14~card-title" style="left:135mm;top:208mm;width:33mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">外观</div><div class="op-node op-image" data-id="appendix~15~card-img" style="left:18mm;top:223mm;width:44mm;height:22mm"><img src="/qqgroup.jpg" alt="" style="object-fit:contain"></div><div class="op-node op-text" data-id="appendix~15~card-no" style="left:18mm;top:246mm;width:10mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">16号</div><div class="op-node op-text" data-id="appendix~15~card-title" style="left:29mm;top:246mm;width:33mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">外观</div><div class="op-node op-image" data-id="appendix~16~card-img" style="left:71mm;top:223mm;width:44mm;height:22mm"><img src="/qqgroup.jpg" alt="" style="object-fit:contain"></div><div class="op-node op-text" data-id="appendix~16~card-no" style="left:71mm;top:246mm;width:10mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">17号</div><div class="op-node op-text" data-id="appendix~16~card-title" style="left:82mm;top:246mm;width:33mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">外观</div><div class="op-node op-image" data-id="appendix~17~card-img" style="left:124mm;top:223mm;width:44mm;height:22mm"><img src="/qqgroup.jpg" alt="" style="object-fit:contain"></div><div class="op-node op-text" data-id="appendix~17~card-no" style="left:124mm;top:246mm;width:10mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">18号</div><div class="op-node op-text" data-id="appendix~17~card-title" style="left:135mm;top:246mm;width:33mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">外观</div><div class="op-node op-image" data-id="appendix~18~card-img" style="left:18mm;top:261mm;width:44mm;height:22mm"><img src="/qqgroup.jpg" alt="" style="object-fit:contain"></div><div class="op-node op-text" data-id="appendix~18~card-no" style="left:18mm;top:284mm;width:10mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">19号</div><div class="op-node op-text" data-id="appendix~18~card-title" style="left:29mm;top:284mm;width:33mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">外观</div><div class="op-node op-image" data-id="appendix~19~card-img" style="left:71mm;top:261mm;width:44mm;height:22mm"><img src="/qqgroup.jpg" alt="" style="object-fit:contain"></div><div class="op-node op-text" data-id="appendix~19~card-no" style="left:71mm;top:284mm;width:10mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">20号</div><div class="op-node op-text" data-id="appendix~19~card-title" style="left:82mm;top:284mm;width:33mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">外观</div><div class="op-node op-image" data-id="appendix~20~card-img" style="left:124mm;top:261mm;width:44mm;height:22mm"><img src="data:image/svg+xml;utf8,&lt;svg xmlns=&quot;http://www.w3.org/2000/svg&quot; width=&quot;200&quot; height=&quot;150&quot; viewBox=&quot;0 0 200 150&quot;&gt;&lt;rect width=&quot;200&quot; height=&quot;150&quot; fill=&quot;%23fce4ec&quot;/&gt;&lt;circle cx=&quot;100&quot; cy=&quot;75&quot; r=&quot;40&quot; fill=&quot;%23e91e63&quot; opacity=&quot;0.7&quot;/&gt;&lt;text x=&quot;100&quot; y=&quot;135&quot; font-family=&quot;sans-serif&quot; font-size=&quot;14&quot; fill=&quot;%23880e4f&quot; text-anchor=&quot;middle&quot;&gt;Sample 02 · 香气&lt;/text&gt;&lt;/svg&gt;" alt="" style="object-fit:contain"></div><div class="op-node op-text" data-id="appendix~20~card-no" style="left:124mm;top:284mm;width:10mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">21号</div><div class="op-node op-text" data-id="appendix~20~card-title" style="left:135mm;top:284mm;width:33mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">香气</div></div><div class="op-gridlines"><div class="op-gridline" style="left:15mm;top:30mm;width:50mm;height:35mm;border:1px dashed rgba(37,99,235,0.5);box-sizing:border-box;pointer-events:none"></div><div class="op-gridline" style="left:68mm;top:30mm;width:50mm;height:35mm;border:1px dashed rgba(37,99,235,0.5);box-sizing:border-box;pointer-events:none"></div><div class="op-gridline" style="left:121mm;top:30mm;width:50mm;height:35mm;border:1px dashed rgba(37,99,235,0.5);box-sizing:border-box;pointer-events:none"></div><div class="op-gridline" style="left:15mm;top:68mm;width:50mm;height:35mm;border:1px dashed rgba(37,99,235,0.5);box-sizing:border-box;pointer-events:none"></div><div class="op-gridline" style="left:68mm;top:68mm;width:50mm;height:35mm;border:1px dashed rgba(37,99,235,0.5);box-sizing:border-box;pointer-events:none"></div><div class="op-gridline" style="left:121mm;top:68mm;width:50mm;height:35mm;border:1px dashed rgba(37,99,235,0.5);box-sizing:border-box;pointer-events:none"></div><div class="op-gridline" style="left:15mm;top:106mm;width:50mm;height:35mm;border:1px dashed rgba(37,99,235,0.5);box-sizing:border-box;pointer-events:none"></div><div class="op-gridline" style="left:68mm;top:106mm;width:50mm;height:35mm;border:1px dashed rgba(37,99,235,0.5);box-sizing:border-box;pointer-events:none"></div><div class="op-gridline" style="left:121mm;top:106mm;width:50mm;height:35mm;border:1px dashed rgba(37,99,235,0.5);box-sizing:border-box;pointer-events:none"></div><div class="op-gridline" style="left:15mm;top:144mm;width:50mm;height:35mm;border:1px dashed rgba(37,99,235,0.5);box-sizing:border-box;pointer-events:none"></div><div class="op-gridline" style="left:68mm;top:144mm;width:50mm;height:35mm;border:1px dashed rgba(37,99,235,0.5);box-sizing:border-box;pointer-events:none"></div><div class="op-gridline" style="left:121mm;top:144mm;width:50mm;height:35mm;border:1px dashed rgba(37,99,235,0.5);box-sizing:border-box;pointer-events:none"></div><div class="op-gridline" style="left:15mm;top:182mm;width:50mm;height:35mm;border:1px dashed rgba(37,99,235,0.5);box-sizing:border-box;pointer-events:none"></div><div class="op-gridline" style="left:68mm;top:182mm;width:50mm;height:35mm;border:1px dashed rgba(37,99,235,0.5);box-sizing:border-box;pointer-events:none"></div><div class="op-gridline" style="left:121mm;top:182mm;width:50mm;height:35mm;border:1px dashed rgba(37,99,235,0.5);box-sizing:border-box;pointer-events:none"></div><div class="op-gridline" style="left:15mm;top:220mm;width:50mm;height:35mm;border:1px dashed rgba(37,99,235,0.5);box-sizing:border-box;pointer-events:none"></div><div class="op-gridline" style="left:68mm;top:220mm;width:50mm;height:35mm;border:1px dashed rgba(37,99,235,0.5);box-sizing:border-box;pointer-events:none"></div><div class="op-gridline" style="left:121mm;top:220mm;width:50mm;height:35mm;border:1px dashed rgba(37,99,235,0.5);box-sizing:border-box;pointer-events:none"></div><div class="op-gridline" style="left:15mm;top:258mm;width:50mm;height:35mm;border:1px dashed rgba(37,99,235,0.5);box-sizing:border-box;pointer-events:none"></div><div class="op-gridline" style="left:68mm;top:258mm;width:50mm;height:35mm;border:1px dashed rgba(37,99,235,0.5);box-sizing:border-box;pointer-events:none"></div><div class="op-gridline" style="left:121mm;top:258mm;width:50mm;height:35mm;border:1px dashed rgba(37,99,235,0.5);box-sizing:border-box;pointer-events:none"></div><div class="op-gridline" style="left:15mm;top:30mm;width:156mm;height:263mm;border:1px dashed rgba(37,99,235,0.5);box-sizing:border-box;pointer-events:none"></div></div></div><div class="op-section op-footer"></div></div></div><div class="op-page-wrap"><div class="op-page" data-page="2"><div class="op-section op-header"><div class="op-node op-text" data-id="m-title" style="left:15mm;top:10mm;width:180mm;height:10mm;font-size:14pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">香叶醇（天然）</div></div><div class="op-content"><div class="op-section op-body"><div class="op-node op-image" data-id="appendix~21~card-img" style="left:18mm;top:3mm;width:44mm;height:22mm"><img src="data:image/svg+xml;utf8,&lt;svg xmlns=&quot;http://www.w3.org/2000/svg&quot; width=&quot;200&quot; height=&quot;150&quot; viewBox=&quot;0 0 200 150&quot;&gt;&lt;rect width=&quot;200&quot; height=&quot;150&quot; fill=&quot;%23e3f2fd&quot;/&gt;&lt;rect x=&quot;40&quot; y=&quot;40&quot; width=&quot;120&quot; height=&quot;70&quot; fill=&quot;%232196f3&quot; opacity=&quot;0.6&quot;/&gt;&lt;text x=&quot;100&quot; y=&quot;135&quot; font-family=&quot;sans-serif&quot; font-size=&quot;14&quot; fill=&quot;%230d47a1&quot; text-anchor=&quot;middle&quot;&gt;Sample 03 · 密度&lt;/text&gt;&lt;/svg&gt;" alt="" style="object-fit:contain"></div><div class="op-node op-text" data-id="appendix~21~card-no" style="left:18mm;top:26mm;width:10mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">22号</div><div class="op-node op-text" data-id="appendix~21~card-title" style="left:29mm;top:26mm;width:33mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">相对密度 (20°C)</div><div class="op-node op-image" data-id="appendix~22~card-img" style="left:71mm;top:3mm;width:44mm;height:22mm"><img src="data:image/svg+xml;utf8,&lt;svg xmlns=&quot;http://www.w3.org/2000/svg&quot; width=&quot;200&quot; height=&quot;150&quot; viewBox=&quot;0 0 200 150&quot;&gt;&lt;rect width=&quot;200&quot; height=&quot;150&quot; fill=&quot;%23e8f5e9&quot;/&gt;&lt;polygon points=&quot;100,30 170,120 30,120&quot; fill=&quot;%234caf50&quot; opacity=&quot;0.6&quot;/&gt;&lt;text x=&quot;100&quot; y=&quot;135&quot; font-family=&quot;sans-serif&quot; font-size=&quot;14&quot; fill=&quot;%231b5e20&quot; text-anchor=&quot;middle&quot;&gt;Sample 04 · 折光&lt;/text&gt;&lt;/svg&gt;" alt="" style="object-fit:contain"></div><div class="op-node op-text" data-id="appendix~22~card-no" style="left:71mm;top:26mm;width:10mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">23号</div><div class="op-node op-text" data-id="appendix~22~card-title" style="left:82mm;top:26mm;width:33mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">折光指数 (20°C)</div><div class="op-node op-image" data-id="appendix~23~card-img" style="left:124mm;top:3mm;width:44mm;height:22mm"><img src="data:image/svg+xml;utf8,&lt;svg xmlns=&quot;http://www.w3.org/2000/svg&quot; width=&quot;200&quot; height=&quot;150&quot; viewBox=&quot;0 0 200 150&quot;&gt;&lt;rect width=&quot;200&quot; height=&quot;150&quot; fill=&quot;%23fff3e0&quot;/&gt;&lt;path d=&quot;M 40 110 A 60 60 0 0 1 160 110&quot; stroke=&quot;%23ff9800&quot; stroke-width=&quot;8&quot; fill=&quot;none&quot; opacity=&quot;0.7&quot;/&gt;&lt;line x1=&quot;100&quot; y1=&quot;50&quot; x2=&quot;100&quot; y2=&quot;110&quot; stroke=&quot;%23e65100&quot; stroke-width=&quot;3&quot;/&gt;&lt;text x=&quot;100&quot; y=&quot;135&quot; font-family=&quot;sans-serif&quot; font-size=&quot;14&quot; fill=&quot;%23e65100&quot; text-anchor=&quot;middle&quot;&gt;Sample 05 · 旋光&lt;/text&gt;&lt;/svg&gt;" alt="" style="object-fit:contain"></div><div class="op-node op-text" data-id="appendix~23~card-no" style="left:124mm;top:26mm;width:10mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">24号</div><div class="op-node op-text" data-id="appendix~23~card-title" style="left:135mm;top:26mm;width:33mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">旋光度 (20°C)</div><div class="op-node op-image" data-id="appendix~24~card-img" style="left:18mm;top:41mm;width:44mm;height:22mm"><img src="data:image/svg+xml;utf8,&lt;svg xmlns=&quot;http://www.w3.org/2000/svg&quot; width=&quot;200&quot; height=&quot;150&quot; viewBox=&quot;0 0 200 150&quot;&gt;&lt;rect width=&quot;200&quot; height=&quot;150&quot; fill=&quot;%23f3e5f5&quot;/&gt;&lt;circle cx=&quot;70&quot; cy=&quot;80&quot; r=&quot;35&quot; fill=&quot;%239c27b0&quot; opacity=&quot;0.5&quot;/&gt;&lt;circle cx=&quot;130&quot; cy=&quot;80&quot; r=&quot;35&quot; fill=&quot;%23ba68c8&quot; opacity=&quot;0.5&quot;/&gt;&lt;text x=&quot;100&quot; y=&quot;135&quot; font-family=&quot;sans-serif&quot; font-size=&quot;14&quot; fill=&quot;%234a148c&quot; text-anchor=&quot;middle&quot;&gt;Sample 06 · 溶解&lt;/text&gt;&lt;/svg&gt;" alt="" style="object-fit:contain"></div><div class="op-node op-text" data-id="appendix~24~card-no" style="left:18mm;top:64mm;width:10mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">25号</div><div class="op-node op-text" data-id="appendix~24~card-title" style="left:29mm;top:64mm;width:33mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">溶解度 (25°C)</div><div class="op-node op-image" data-id="appendix~25~card-img" style="left:71mm;top:41mm;width:44mm;height:22mm"><img src="data:image/svg+xml;utf8,&lt;svg xmlns=&quot;http://www.w3.org/2000/svg&quot; width=&quot;200&quot; height=&quot;150&quot; viewBox=&quot;0 0 200 150&quot;&gt;&lt;rect width=&quot;200&quot; height=&quot;150&quot; fill=&quot;%23e0f7fa&quot;/&gt;&lt;rect x=&quot;30&quot; y=&quot;100&quot; width=&quot;20&quot; height=&quot;30&quot; fill=&quot;%2300bcd4&quot;/&gt;&lt;rect x=&quot;60&quot; y=&quot;60&quot; width=&quot;20&quot; height=&quot;70&quot; fill=&quot;%2300bcd4&quot;/&gt;&lt;rect x=&quot;90&quot; y=&quot;40&quot; width=&quot;20&quot; height=&quot;90&quot; fill=&quot;%2300bcd4&quot;/&gt;&lt;rect x=&quot;120&quot; y=&quot;80&quot; width=&quot;20&quot; height=&quot;50&quot; fill=&quot;%2300bcd4&quot;/&gt;&lt;rect x=&quot;150&quot; y=&quot;70&quot; width=&quot;20&quot; height=&quot;60&quot; fill=&quot;%2300bcd4&quot;/&gt;&lt;text x=&quot;100&quot; y=&quot;30&quot; font-family=&quot;sans-serif&quot; font-size=&quot;14&quot; fill=&quot;%23006064&quot; text-anchor=&quot;middle&quot;&gt;GC 99.2%&lt;/text&gt;&lt;/svg&gt;" alt="" style="object-fit:contain"></div><div class="op-node op-text" data-id="appendix~25~card-no" style="left:71mm;top:64mm;width:10mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">26号</div><div class="op-node op-text" data-id="appendix~25~card-title" style="left:82mm;top:64mm;width:33mm;height:6mm;font-size:9pt;color:#000000;font-family:&quot;Source Han Sans CN&quot;, &quot;PingFang SC&quot;, sans-serif;font-weight:normal;font-style:normal;text-decoration:none;text-align:left;line-height:1.16">含量 (GC)</div></div><div class="op-gridlines"><div class="op-gridline" style="left:15mm;top:0mm;width:50mm;height:35mm;border:1px dashed rgba(37,99,235,0.5);box-sizing:border-box;pointer-events:none"></div><div class="op-gridline" style="left:68mm;top:0mm;width:50mm;height:35mm;border:1px dashed rgba(37,99,235,0.5);box-sizing:border-box;pointer-events:none"></div><div class="op-gridline" style="left:121mm;top:0mm;width:50mm;height:35mm;border:1px dashed rgba(37,99,235,0.5);box-sizing:border-box;pointer-events:none"></div><div class="op-gridline" style="left:15mm;top:38mm;width:50mm;height:35mm;border:1px dashed rgba(37,99,235,0.5);box-sizing:border-box;pointer-events:none"></div><div class="op-gridline" style="left:68mm;top:38mm;width:50mm;height:35mm;border:1px dashed rgba(37,99,235,0.5);box-sizing:border-box;pointer-events:none"></div><div class="op-gridline" style="left:15mm;top:0mm;width:156mm;height:73mm;border:1px dashed rgba(37,99,235,0.5);box-sizing:border-box;pointer-events:none"></div></div></div><div class="op-section op-footer"></div></div></div></div>
+
+</body>
+</html>

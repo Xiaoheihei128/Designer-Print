@@ -250,8 +250,19 @@ export function expandLabelGrids(
     // 总卡片数：配置了逐卡数据源 → 跟随数据条数（每数据一条卡，跨页自洽）；
     // 否则 = 列数 × 行数（行数由容器高度推导）纯布局平铺
     const totalRows = Math.max(1, visibleCardRows(control.height ?? 0, geo))
-    const total = dataCount > 0 ? dataCount : geo.columns * totalRows
+    const naturalTotal = dataCount > 0 ? dataCount : geo.columns * totalRows
+    // ★ maxItems 钳制:只在 dataCount > 0 分支生效,纯布局不受影响
+    const total = control.maxItems && control.maxItems > 0
+      ? Math.min(naturalTotal, control.maxItems)
+      : naturalTotal
     if (total <= 0) continue
+    if (control.maxItems && control.maxItems > 0 && naturalTotal > total) {
+      warnings.push({
+        code: 'LABEL_GRID_TRUNCATED',
+        message: `标签网格渲染上限 ${control.maxItems} 项,实际数据 ${naturalTotal} 条,已截断`,
+        controlId: control.id,
+      })
+    }
 
     const showLines = control.showLines !== false
     const solid = control.lineStyle !== 'dashed'
@@ -259,6 +270,12 @@ export function expandLabelGrids(
     /** 某页可用高度能放几行卡片 */
     const rowCapacity = (avail: number): number =>
       stepY <= 0 ? 1 : Math.max(0, Math.floor((avail + gapY) / stepY))
+
+    // ★ appendixTitle:每页在 grid 起点上方贴一个 TextControl。
+    // 不占 grid 内空间、不进 pageRanges(容器边框仍紧贴卡片首行,与原本一致)。
+    const titleText = control.appendixTitle?.text?.trim() ?? ''
+    const showTitle = !!titleText
+    const titleHeight = 6 // mm,与 TextControl 默认一致
 
     let pageIndex = 0
     let originTop = gridTop
@@ -280,12 +297,14 @@ export function expandLabelGrids(
     if (control.mode === 'appendix' && hint) {
       pageIndex = hint.pageIndex
       originTop = hint.originTop
+      // title 占据 zoneTop 之上的 titleHeight mm,卡片起点从 hint.originTop + titleHeight 起
+      if (showTitle) originTop += titleHeight
       capacity = rowCapacity(usablePerPage - (originTop - zoneTop))
     } else if (capacity <= 0) {
       // 首页从网格 top 起放不下一整行 → 整体下移到下一页顶部(从页眉下方)
       pageIndex = 1
-      originTop = zoneTop
-      capacity = rowCapacity(usablePerPage)
+      originTop = zoneTop + (showTitle ? titleHeight : 0)
+      capacity = rowCapacity(usablePerPage - (showTitle ? titleHeight : 0))
     }
     // ★ 分页策略 (Step 2 三态):
     //   - 'always':强制把网格整组推到下一页顶部(等同老 forceNewPage=true)
@@ -297,8 +316,8 @@ export function expandLabelGrids(
     if (control.mode === 'appendix' && effectivePageBreak === 'always' && !hint) {
       const currentPageIndex = Math.floor(gridTop / bodyStep)
       pageIndex = currentPageIndex + 1
-      originTop = zoneTop
-      capacity = rowCapacity(usablePerPage)
+      originTop = zoneTop + (showTitle ? titleHeight : 0)
+      capacity = rowCapacity(usablePerPage - (showTitle ? titleHeight : 0))
     }
     if (capacity <= 0) {
       capacity = 1
@@ -323,8 +342,8 @@ export function expandLabelGrids(
       if (requiredHeight > availableHeight + 0.5) {
         const currentPageIndex = Math.floor(gridTop / bodyStep)
         pageIndex = currentPageIndex + 1
-        originTop = zoneTop
-        capacity = rowCapacity(usablePerPage)
+        originTop = zoneTop + (showTitle ? titleHeight : 0)
+        capacity = rowCapacity(usablePerPage - (showTitle ? titleHeight : 0))
       }
     }
 
@@ -336,14 +355,47 @@ export function expandLabelGrids(
     // 不能用 gridHeight(只是「行数估算参考」,数据展开后实际更高)
     const pageRanges = new Map<number, { top: number; bottom: number }>()
 
+    // ★ appendixTitle:首页/起始页贴一个 TextControl,top 在 zoneTop 处,
+    // height=titleHeight,不进 pageRanges(容器边框仍紧贴卡片首行,与原本一致)。
+    if (showTitle) {
+      out.push({
+        id: `${control.id}~title~${pageIndex}`,
+        type: 'text',
+        left: gridLeft,
+        top: pageIndex * bodyStep + zoneTop,
+        width: gridWidth,
+        height: titleHeight,
+        contentType: 'fixed',
+        value: titleText,
+        style: control.appendixTitle?.style,
+        childOf: control.id,
+      } as AnyControl)
+    }
+
     while (cardIndex < total) {
       if (rowOnPage >= capacity) {
         pageIndex++
         rowOnPage = 0
         // ★ 关键修复:grid 跨页时新页 originTop 必须 = zoneTop(页眉下方),
         // 不能从 page 顶部 0 起(否则 grid 卡片覆盖每页重复的页眉)。
-        originTop = zoneTop
-        capacity = Math.max(1, rowCapacity(usablePerPage))
+        // title 占据 zoneTop 之上的 titleHeight mm,卡片起点下移
+        originTop = zoneTop + (showTitle ? titleHeight : 0)
+        capacity = Math.max(1, rowCapacity(usablePerPage - (showTitle ? titleHeight : 0)))
+        // ★ 跨页重复 title(默认 titleRepeat=true;false 时跳过)
+        if (showTitle && control.titleRepeat !== false) {
+          out.push({
+            id: `${control.id}~title~${pageIndex}`,
+            type: 'text',
+            left: gridLeft,
+            top: pageIndex * bodyStep + zoneTop,
+            width: gridWidth,
+            height: titleHeight,
+            contentType: 'fixed',
+            value: titleText,
+            style: control.appendixTitle?.style,
+            childOf: control.id,
+          } as AnyControl)
+        }
       }
       if (pageIndex >= maxPages) {
         truncated = true
