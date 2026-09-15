@@ -1023,17 +1023,40 @@ export async function layout(
       | { kind: 'text'; control: AnyControl; designTop: number }
       | { kind: 'grid'; lc: LabelGridControl; designTop: number }
     const phaseStream: PhaseItem[] = []
+    // ★ bug A/B 修复 (multi-flow):多表场景下,phase 1 phaseStream 的 cursor 只锚到
+    //   t1 真实末底,不感知中间还有 t2。如果把「位于最后一张 ft 下方」的 text/grid 也
+    //   让 phase 1 处理,会按 t1.realBottom + designGap 放,落在 t2 体内造成重叠。
+    //   正确归属:这些控件应该让 multi-flow phase「最后一张 ft 的 phase」用「最后一张
+    //   ft 的真实末底 + (设计 top - 最后一张 ft 的 userBottom)」放置 —— 也就是
+    //   multi-flow phase loop 已经实现的逻辑(下面 line 1422 的 cDesignGap = top - ftUserBottom
+    //   其中 ftUserBottom=该 phase 对应 ft 的 userBottom,phaseCursorAbsBottom = 该 ft 真实末底)。
+    //   判定:flowTables.length>1 && designTop >= lastFt.userBottom → defer(让下面 multi-flow 处理)。
+    //   - single-table 场景 lastFtUserBottom=0 → 不 defer,行为零回归。
+    //   - multi-flow 场景中,「位于中间表之间」(nextFtUserTop 之内)的 text/grid 仍走 phase 1,
+    //     由 cursor = t1.realBottom + designGap 处理(与单表语义一致:放在 t1 末底 + gap)。
+    const lastFtUserBottom = flowTables.length > 1
+      ? flowTables.reduce(
+          (m, ft) => Math.max(m, toMm(ft.top, unit) + toMm(ft.height, unit)),
+          0,
+        )
+      : 0
     // 1) text/image 控件:从 plan.below 取,跳过 grid 子控件 + table(static table / 后续 flow table 不入流)
     for (const c of plan.below) {
       if (c.type === 'zone') continue
       if (gridChildIds.has(c.id)) continue  // grid 子控件由 placeAppendixGrid 重新展开
       if (c.type === 'labelgrid') continue  // 防御性:plan.below 里不会有,但跳过以防
       if (c.type === 'table') continue  // static table / 后续 flow table 由 belowStatic / multi-flow 处理
-      phaseStream.push({ kind: 'text', control: c, designTop: toMm(c.top, unit) })
+      const cTop = toMm(c.top, unit)
+      // ★ defer 到 multi-flow 最后阶段(对应最后一张 ft)
+      if (flowTables.length > 1 && cTop >= lastFtUserBottom - EPS) continue
+      phaseStream.push({ kind: 'text', control: c, designTop: cTop })
     }
     // 2) appendix grid:从 appendixBelow 取(已按 lc.top >= userTableBottom 过滤)
     for (const lc of appendixBelow) {
-      phaseStream.push({ kind: 'grid', lc, designTop: toMm(lc.top, unit) })
+      const lcTop = toMm(lc.top, unit)
+      // ★ defer 到 multi-flow 最后阶段(对应最后一张 ft),与 text defer 同语义
+      if (flowTables.length > 1 && lcTop >= lastFtUserBottom - EPS) continue
+      phaseStream.push({ kind: 'grid', lc, designTop: lcTop })
     }
     phaseStream.sort((a, b) => a.designTop - b.designTop)
 
@@ -1280,7 +1303,21 @@ export async function layout(
     // 这里要剔除避免与 multi-flow 重复处理。
     // 收集 plan.below 里的 text/image 控件 —— 它们已被第 1 张 ft 的 below-stream 处理。
     const processedBelowIds = new Set<string>()
-    for (const { control } of belowOffsets) processedBelowIds.add(control.id)
+    // ★ bug A/B 修复:「位于最后一张 ft 下方」的 text/grid 在 phase 1 phaseStream 阶段被
+    //   defer(让 multi-flow 最后阶段处理)。这些 deferred 控件不在 phase 1 phaseStream 的
+    //   belowOffsets(已放置列表)中,但 belowOffsets 是从 sortedTextFlow 直接 map 出来的,
+    //   包含全部 text/image 控件 —— 所以不能直接把 belowOffsets 全部塞进 processedBelowIds,
+    //   否则 multi-flow 阶段会把 deferred 控件 filter 掉,导致永远不被放置。
+    //   解决:deferred 控件不进 processedBelowIds,让 multi-flow 阶段正常接管。
+    const multiLastFtUserBottom = flowTables.reduce(
+      (m, ft) => Math.max(m, toMm(ft.top, unit) + toMm(ft.height, unit)),
+      0,
+    )
+    for (const { control } of belowOffsets) {
+      const cTop = toMm(control.top, unit)
+      if (cTop >= multiLastFtUserBottom - EPS) continue  // deferred,让 multi-flow 接管
+      processedBelowIds.add(control.id)
+    }
     for (const t of plan.below) {
       if (t.type === 'table' && t.id !== table.id) {
         processedBelowIds.add(t.id)  // static tables 已通过 belowStatic 处理
@@ -1292,8 +1329,23 @@ export async function layout(
     let prevLastBottomRel = skeleton.lastBottom
 
     // 第一阶段已处理的 appendixBelow 的 grid id 集合(避免 multi-flow 重复处理)
+    // ★ bug A/B 修复:与 text 同语义 —— 「位于最后一张 ft 下方」的 appendix grid 在
+    //   phase 1 phaseStream 阶段被 defer,不应算「第一阶段已处理」,让 multi-flow 接管。
     const firstPhaseGridIds = new Set<string>()
-    for (const lc of appendixBelow) firstPhaseGridIds.add(lc.id)
+    for (const lc of appendixBelow) {
+      if (toMm(lc.top, unit) >= multiLastFtUserBottom - EPS) continue  // deferred
+      firstPhaseGridIds.add(lc.id)
+    }
+
+    // ★ bug C 修复:派生所有 grid 子控件 id(无论 appendix / standard,无论第一阶段
+    //   处理与否)。multi-flow phaseTextStream 必须排除这些子控件,否则入口展开的
+    //   grid 子控件会与 placeAppendixGrid 重新展开的子控件重复 pushNode 两次
+    //   (用户截图反馈的「斜着重复渲染」)。
+    const allGridChildIds = new Set<string>()
+    for (const c of bodyComponents) {
+      const co = (c as { childOf?: string }).childOf
+      if (co && expansion.originalGrids.has(co)) allGridChildIds.add(c.id)
+    }
 
     for (let phaseIdx = 1; phaseIdx < flowTables.length; phaseIdx++) {
       const ft = flowTables[phaseIdx]!
@@ -1337,6 +1389,7 @@ export async function layout(
       const phaseTextStream = bodyComponents
         .filter((c) => {
           if (processedBelowIds.has(c.id)) return false
+          if (allGridChildIds.has(c.id)) return false  // ★ bug C 修复:grid 子控件由 placeAppendixGrid 处理
           if (c.type === 'table') return false  // 后续 ft 由下一阶段处理,这里只放 text/image
           if (c.type === 'zone' || c.type === 'labelgrid') return false
           const top = toMm(c.top, unit)
