@@ -27,7 +27,6 @@ import {
   NRadioButton,
   NRadioGroup,
   NSelect,
-  NSwitch,
   NTag,
 } from 'naive-ui'
 import type { CellFormat, LabelGridControl, Segment } from '@op/types/control'
@@ -663,7 +662,16 @@ function onExprConfirm(snippet: string): void {
                 label=""
                 @change="(v) => onSegDisplaySubChange(i, { scaleFactor: v })"
               />
-              <!-- PR-A:barcode/image 宽/高/锁定比例 -->
+              <!--
+                ★ PR-A:barcode/image 宽/高/锁定比例
+                锁比 NSwitch 在 cell 段级工具栏中删除(用户决策 2026-09-16):
+                - 显示位置在 [高] 按钮右侧,小蓝框 + 「自由」字样的样子视觉上像缩略图占位,
+                  用户多次反馈"把那个缩略图砍掉"
+                - 锁比语义对 cell 段级不强(段级用户更关心 width/height 直接控制,
+                  是否锁比对运行期渲染影响很小,常默认关闭)
+                - 锁比仍保留在 control.ts 类型 + top-level CodeProps 面板(段外层),
+                  高级用户可去那里打开
+              -->
               <template v-else>
                 <NInputNumber
                   size="tiny"
@@ -683,14 +691,6 @@ function onExprConfirm(snippet: string): void {
                   placeholder="高 mm"
                   @update:value="(v) => onSegDisplaySubChange(i, { heightMm: v ?? undefined })"
                 />
-                <NSwitch
-                  size="tiny"
-                  :value="seg.format?.display?.lockRatio ?? false"
-                  @update:value="onSegDisplaySubChange(i, { lockRatio: $event })"
-                >
-                  <template #checked>锁比</template>
-                  <template #unchecked>自由</template>
-                </NSwitch>
               </template>
             </template>
           </template>
