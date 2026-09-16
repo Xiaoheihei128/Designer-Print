@@ -3,7 +3,7 @@
  * 设计期用绑定路径占位文本渲染，运行期由渲染引擎注入真实值。
  */
 import { FabricImage } from 'fabric'
-import type { BarcodeControl, Segment } from '@op/types/control'
+import type { BarcodeControl, Segment, SegmentDisplayOpts } from '@op/types/control'
 import { mm, px, readBaseGeometry, type IPrintObject } from './PrintObject'
 import { drawBarcode } from '../barcode-draw'
 
@@ -23,6 +23,8 @@ export class PrintBarcode extends FabricImage implements IPrintObject {
   contentType?: 'fixed' | 'variable' | 'expression'
   format = 'CODE128'
   showText = true
+  /** ★ PR-D:用户调尺寸字段 */
+  display?: SegmentDisplayOpts
 
   constructor(control: BarcodeControl) {
     super(document.createElement('canvas'), {
@@ -43,6 +45,8 @@ export class PrintBarcode extends FabricImage implements IPrintObject {
     this.printable = control.printable ?? true
     this.visibleIf = control.visibleIf
     this.controlName = control.name
+    // ★ PR-D:display 持久化
+    this.display = control.display
     // 初始尺寸（未缩放），regenerate 会按它换算 scale
     this.set({ width: mm(control.width), height: mm(control.height) })
     void this.regenerate()
@@ -61,22 +65,27 @@ export class PrintBarcode extends FabricImage implements IPrintObject {
     return this.textValue ?? (this.binding ? `{{${this.binding}}}` : undefined)
   }
 
-  /** 重新渲染条码位图，并按控件几何缩放显示 */
+  /** 重新渲染条码位图，并按控件几何缩放显示
+   *
+   * ★ PR-D:display.widthMm/heightMm 优先(用户在 properties panel 调过的尺寸);
+   *   未设时退化到 control.width/height(老模板行为)。
+   */
   async regenerate(): Promise<void> {
-    const w = this.width || 1
-    const h = this.height || 1
     const text = this.displayValue() ?? '0123456789'
     // 绑定占位符含中文/大括号无法编码，设计期用示例码代替
     const encodable = /[{}\u4e00-\u9fa5]/.test(text) ? 'DEMO123456' : text
+    // \u2605 PR-D:display \u4f18\u5148 \u2192 control.width/height \u515c\u5e95(px \u53cd\u63a8 mm)
+    const wMm = this.display?.widthMm ?? px(this.width || 1)
+    const hMm = this.display?.heightMm ?? px(this.height || 1)
     // 按控件几何反算条码条高度（mm）：条码条占 60%，剩 40% 留给文字行（textsize=12）+ 上下留白。
     // 这样 bwip-js 直接按目标尺寸渲染，canvas 自然高度 ≈ 控件高度，scaleY ≈ 1，文字不被压扁。
-    const controlHeightMM = px(h)
+    const controlHeightMM = Math.max(1, hMm)
     const barHeightMM = Math.max(2, controlHeightMM * 0.6)
     const paddingMM = Math.max(0.5, controlHeightMM * 0.04)
     // 目标宽度（mm）：bwip-js 以 72dpi 换算像素（输出px = width_mm × 2.8346 × scale），
     // 而画布是 96dpi。传「控件宽mm × 96/72 ÷ scale」使输出自然宽 ≈ 控件 px 宽，
     // 于是 scaleX ≈ 1，条码条与数字都不被拉伸变形，且宽度独立可调。
-    const widthMM = px(w) * (96 / 72) / 2
+    const widthMM = Math.max(1, wMm) * (96 / 72) / 2
     const canvas = await drawBarcode({
       format: this.format,
       text: encodable,
@@ -88,12 +97,15 @@ export class PrintBarcode extends FabricImage implements IPrintObject {
     if (canvas) {
       this.setElement(canvas)
       // 宽高独立填满控件框（所见即所得）：
-      // - scaleX = w/natW：宽度精确跟随控件（缩窄即变窄，regenerate 不弹回）
-      // - scaleY = h/natH：高度精确跟随控件（拉高即变高，行为与之前一致）
-      // 由于 width/barHeight 已让自然尺寸 ≈ 控件尺寸，两个 scale 均 ≈ 1，变形可忽略。
+      // - scaleX = targetPxW/natW：宽度精确跟随 display.widthMm（缩窄即变窄，regenerate 不弹回）
+      // - scaleY = targetPxH/natH：高度精确跟随 display.heightMm
+      // 由于 widthMM/barHeightMM 已让自然尺寸 ≈ 目标尺寸，两个 scale 均 ≈ 1，变形可忽略。
+      // ★ PR-D:目标 px 由 display 决定(mm → px @ 96dpi),不再用 this.width/this.height(老模板兜底)
+      const targetPxW = mm(Math.max(1, wMm))
+      const targetPxH = mm(Math.max(1, hMm))
       const natW = canvas.width || 1
       const natH = canvas.height || 1
-      this.set({ scaleX: w / natW, scaleY: h / natH })
+      this.set({ scaleX: targetPxW / natW, scaleY: targetPxH / natH })
     }
     this.setCoords()
     this.canvas?.requestRenderAll()
@@ -113,6 +125,8 @@ export class PrintBarcode extends FabricImage implements IPrintObject {
       printable: this.printable,
       visibleIf: this.visibleIf,
       name: this.controlName,
+      // ★ PR-D:display 写回,确保 panel 改的尺寸不丢
+      display: this.display,
     }
   }
 
@@ -127,6 +141,8 @@ export class PrintBarcode extends FabricImage implements IPrintObject {
     this.printable = control.printable ?? true
     this.visibleIf = control.visibleIf
     this.controlName = control.name
+    // ★ PR-D:display 持久化,后续 regenerate 按它决定渲染尺寸
+    this.display = control.display
     this.set({
       lockMovementX: control.locked,
       lockMovementY: control.locked,
