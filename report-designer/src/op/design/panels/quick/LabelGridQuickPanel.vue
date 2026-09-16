@@ -33,6 +33,19 @@
  *       第 2 行：卡宽 · 卡高 · 纵间距
  *     之前 grid-cols-4 把横间距放在第二行与卡宽同列，与纵间距不对齐；
  *     现在横向/纵向间距放同行不同列，与卡宽/卡高位置一致，更易扫读
+ *
+ * v4.2 调整 (2026-09-16)：
+ *   - 上面的 lgq-row + lgq-col 方案仍有不对齐：col 1 行 1「铺满」按钮、
+ *     col 3 行 1「多行自动跨页」文本把行 1 撑宽,行 1/行 2 label 起点错位
+ *     (行数 vs 卡高 错 ~25px,横间距 vs 纵间距 错 ~10px)
+ *   - 改用 CSS Grid 3 列 (grid-template-columns: auto auto auto),
+ *     每列宽度 = 该列所有 cell 的最大内容宽,所有 cell 内 label 同 x 起点;
+ *     「铺满」/「多行自动跨页」作为 cell 内的 inline-flex 项,不再影响其他列起点
+ */
+ *       第 1 行：列数 · 行数 · 横间距
+ *       第 2 行：卡宽 · 卡高 · 纵间距
+ *     之前 grid-cols-4 把横间距放在第二行与卡宽同列，与纵间距不对齐；
+ *     现在横向/纵向间距放同行不同列，与卡宽/卡高位置一致，更易扫读
  */
 import { computed, ref, watch } from 'vue'
 import {
@@ -260,91 +273,108 @@ defineExpose({ close })
         <NTabPane name="layout" tab="卡片布局" display-directive="show">
           <div class="lgq-pane">
             <!--
-              布局：3 列对齐
-                第 1 行  列数  铺满  行数  横间距        多行自动跨页
-                第 2 行  卡宽       卡高  纵间距
-                第 3 行  [卡片贴合内容]   info text
-              同一列的 label-input 同 x 起点；行间用 14px 留白（lgq-row margin-bottom）
+              布局：3 列 grid(每列 auto 宽度 = 该列所有 cell 的最大内容宽)
+                ┌──── col 1 ────┬── col 2 ──┬──── col 3 ────┐
+                │ 列数  [铺满]  │ 行数      │ 横间距  [多行自动跨页] │
+                │ 卡宽          │ 卡高      │ 纵间距               │
+                └───────────────┴───────────┴────────────────────┘
+              grid auto 列宽保证：col 2 行数/卡高 label 同 x 起点对齐,
+                                  col 3 横间距/纵间距 label 同 x 起点对齐。
+              之前 lgq-row + lgq-col(margin-left:14px) 方案被「铺满」按钮 /「多行自动跨页」文本
+              推后,行 1 与行 2 列对不齐。
             -->
-            <div class="lgq-row">
-              <span class="lgq-label">列数</span>
-              <NInputNumber
-                size="small"
-                button-placement="both"
-                :value="target.columns ?? 3"
-                :min="1"
-                :max="50"
-                :step="1"
-                style="width: 90px"
-                @update:value="patchGeometry({ columns: $event ?? 1 })"
-              />
-              <NTooltip>
-                <template #trigger>
-                  <NButton size="tiny" quaternary style="margin-left: 4px" @click="fillColumns">
-                    铺满
-                  </NButton>
-                </template>
-                按卡片宽度把列数拉到内容区上限（{{ maxColumns }} 列）
-              </NTooltip>
-              <span class="lgq-label lgq-col">行数</span>
-              <NInputNumber
-                size="small"
-                button-placement="both"
-                :value="visibleRows"
-                :min="1"
-                :max="200"
-                :step="1"
-                style="width: 90px"
-                @update:value="setRows($event ?? 1)"
-              />
-              <span class="lgq-label lgq-col">横间距</span>
-              <NInputNumber
-                size="small"
-                button-placement="both"
-                :value="geo.gapX"
-                :min="0"
-                :step="0.5"
-                :precision="1"
-                style="width: 90px"
-                @update:value="patchGeometry({ gapX: $event ?? 0 })"
-              />
-              <NText depth="3" style="font-size: 12px; margin-left: 6px">多行自动跨页</NText>
-            </div>
-
-            <div class="lgq-row">
-              <span class="lgq-label">卡宽</span>
-              <NInputNumber
-                size="small"
-                button-placement="both"
-                :value="geo.cardWidth"
-                :min="1"
-                :step="0.5"
-                :precision="1"
-                style="width: 90px"
-                @update:value="patchGeometry({ cardWidth: $event ?? 1 })"
-              />
-              <span class="lgq-label lgq-col">卡高</span>
-              <NInputNumber
-                size="small"
-                button-placement="both"
-                :value="geo.cardHeight"
-                :min="1"
-                :step="0.5"
-                :precision="1"
-                style="width: 90px"
-                @update:value="patchGeometry({ cardHeight: $event ?? 1 })"
-              />
-              <span class="lgq-label lgq-col">纵间距</span>
-              <NInputNumber
-                size="small"
-                button-placement="both"
-                :value="geo.gapY"
-                :min="0"
-                :step="0.5"
-                :precision="1"
-                style="width: 90px"
-                @update:value="patchGeometry({ gapY: $event ?? 0 })"
-              />
+            <div class="lgq-grid">
+              <!-- col 1 row 1: 列数 + 铺满 -->
+              <div class="lgq-cell">
+                <span class="lgq-label">列数</span>
+                <NInputNumber
+                  size="small"
+                  button-placement="both"
+                  :value="target.columns ?? 3"
+                  :min="1"
+                  :max="50"
+                  :step="1"
+                  style="width: 90px"
+                  @update:value="patchGeometry({ columns: $event ?? 1 })"
+                />
+                <NTooltip>
+                  <template #trigger>
+                    <NButton size="tiny" quaternary @click="fillColumns">铺满</NButton>
+                  </template>
+                  按卡片宽度把列数拉到内容区上限（{{ maxColumns }} 列）
+                </NTooltip>
+              </div>
+              <!-- col 2 row 1: 行数 -->
+              <div class="lgq-cell">
+                <span class="lgq-label">行数</span>
+                <NInputNumber
+                  size="small"
+                  button-placement="both"
+                  :value="visibleRows"
+                  :min="1"
+                  :max="200"
+                  :step="1"
+                  style="width: 90px"
+                  @update:value="setRows($event ?? 1)"
+                />
+              </div>
+              <!-- col 3 row 1: 横间距 + 多行自动跨页 -->
+              <div class="lgq-cell">
+                <span class="lgq-label">横间距</span>
+                <NInputNumber
+                  size="small"
+                  button-placement="both"
+                  :value="geo.gapX"
+                  :min="0"
+                  :step="0.5"
+                  :precision="1"
+                  style="width: 90px"
+                  @update:value="patchGeometry({ gapX: $event ?? 0 })"
+                />
+                <NText depth="3" style="font-size: 12px; white-space: nowrap">多行自动跨页</NText>
+              </div>
+              <!-- col 1 row 2: 卡宽 -->
+              <div class="lgq-cell">
+                <span class="lgq-label">卡宽</span>
+                <NInputNumber
+                  size="small"
+                  button-placement="both"
+                  :value="geo.cardWidth"
+                  :min="1"
+                  :step="0.5"
+                  :precision="1"
+                  style="width: 90px"
+                  @update:value="patchGeometry({ cardWidth: $event ?? 1 })"
+                />
+              </div>
+              <!-- col 2 row 2: 卡高 -->
+              <div class="lgq-cell">
+                <span class="lgq-label">卡高</span>
+                <NInputNumber
+                  size="small"
+                  button-placement="both"
+                  :value="geo.cardHeight"
+                  :min="1"
+                  :step="0.5"
+                  :precision="1"
+                  style="width: 90px"
+                  @update:value="patchGeometry({ cardHeight: $event ?? 1 })"
+                />
+              </div>
+              <!-- col 3 row 2: 纵间距 -->
+              <div class="lgq-cell">
+                <span class="lgq-label">纵间距</span>
+                <NInputNumber
+                  size="small"
+                  button-placement="both"
+                  :value="geo.gapY"
+                  :min="0"
+                  :step="0.5"
+                  :precision="1"
+                  style="width: 90px"
+                  @update:value="patchGeometry({ gapY: $event ?? 0 })"
+                />
+              </div>
             </div>
 
             <div class="lgq-row" style="margin-top: 6px; gap: 6px">
@@ -716,9 +746,19 @@ defineExpose({ close })
   font-size: 12px;
   color: var(--brand-text-2, #666);
 }
-/* 同一行的第 2/3 列 label 加左间距，与第 1 列 label 起点错开但保持 14px 节奏 */
-.lgq-col {
-  margin-left: 14px;
+/* 3 列 grid：每列 auto 宽度 = 该列所有 cell 的最大内容宽
+   保证 行数/卡高 同一列同 x 起点、横间距/纵间距 同一列同 x 起点 */
+.lgq-grid {
+  display: grid;
+  grid-template-columns: auto auto auto;
+  gap: 6px 14px;
+  align-items: center;
+}
+.lgq-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
 }
 .lgq-child-list {
   display: flex;
