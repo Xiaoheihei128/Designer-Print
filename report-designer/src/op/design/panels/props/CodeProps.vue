@@ -171,7 +171,7 @@ function fitControlWidth(): void {
   let nextH = curH
   if (lock && typeof curH === 'number' && box.width) {
     // 按当前宽高比例缩放
-    nextH = Math.round((curH / (currentDisplay.value?.widthMm ?? curH || 1)) * box.width * 10) / 10
+    nextH = Math.round((curH / (currentDisplay.value?.widthMm ?? curH ?? 1)) * box.width * 10) / 10
   }
   patchDisplay({ widthMm: box.width, heightMm: nextH })
 }
