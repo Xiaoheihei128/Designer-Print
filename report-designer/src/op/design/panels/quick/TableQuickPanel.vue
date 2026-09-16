@@ -514,20 +514,31 @@ function removeActiveColumn(): void {
       <NTabPane name="cellStyle" tab="默认单元格样式">
         <div v-if="control">
           <div class="props-tip">整表默认样式，可被列样式 / 单元格样式覆盖。</div>
-          <div class="grid grid-cols-2 gap-2">
-            <div class="props-row">
-              <span class="props-label">字号(pt)</span>
-              <NInputNumber
-                size="small"
-                button-placement="both"
-                :value="control.options?.defaultCellStyle?.fontSize ?? null"
-                :min="6"
-                :max="72"
-                placeholder="继承"
-                clearable
-                @update:value="patchDefaultStyle({ fontSize: $event })"
-              />
-            </div>
+          <!--
+            布局重排 (2026-09-16 用户反馈):grid grid-cols-2 塞 5 项,
+            字号 NInputNumber(双按钮 + 数字)与对侧控件抢宽,数字显示区被挤空。
+            改为按控件宽度需求分组:
+              Row 1: 字号(pt)    独占一行,宽到能显示数字(120px)
+              Row 2: 对齐 / 垂直对齐   2 列 NSelect 共享
+              Row 3: 字色 / 背景    2 列 NColorPicker 共享
+              Row 4: 加粗 / 斜体 / 下划线   3 列 NSwitch 紧凑
+          -->
+          <div class="props-row">
+            <span class="props-label">字号(pt)</span>
+            <NInputNumber
+              size="small"
+              button-placement="both"
+              :value="control.options?.defaultCellStyle?.fontSize ?? null"
+              :min="6"
+              :max="72"
+              placeholder="继承"
+              clearable
+              style="width: 120px"
+              @update:value="patchDefaultStyle({ fontSize: $event })"
+            />
+          </div>
+
+          <div class="grid grid-cols-2 gap-2 mt-1">
             <div class="props-row">
               <span class="props-label">对齐</span>
               <NSelect
@@ -546,6 +557,9 @@ function removeActiveColumn(): void {
                 @update:value="patchDefaultStyle({ valign: $event })"
               />
             </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-2 mt-1">
             <div class="props-row">
               <span class="props-label">字色</span>
               <NColorPicker
@@ -567,6 +581,7 @@ function removeActiveColumn(): void {
               />
             </div>
           </div>
+
           <div class="mt-1 grid grid-cols-3 gap-2">
             <div class="props-row">
               <span class="props-label">加粗</span>
