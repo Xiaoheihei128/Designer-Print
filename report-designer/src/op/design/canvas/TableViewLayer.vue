@@ -543,6 +543,21 @@ function onToolbarApply(next: TableControl): void {
 }
 
 /**
+ * ★ 焦点跳走 bug 修复:段级 display 子字段(widthMm/heightMm/lockRatio/scaleFactor)
+ * 写回走 silent 路径 —— updateControlSilent(不进 undo 栈、不标 dirty),且不调
+ * refreshFrozen。关键:editing 态 overlay 走 frozenHtml 快照,不刷 frozenHtml
+ * 就不会触发 v-html 重渲染 → contenteditable td 不被销毁 → NInputNumber 不丢焦点。
+ *
+ * bcid/errorLevel/showText/fit 等真正影响 svg 生成参数的仍走 `apply` 全路径
+ * (见 onToolbarApply 上方)。SVG 尺寸在下次完整 apply 时一并刷新。
+ */
+function onToolbarApplySilent(next: TableControl): void {
+  const id = store.editingCell?.controlId
+  if (!id) return
+  store.updateControlSilent(id, next)
+}
+
+/**
  * CellToolbar lazy migration emit —— 仅添加 segments 字段、不动用户内容。
  * 走 silent 写入：进 store 模型但不进 undo 栈、不标 dirty；
  * 用户关闭工具栏前若没主动编辑，不应产生可撤销副作用。
@@ -612,6 +627,7 @@ const editingRowKind = computed(() => {
       :x="toolbarPos.x"
       :y="toolbarPos.y"
       @apply="onToolbarApply"
+      @apply-silent="onToolbarApplySilent"
       @migrate="onToolbarMigrate"
       @close="exitEditing"
     />

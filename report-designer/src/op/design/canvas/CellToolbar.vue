@@ -67,6 +67,14 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'apply', next: TableControl): void
   /**
+   * ★ 焦点跳走 bug 修复:段级 display 子字段(widthMm/heightMm/lockRatio/scaleFactor)
+   * 改写 emit。TableViewLayer 收到后走 updateControlSilent(不进 undo、不标 dirty)
+   * 且不调 refreshFrozen,避免 NInputNumber 每次按键触发 v-html 重渲染 + td.focus()
+   * 把焦点从输入框抢回 contenteditable cell。
+   * bcid/errorLevel/showText/fit 等「影响 svg 生成参数」仍走 `apply` 全路径。
+   */
+  (e: 'apply-silent', next: TableControl): void
+  /**
    * lazy migration emit —— 仅添加 segments 字段、不动用户内容
    * TableViewLayer 收到后走 updateControlSilent（不进 undo 栈、不标 dirty）
    */
@@ -289,6 +297,24 @@ function onCellSegmentFormat(segIdx: number, format: CellFormat | undefined): vo
   emit('apply', patchCell(props.control, props.row, props.col, { segments: next }))
 }
 
+/**
+ * ★ 焦点跳走 bug 修复:段级 display 子字段写回(widthMm/heightMm/lockRatio/scaleFactor)
+ * —— 走 silent 路径,updateControlSilent + 不刷 frozenHtml。
+ *
+ * 关键区别:`apply` 路径触发 refreshFrozen → bumpCanvasTick → items 重算 →
+ * v-html 替换整张表 → contenteditable td 被销毁重建 → 抢焦点。
+ * silent 路径只更新模型,bcid/errorLevel/showText 等真正需要重渲染的字段
+ * 仍走 `apply`(走 onCellSegmentFormat),SVG 在下次 apply 时一并刷新。
+ */
+function onCellSegmentFormatDisplay(segIdx: number, format: CellFormat | undefined): void {
+  const cur = cell.value?.segments
+  if (!cur) return
+  const next = cur.map((s, i) =>
+    i === segIdx && s.kind === 'field' ? { ...s, format } : s,
+  )
+  emit('apply-silent', patchCell(props.control, props.row, props.col, { segments: next }))
+}
+
 /** 工具栏打开/控件变化时调 rebuildSegmentsFromCell —— 一次写回 segments 并清老字段
  *
  * ★ Plan B 改造：原 ensureSegments 只在 segments 缺失时迁移；现 rebuildSegmentsFromCell
@@ -455,6 +481,7 @@ function deleteCol(): void {
           @update:expression="onCellExpression"
           @update:segments="onCellSegments"
           @update:segmentFormat="onCellSegmentFormat"
+          @update:segmentFormatDisplay="onCellSegmentFormatDisplay"
         />
       </div>
 

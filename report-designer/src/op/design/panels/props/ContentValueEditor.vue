@@ -128,6 +128,15 @@ const emit = defineEmits<{
   (e: 'update:segments', v: Segment[]): void
   /** ★ Commit 7:段级 format 写回(field 段被选中段的下拉/子控件改 format 时) */
   (e: 'update:segmentFormat', segIdx: number, format: CellFormat | undefined): void
+  /**
+   * ★ 焦点跳走 bug 修复:
+   * 段级 display 子字段写回(widthMm/heightMm/lockRatio/scaleFactor)——
+   * 只影响渲染尺寸、不影响 svg 生成参数,bcid/errorLevel/showText 等。
+   * 父组件收到后走 silent 路径(updateControlSilent + 不刷 frozenHtml),
+   * 避免 NInputNumber 每次按键触发 v-html 重渲染 + td.focus() 把焦点
+   * 从输入框抢回到 contenteditable cell。
+   */
+  (e: 'update:segmentFormatDisplay', segIdx: number, format: CellFormat | undefined): void
 }>()
 
 const varModalShow = ref(false)
@@ -290,6 +299,12 @@ function onSegFormatSubChange(segIdx: number, patch: Partial<CellFormat>): void 
  * PR-A:段级 display 字段写回(widthMm/heightMm/lockRatio)。
  * 与 CodeProps.vue 的 patchDisplay 同形:首次写入时建 display 对象;
  * 传 undefined 删除对应字段(走 defaultDisplayForFormat 兜底)。
+ *
+ * ★ 焦点跳走 bug 修复:display 子字段(纯渲染尺寸参数)改走
+ *   `update:segmentFormatDisplay` 事件 → 父组件 silent 路径
+ *   (updateControlSilent + 不刷 frozenHtml)→ NInputNumber 不丢焦点。
+ *   bcid/errorLevel/showText/fit 等「影响 svg 生成参数」的字段仍走
+ *   `update:segmentFormat` → 走 apply 全路径 → 重渲染 overlay。
  */
 function onSegDisplaySubChange(
   segIdx: number,
@@ -323,7 +338,7 @@ function onSegDisplaySubChange(
     else nextDisplay.scaleFactor = patch.scaleFactor
   }
   const nextFmt: CellFormat = { ...baseFmt, display: nextDisplay as CellFormat['display'] }
-  emit('update:segmentFormat', segIdx, nextFmt)
+  emit('update:segmentFormatDisplay', segIdx, nextFmt)
 }
 
 /**

@@ -88,6 +88,7 @@ export function renderBarcodeSvgSync(text: string, opts: BarcodeRenderOpts = {})
   //   扫码枪需要左右 quiet zone ≥ 10 modules(≈2.5mm @ 0.25mm/bar)。bwip-js 默认 paddingwidth=1
   //   在 scale=2 时仅 2 单位 ≈ 0.18mm,完全不够,手动拉伸 cell 后仍然扫不出。
   //   paddingwidth=10 单位(20 units @ scale=2) ≈ 3.5mm at 30mm 显示,扫枪可解码。
+  const widthPassedToBwip = Math.max(1, controlWidthMM * (96 / 72) / 2)
   const svg = BwipJs.toSVG({
     bcid: (opts.bcid ?? 'code128').toLowerCase(),
     text,
@@ -95,13 +96,46 @@ export function renderBarcodeSvgSync(text: string, opts: BarcodeRenderOpts = {})
     height: barHeightMM,
     // 目标宽度（mm）：bwip-js 以 72dpi 换算像素，而渲染端是 96dpi；
     // 传「控件宽mm × 96/72 ÷ scale」使输出自然宽 ≈ 控件宽，宽度独立可调且条码条不变形
-    width: Math.max(1, controlWidthMM * (96 / 72) / 2),
+    width: widthPassedToBwip,
     paddingtop: paddingMM,
     paddingbottom: paddingMM,
     paddingwidth: 10,
     includetext: opts.showText ?? true,
     textxalign: 'center',
     textsize: 12,
+  })
+  // ★ DEBUG:打日志,看字段值 → bwip-js 输入参数 → 输出 svg 元数据全链路
+  //   包含:字段原始值、用户设定 size、换算后传入 bwip-js 的 width、viewBox、
+  //   第一根 bar 实际位置(算 quiet zone mm)→ 验证 PR-E.1 quiet zone 是否够
+  const viewMatch = svg.match(/<svg[^>]*\bviewBox="([\d.\-]+)\s+([\d.\-]+)\s+([\d.\-]+)\s+([\d.\-]+)"/i)
+  const pathMatch = svg.match(/<path[^>]*\bd="(M[\d.\-]+)/)
+  const firstBarX = pathMatch ? parseFloat(pathMatch[1]!.slice(1)) : null
+  const vbW = viewMatch ? parseFloat(viewMatch[3]!) : null
+  const quietZoneMm = vbW && firstBarX !== null
+    ? {
+        left: +(firstBarX * (controlWidthMM / vbW)).toFixed(3),
+        right: +(((vbW - (firstBarX + (vbW - 2 * 10 * 2))) * (controlWidthMM / vbW)).toFixed(3)),
+      }
+    : null
+  console.log('[barcode-render] 字段 → 条形码', {
+    字段值: text,
+    bcid: opts.bcid ?? 'code128',
+    showText: opts.showText ?? true,
+    用户尺寸: { widthMm: opts.widthMm, heightMm: opts.heightMm },
+    换算后: {
+      controlHeightMM,
+      controlWidthMM,
+      barHeightMM: barHeightMM.toFixed(2),
+      paddingMM: paddingMM.toFixed(2),
+      width传给bwip: widthPassedToBwip.toFixed(2),
+      paddingwidth: 10,
+    },
+    输出svg: {
+      viewBox: viewMatch ? `${viewMatch[1]} ${viewMatch[2]} ${viewMatch[3]} ${viewMatch[4]}` : '?',
+      firstBarX,
+      vbW,
+      quietZoneMm,
+    },
   })
   return makeSvgResponsive(svg, 'none')
     .replace(/<svg\b/, '<svg class="op-barcode-svg"')
