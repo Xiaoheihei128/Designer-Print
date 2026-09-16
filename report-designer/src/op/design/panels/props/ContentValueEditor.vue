@@ -51,6 +51,7 @@ import {
   qrErrorLevelOptions,
   imageFitOptions,
 } from '@op/design/format-options'
+import QrScaleInput from './QrScaleInput.vue'
 
 export type ContentMode = 'fixed' | 'variable' | 'expression'
 
@@ -296,6 +297,7 @@ function onSegDisplaySubChange(
     widthMm?: number | undefined
     heightMm?: number | undefined
     lockRatio?: boolean | undefined
+    scaleFactor?: number | undefined
   },
 ): void {
   const cur = props.segments?.[segIdx]
@@ -314,6 +316,11 @@ function onSegDisplaySubChange(
   if ('lockRatio' in patch) {
     if (patch.lockRatio === undefined) delete nextDisplay.lockRatio
     else nextDisplay.lockRatio = patch.lockRatio
+  }
+  // ★ PR-D:QR 倍率
+  if ('scaleFactor' in patch) {
+    if (patch.scaleFactor === undefined) delete nextDisplay.scaleFactor
+    else nextDisplay.scaleFactor = patch.scaleFactor
   }
   const nextFmt: CellFormat = { ...baseFmt, display: nextDisplay as CellFormat['display'] }
   emit('update:segmentFormat', segIdx, nextFmt)
@@ -618,8 +625,8 @@ function onExprConfirm(snippet: string): void {
               @update:value="(v: 'contain' | 'cover' | 'fill' | 'none') => onSegFormatSubChange(i, { fit: v })"
             />
 
-            <!-- ★ PR-A:cell 内尺寸可调 —— 段级 display.widthMm/heightMm/lockRatio
-                 仅在 qrcode/barcode/image 形态段展示(其它 kind 无意义)
+            <!-- ★ PR-A/D:cell 内尺寸可调 —— 段级 display
+                 PR-D 改:QR 用 scaleFactor 倍率,barcode/image 维持 widthMm/heightMm/lockRatio
                  用紧凑 inline-block 行内排布,避免 seg-item 折行过多 -->
             <template
               v-if="
@@ -628,32 +635,42 @@ function onExprConfirm(snippet: string): void {
                 seg.format?.kind === 'image'
               "
             >
-              <NInputNumber
-                size="tiny"
-                style="width: 70px"
-                :value="seg.format?.display?.widthMm"
-                :min="0"
-                :step="1"
-                placeholder="宽 mm"
-                @update:value="(v) => onSegDisplaySubChange(i, { widthMm: v ?? undefined })"
+              <!-- PR-D:QR 倍率 -->
+              <QrScaleInput
+                v-if="seg.format?.kind === 'qrcode'"
+                :value="seg.format?.display?.scaleFactor"
+                label=""
+                @change="(v) => onSegDisplaySubChange(i, { scaleFactor: v })"
               />
-              <NInputNumber
-                size="tiny"
-                style="width: 70px"
-                :value="seg.format?.display?.heightMm"
-                :min="0"
-                :step="1"
-                placeholder="高 mm"
-                @update:value="(v) => onSegDisplaySubChange(i, { heightMm: v ?? undefined })"
-              />
-              <NSwitch
-                size="tiny"
-                :value="seg.format?.display?.lockRatio ?? false"
-                @update:value="onSegDisplaySubChange(i, { lockRatio: $event })"
-              >
-                <template #checked>锁比</template>
-                <template #unchecked>自由</template>
-              </NSwitch>
+              <!-- PR-A:barcode/image 宽/高/锁定比例 -->
+              <template v-else>
+                <NInputNumber
+                  size="tiny"
+                  style="width: 70px"
+                  :value="seg.format?.display?.widthMm"
+                  :min="0"
+                  :step="1"
+                  placeholder="宽 mm"
+                  @update:value="(v) => onSegDisplaySubChange(i, { widthMm: v ?? undefined })"
+                />
+                <NInputNumber
+                  size="tiny"
+                  style="width: 70px"
+                  :value="seg.format?.display?.heightMm"
+                  :min="0"
+                  :step="1"
+                  placeholder="高 mm"
+                  @update:value="(v) => onSegDisplaySubChange(i, { heightMm: v ?? undefined })"
+                />
+                <NSwitch
+                  size="tiny"
+                  :value="seg.format?.display?.lockRatio ?? false"
+                  @update:value="onSegDisplaySubChange(i, { lockRatio: $event })"
+                >
+                  <template #checked>锁比</template>
+                  <template #unchecked>自由</template>
+                </NSwitch>
+              </template>
             </template>
           </template>
         </div>
