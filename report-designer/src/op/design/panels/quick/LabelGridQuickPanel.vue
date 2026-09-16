@@ -27,7 +27,7 @@
  *     视觉错位；现在显式对齐与第一行「列数/行数」一致
  *
  * v4.1 调整 (2026-09-16)：
- *   - 高度固定改为 330px（用户决策再收紧，440 → 390 → 370 → 330）
+ *   - 高度固定改为 300px（用户决策再收紧，440 → 390 → 370 → 330 → 300）
  *   - 「卡片布局」tab 重排为 3 列对齐：
  *       第 1 行：列数 · 行数 · 横间距
  *       第 2 行：卡宽 · 卡高 · 纵间距
@@ -642,9 +642,9 @@ defineExpose({ close })
   pointer-events: auto;
   display: flex;
   flex-direction: column;
-  /* 固定高度（用户决策 2026-09-16，最新 330px）：内容驱动会让面板忽高忽低，
-     切 tab 时跳变明显；固定 330px 视觉稳，panes 内部仍 overflow-y: auto 可滚 */
-  height: 330px;
+  /* 固定高度（用户决策 2026-09-16，最新 300px）：内容驱动会让面板忽高忽低，
+     切 tab 时跳变明显；固定 300px 视觉稳，panes 内部仍 overflow-y: auto 可滚 */
+  height: 300px;
   background: var(--brand-surface, #fff);
   border: 1px solid var(--brand-border, #e5e7eb);
   border-radius: 8px;
