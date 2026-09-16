@@ -591,7 +591,13 @@ function onExprConfirm(snippet: string): void {
           <NTag size="small" :bordered="false" :type="seg.kind === 'field' ? 'info' : seg.kind === 'expr' ? 'warning' : 'default'">
             {{ seg.kind }}
           </NTag>
-          <span class="seg-preview">{{ segPreview(seg) }}</span>
+          <!--
+                ★ 视觉格式(qrcode/barcode/image)的 seg-preview 隐藏:
+                这三类 field path 段渲染为 svg/image,文字预览无信息价值;
+                且 dashed-border monospace 样式在 [高]/[倍率] 按钮旁视觉上像缩略图占位。
+                text 段仍显示 segPreview 文本(text 内容预览有意义)。
+              -->
+          <span v-if="seg.kind !== 'field' || !['qrcode', 'barcode', 'image'].includes(seg.format?.kind ?? '')" class="seg-preview">{{ segPreview(seg) }}</span>
 
           <template v-if="seg.kind === 'field' && !isAggToken(seg.path)">
             <NSelect
