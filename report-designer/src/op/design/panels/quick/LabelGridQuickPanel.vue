@@ -42,11 +42,6 @@
  *     每列宽度 = 该列所有 cell 的最大内容宽,所有 cell 内 label 同 x 起点;
  *     「铺满」/「多行自动跨页」作为 cell 内的 inline-flex 项,不再影响其他列起点
  */
- *       第 1 行：列数 · 行数 · 横间距
- *       第 2 行：卡宽 · 卡高 · 纵间距
- *     之前 grid-cols-4 把横间距放在第二行与卡宽同列，与纵间距不对齐；
- *     现在横向/纵向间距放同行不同列，与卡宽/卡高位置一致，更易扫读
- */
 import { computed, ref, watch } from 'vue'
 import {
   NButton,
