@@ -29,6 +29,7 @@ import { useHistoryStore } from './history'
 import { type ImportColumn } from '@op/design/utils/data-import'
 import { useUiStore } from './ui'
 import { seedSummaryTail, syncTableHeight, patchCell, ensureCells } from '@op/core/layout-engine/table-cells'
+import { migrateQrDisplay } from '@op/core/layout-engine/qr-scale'
 
 /** 水印默认配置（开启后居中单个、45°、浅灰） */
 export const DEFAULT_WATERMARK: WatermarkConfig = {
@@ -1237,6 +1238,15 @@ export const useDesignerStore = defineStore('designer', () => {
       const base = { ...c, id: c.id || genId() }
       if (base.type === 'table') {
         return syncTableHeight(base as TableControl) as unknown as AnyControl
+      }
+      // ★ PR-D:老 QR 模板 display.widthMm → scaleFactor 自动迁移
+      //  在画布/PDF 渲染前完成,确保所有 consumer 看到的是规范 shape
+      //  只迁移顶层 qrcode;barcode 的 widthMm/heightMm 不动;cell 段级 QR 不在此处理
+      if (base.type === 'qrcode' && base.display) {
+        const migrated = migrateQrDisplay(base.display)
+        if (migrated !== base.display) {
+          return { ...base, display: migrated } as AnyControl
+        }
       }
       return base
     }
