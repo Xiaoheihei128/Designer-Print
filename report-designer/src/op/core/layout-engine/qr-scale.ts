@@ -3,7 +3,7 @@
  *
  * 解决:QR 永远 1:1,让用户调 width/height 不直观,改用「倍率」(scaleFactor)。
  * - 基准 1× = 30mm × 30mm(沿用 PR-C.5 naturalDims 的硬编码值)
- * - 范围 0.5× ~ 3.0×,step 0.5(8 档)
+ * - 范围 0.5× ~ 5.0×,step 0.5(10 档)
  *
  * 本模块是 **单源**:
  * - 类型层 [SegmentDisplayOpts.scaleFactor](@op/types/control) 用 number 字段
@@ -26,17 +26,17 @@ export const QR_BASE_MM = 30
 export const QR_SCALE_MIN = 0.5
 
 /** 倍率上界（含） */
-export const QR_SCALE_MAX = 3.0
+export const QR_SCALE_MAX = 5.0
 
 /** 倍率粒度（步长） */
 export const QR_SCALE_STEP = 0.5
 
 /**
- * 倍率预设数组(8 档)。
+ * 倍率预设数组(10 档)。
  * - 用于 NSlider marks / NSelect options
- * - 测试期望:exactly 8 个值,严格单调递增,落在 [MIN, MAX] 区间
+ * - 测试期望:exactly 10 个值,严格单调递增,落在 [MIN, MAX] 区间
  */
-export const QR_SCALE_OPTIONS = [0.5, 1, 1.5, 2, 2.5, 3] as const
+export const QR_SCALE_OPTIONS = [0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5] as const
 
 /** 类型化:倍率预设值类型 */
 export type QrScale = (typeof QR_SCALE_OPTIONS)[number]
@@ -49,13 +49,13 @@ export type QrScale = (typeof QR_SCALE_OPTIONS)[number]
  * - undefined / NaN / Infinity → undefined（透传"未设"）
  * - 0 / 负数 → undefined（视为"未设"）
  * - 0.1 → 0.5(clamp + step 量化)
- * - 5 → 3.0(clamp 上界)
- * - 1.3 → 1.5(round-half-up,符合「0.5/1/1.5/2/2.5/3」档位)
+ * - 10 → 5.0(clamp 上界)
+ * - 1.3 → 1.5(round-half-up,符合「0.5/1/1.5/2/2.5/3/3.5/4/4.5/5」档位)
  *
  * 取整策略:Math.round (round-half-up)。
  * - 1.25 → 1.5
  * - 1.75 → 2.0
- * 测试覆盖边界 0.5 / 1.5 / 2.5 / 3。
+ * 测试覆盖边界 0.5 / 1.5 / 2.5 / 3 / 3.5 / 4 / 4.5 / 5。
  */
 export function normalizeQrScale(v: number | undefined): QrScale | undefined {
   if (v === undefined || !Number.isFinite(v)) return undefined
