@@ -14,6 +14,8 @@ import {
   measureAppendixTitleHeight,
   resolveGridGeometry,
   withRowCtx,
+  type GridPlacementHint,
+  type PageCapacityOptions,
 } from '@op/core/layout-engine/label-grid'
 import { MAX_PAGES, type EvalContext, type PageMetrics } from '@op/core/layout-engine/types'
 import type { AnyControl, LabelGridControl } from '@op/types/control'
@@ -702,6 +704,124 @@ describe('expandLabelGrids —— appendix 模式', () => {
     // 全部紧跟 page 0(auto 放得下不推)
     expect(Math.min(...tops)).toBeLessThan(100)
     expect(Math.max(...tops)).toBeLessThan(100)
+  })
+
+  // ★ Bug 修复回归:grid 与其它正文控件共页时(由 pagination-engine 传入 hint.originTop > zoneTop),
+  //   标题应紧贴 hint.originTop(decidedGridTarget 返回 grid area top),而非固定写死在 zoneTop 处。
+  //   用户截图:「附件」标题在 zoneTop 处,但 grid 在 120mm 处,中间空 ~110mm。
+  //   语义:decideGridTarget 返回的 hint.originTop = 「grid area 起点」= title 应在的位置
+  //         展开器 += titleHeight 后 originTop = cards 起点
+  //         title.top = hint.originTop(= originTop - titleHeight)
+  it('appendix + appendixTitle + placementHint.originTop > zoneTop → title.top = hint.originTop', () => {
+    // 模拟 grid 与其它表格共页:grid 起始位置在 120mm(其它表格用 0-120mm)
+    const grid = makeGrid({
+      left: 0,
+      top: 0,
+      dataSource: 'items',
+      mode: 'appendix',
+      appendixTitle: { text: '附件', style: { fontSize: 12 } },
+    })
+    const ctx: EvalContext = { data: { items } }
+    const ZONE_TOP = 10
+    const HINT_ORIGIN_TOP = 120 // grid area 起点
+    const hints = new Map<string, GridPlacementHint>([
+      ['grid1', { pageIndex: 0, originTop: HINT_ORIGIN_TOP }],
+    ])
+    const pageCapacity: PageCapacityOptions = { zoneTop: ZONE_TOP, usableBottom: 287 }
+    const res = expandLabelGrids(
+      [grid],
+      ctx,
+      'mm',
+      bodyStepMm(metrics),
+      MAX_PAGES,
+      hints,
+      pageCapacity,
+    )
+    const title = res.components.find((c) => c.id === 'grid1~title~0') as any
+    expect(title).toBeDefined()
+    // 期望:title.top = hint.originTop = 120(紧贴 grid area 起点,cards 起点 = 120 + titleHeight)
+    expect(title.top).toBeCloseTo(HINT_ORIGIN_TOP, 5)
+    // 旧公式 bug:会写成 zoneTop(=10),与 grid 起点 120 差 110mm(中间空一大段)
+    expect(title.top).not.toBe(ZONE_TOP)
+    // title 之后紧跟首卡:cards 起点的 rowIndex=0 在 originTop 处,title.bottom 应 ≤ originTop
+    const cardsOnSamePage = res.components
+      .filter(
+        (c) =>
+          c.id.startsWith('grid1~') &&
+          !c.id.includes('~title~') &&
+          c.top >= title.top &&
+          c.top < title.top + bodyStepMm(metrics),
+      )
+      .map((c) => c.top)
+    if (cardsOnSamePage.length > 0) {
+      expect(title.top + title.height).toBeLessThanOrEqual(Math.min(...cardsOnSamePage) + 0.001)
+    }
+  })
+
+  // 回归保护:grid 独占一页时(hint.originTop = zoneTop,cursor 在页眉下),title 仍在 zoneTop
+  it('appendix + appendixTitle + grid 独占一页 → title.top = zoneTop(不被新公式破坏)', () => {
+    const grid = makeGrid({
+      left: 0,
+      top: 0,
+      dataSource: 'items',
+      mode: 'appendix',
+      appendixTitle: { text: '附件' },
+    })
+    const ctx: EvalContext = { data: { items } }
+    const ZONE_TOP = 10
+    const HINT_ORIGIN_TOP = ZONE_TOP // 独占页 cursor 在页眉下(grid area 起点 = zoneTop)
+    const hints = new Map<string, GridPlacementHint>([
+      ['grid1', { pageIndex: 0, originTop: HINT_ORIGIN_TOP }],
+    ])
+    const pageCapacity: PageCapacityOptions = { zoneTop: ZONE_TOP, usableBottom: 287 }
+    const res = expandLabelGrids(
+      [grid],
+      ctx,
+      'mm',
+      bodyStepMm(metrics),
+      MAX_PAGES,
+      hints,
+      pageCapacity,
+    )
+    const title = res.components.find((c) => c.id === 'grid1~title~0') as any
+    expect(title).toBeDefined()
+    expect(title.top).toBeCloseTo(ZONE_TOP, 5) // 期望 = zoneTop
+  })
+
+  // 上界钳制:hint.originTop < 0 时(异常输入),title 至少不反向溢出到页眉之上
+  it('appendix + appendixTitle + hint.originTop 极小 → title.top 钳制到 zoneTop', () => {
+    const grid = makeGrid({
+      left: 0,
+      top: 0,
+      dataSource: 'items',
+      mode: 'appendix',
+      appendixTitle: { text: '附件', style: { fontSize: 18, fontWeight: 'bold' } },
+    })
+    const ctx: EvalContext = { data: { items } }
+    const titleHeight = measureAppendixTitleHeight(grid.appendixTitle?.style)
+    const ZONE_TOP = 10
+    const HINT_ORIGIN_TOP = 2 // 极端:grid area 起点在 2mm(几乎贴页顶)
+    const hints = new Map<string, GridPlacementHint>([
+      ['grid1', { pageIndex: 0, originTop: HINT_ORIGIN_TOP }],
+    ])
+    const pageCapacity: PageCapacityOptions = { zoneTop: ZONE_TOP, usableBottom: 287 }
+    const res = expandLabelGrids(
+      [grid],
+      ctx,
+      'mm',
+      bodyStepMm(metrics),
+      MAX_PAGES,
+      hints,
+      pageCapacity,
+    )
+    const title = res.components.find((c) => c.id === 'grid1~title~0') as any
+    expect(title).toBeDefined()
+    // title.top 不应小于 zoneTop(避免与页眉重叠)
+    expect(title.top).toBeGreaterThanOrEqual(ZONE_TOP)
+    // 关键不变量:title.top 钳制到 zoneTop(允许 0.001 浮点误差),不反向溢出页眉
+    //   此场景数学上 titleHeight > 可用空间,title 与 cards 会重叠 —— 是已知折衷,
+    //   实际 pagination-engine 不会传 < titleHeight 的 originTop(会被预判换页)。
+    expect(title.top).toBeLessThanOrEqual(ZONE_TOP + 0.001)
   })
 })
 

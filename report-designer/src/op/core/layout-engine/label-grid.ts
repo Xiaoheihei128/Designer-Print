@@ -396,14 +396,20 @@ export function expandLabelGrids(
     // 不能用 gridHeight(只是「行数估算参考」,数据展开后实际更高)
     const pageRanges = new Map<number, { top: number; bottom: number }>()
 
-    // ★ appendixTitle:首页/起始页贴一个 TextControl,top 在 zoneTop 处,
-    // height=titleHeight,不进 pageRanges(容器边框仍紧贴卡片首行,与原本一致)。
+    // ★ appendixTitle:首页/起始页贴一个 TextControl。
+    //   - top 紧贴 cards 起点上方一个 titleHeight 间隙(originTop - titleHeight)
+    //   - 上界钳制到 zoneTop,避免 hint.originTop < titleHeight 时 title 反向溢出到页眉之上
+    //   - 历史 bug:旧实现写死 zoneTop,grid 与其它正文控件共页时(cards 起点 > zoneTop)
+    //     标题与卡片之间会出现大空隙(用户截图反馈的「附件」位置错误)
+    //   - 跨页重复 title 分支(line 426-439)不变:那里 originTop 刚被重置为 zoneTop+titleHeight,
+    //     故 originTop - titleHeight == zoneTop,与旧公式巧合相等,保持正确
     if (showTitle) {
+      const titleTopMm = Math.max(originTop - titleHeight, zoneTop)
       out.push({
         id: `${control.id}~title~${pageIndex}`,
         type: 'text',
         left: gridLeft,
-        top: pageIndex * bodyStep + zoneTop,
+        top: pageIndex * bodyStep + titleTopMm,
         width: gridWidth,
         height: titleHeight,
         contentType: 'fixed',
