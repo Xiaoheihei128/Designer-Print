@@ -14,6 +14,7 @@ import {
   NButtonGroup,
   NColorPicker,
   NDivider,
+  NDropdown,
   NInput,
   NInputNumber,
   NSwitch,
@@ -388,6 +389,65 @@ function setRowSpan(n: number | null): void {
   emit('apply', setCellRowSpan(props.control, props.row, props.col, n ?? 1))
 }
 
+/* -------------------------------- 合并预设 -------------------------------- */
+
+/** 合并 NSelect 预设值 —— 替代两个独立 NInputNumber (横合并/纵合并) */
+const mergeOptions = [
+  { label: '无', value: 'none' },
+  { label: '1×2 (横 2 列)', value: '1x2' },
+  { label: '2×1 (纵 2 行)', value: '2x1' },
+  { label: '2×2', value: '2x2' },
+  { label: '合并整行', value: 'row-full' },
+  { label: '合并整列', value: 'col-full' },
+]
+
+/**
+ * 当前合并状态 → 预设值字符串。
+ * 优先级: 整行/整列 > 标准预设 > none (用户自定义 col/row span 不在预设内时归为 none)
+ */
+const currentMerge = computed<string>(() => {
+  const cs = currentSpan.value
+  const rs = currentRowSpan.value
+  const fullCols = grid.value.colCount - props.col
+  const fullRows = grid.value.rowCount - props.row
+  if (cs >= fullCols && rs === 1 && cs > 1) return 'row-full'
+  if (cs === 1 && rs >= fullRows && rs > 1) return 'col-full'
+  if (cs === 1 && rs === 1) return 'none'
+  if (cs === 2 && rs === 1) return '1x2'
+  if (cs === 1 && rs === 2) return '2x1'
+  if (cs === 2 && rs === 2) return '2x2'
+  return 'none'
+})
+
+function setMerge(v: string): void {
+  switch (v) {
+    case 'none':
+      setSpan(1)
+      setRowSpan(1)
+      break
+    case '1x2':
+      setSpan(2)
+      setRowSpan(1)
+      break
+    case '2x1':
+      setSpan(1)
+      setRowSpan(2)
+      break
+    case '2x2':
+      setSpan(2)
+      setRowSpan(2)
+      break
+    case 'row-full':
+      setSpan(grid.value.colCount - props.col)
+      setRowSpan(1)
+      break
+    case 'col-full':
+      setSpan(1)
+      setRowSpan(grid.value.rowCount - props.row)
+      break
+  }
+}
+
 function clearStyle(): void {
   emit('apply', patchCell(props.control, props.row, props.col, { style: undefined }))
 }
@@ -449,6 +509,46 @@ function deleteRow(): void {
 function deleteCol(): void {
   emit('apply', removeTableColumn(props.control, props.col))
 }
+
+/* -------------------------------- 行列操作 NDropdown -------------------------------- */
+
+/**
+ * 行列操作下拉选项 —— 替代 6 个独立 NButton (插入↑/↓/←/→ + 删行/删列)
+ * 数据行不可删(canDeleteRow=false)时禁用"删除本行";
+ * 单行/单列表不可删(canDeleteCol/canDeleteRow=false)时禁用对应项。
+ */
+const rowColActions = computed(() => [
+  { label: '插入↑', key: 'insert-row-above' },
+  { label: '插入↓', key: 'insert-row-below' },
+  { label: '插入←', key: 'insert-col-left' },
+  { label: '插入→', key: 'insert-col-right' },
+  { type: 'divider', key: 'd1' },
+  { label: '删行', key: 'delete-row', disabled: !canDeleteRow.value },
+  { label: '删列', key: 'delete-col', disabled: !canDeleteCol.value },
+])
+
+function onRowColAction(key: string): void {
+  switch (key) {
+    case 'insert-row-above':
+      insertRowAbove()
+      break
+    case 'insert-row-below':
+      insertRowBelow()
+      break
+    case 'insert-col-left':
+      insertColLeft()
+      break
+    case 'insert-col-right':
+      insertColRight()
+      break
+    case 'delete-row':
+      deleteRow()
+      break
+    case 'delete-col':
+      deleteCol()
+      break
+  }
+}
 </script>
 
 <template>
@@ -458,7 +558,7 @@ function deleteCol(): void {
     @dblclick.stop
   >
     <div class="op-cell-toolbar__inner">
-      <!-- 第 0 行：内容三态（固定值 / 变量 / 表达式），与文本组件完全一致 -->
+      <!-- 第 1 行：内容（textarea + 字段/函数/聚合 3 个 NButton + segments drop host） -->
       <div class="op-cell-toolbar__row">
         <span class="op-cell-toolbar__tag">内容</span>
         <ContentValueEditor
@@ -485,9 +585,9 @@ function deleteCol(): void {
         />
       </div>
 
-      <!-- 第一行：行角色 / 字体 / 字形 / 对齐 -->
+      <!-- 第 2 行：字体（行角色 / 字体 / 字号 / 字形 / 水平对齐 / 垂直对齐） -->
       <div class="op-cell-toolbar__row">
-        <span class="op-cell-toolbar__tag">{{ roleLabel }}</span>
+        <span class="op-cell-toolbar__tag op-cell-toolbar__tag--role" :title="roleLabel">{{ roleLabel }}</span>
 
         <NDivider vertical />
 
@@ -575,8 +675,10 @@ function deleteCol(): void {
         </NButtonGroup>
       </div>
 
-      <!-- 第二行：文字色 / 填充色 / 合并 / 清除 -->
+      <!-- 第 3 行：样式与合并（文字色 / 背景色 / 合并预设 / 行列操作 NDropdown / 清除样式） -->
       <div class="op-cell-toolbar__row">
+        <span class="op-cell-toolbar__tag">样式与合并</span>
+
         <!-- 文字颜色：自定义触发器 + to=false 让面板留在工具栏内，避免点选时工具栏被收起 -->
         <NColorPicker
           :value="style.color ?? '#1f2329'"
@@ -594,17 +696,20 @@ function deleteCol(): void {
           </template>
         </NColorPicker>
 
-        <!-- 填充颜色（含清除） -->
+        <!--
+          填充颜色：show-alpha=true 让面板内置透明度滑杆;
+          naive-ui NColorPicker 自带「透明」快捷按钮(右上角 clear 图标)替代独立清除填充按钮。
+        -->
         <NColorPicker
-          :value="style.backgroundColor ?? '#ffffff'"
-          :show-alpha="false"
-          :modes="['hex']"
+          :value="style.backgroundColor ?? '#ffffff00'"
+          :show-alpha="true"
+          :modes="['hex', 'rgb']"
           :to="false"
           size="small"
           @update:value="(v: string) => applyStyle({ backgroundColor: v || undefined })"
         >
           <template #trigger="{ value, onClick, ref: triggerRef }">
-            <NButton :ref="triggerRef" size="tiny" quaternary title="填充颜色" @click="onClick">
+            <NButton :ref="triggerRef" size="tiny" quaternary title="填充颜色（内置透明快捷）" @click="onClick">
               <span class="i-carbon-paint-brush" />
               <span
                 class="op-cell-toolbar__swatch"
@@ -613,60 +718,38 @@ function deleteCol(): void {
             </NButton>
           </template>
         </NColorPicker>
-        <NButton size="tiny" quaternary title="清除填充" @click="applyStyle({ backgroundColor: undefined })">
-          <span class="i-carbon-clean" />
-        </NButton>
 
+        <NDivider vertical />
+
+        <!-- 合并 NSelect 预设 —— 替代两个独立 NInputNumber (横合并/纵合并) -->
         <NTooltip trigger="hover">
           <template #trigger>
             <NSelect
               size="tiny"
-              style="width: 92px"
-              :value="currentDiagonal"
-              :options="diagOptions"
-              @update:value="setDiagonal"
+              style="width: 130px"
+              :value="currentMerge"
+              :options="mergeOptions"
+              @update:value="setMerge"
             />
           </template>
-          单元格斜线（课表角标）：无 / ↘左上→右下 / ↗左下→右上
+          合并预设（无 / 1×2 / 2×1 / 2×2 / 合并整行 / 合并整列）
         </NTooltip>
+
+        <!-- 行列操作 NDropdown —— 替代 6 个独立 NButton (插入↑/↓/←/→ + 删行/删列) -->
+        <NDropdown
+          trigger="click"
+          :options="rowColActions"
+          @select="onRowColAction"
+        >
+          <NButton size="tiny" quaternary title="行列操作">
+            <span class="i-carbon-table" />
+            行列操作
+          </NButton>
+        </NDropdown>
 
         <NDivider vertical />
 
-        <NTooltip trigger="hover">
-          <template #trigger>
-            <NInputNumber
-              size="tiny"
-              class="w-20"
-              button-placement="both"
-              :value="currentSpan"
-              :min="1"
-              :max="spanMax"
-              :step="1"
-              @update:value="setSpan"
-            />
-          </template>
-          横向合并列数
-        </NTooltip>
-
-        <NTooltip trigger="hover">
-          <template #trigger>
-            <NInputNumber
-              size="tiny"
-              class="w-20"
-              :value="currentRowSpan"
-              button-placement="both"
-              :min="1"
-              :max="rowSpanMax"
-              :step="1"
-              :disabled="!canRowSpan"
-              @update:value="setRowSpan"
-            />
-          </template>
-          纵向合并行数（数据行不跨行）
-        </NTooltip>
-
-        <NDivider vertical />
-
+        <!-- 清除样式：保留(负责清 style 内 9+ 属性,与清除填充仅清 backgroundColor 不同) -->
         <NTooltip trigger="hover">
           <template #trigger>
             <NButton size="tiny" quaternary @click="clearStyle">
@@ -676,127 +759,92 @@ function deleteCol(): void {
           清除本格样式
         </NTooltip>
 
-        <NDivider vertical />
-
-        <span class="op-cell-toolbar__tag">行列</span>
-        <NTooltip trigger="hover">
-          <template #trigger>
-            <NButton size="tiny" quaternary title="上方插入行" @click="insertRowAbove">
-              <span class="i-carbon-arrow-up" />
-            </NButton>
-          </template>
-          上方插入行
-        </NTooltip>
-        <NTooltip trigger="hover">
-          <template #trigger>
-            <NButton size="tiny" quaternary title="下方插入行" @click="insertRowBelow">
-              <span class="i-carbon-arrow-down" />
-            </NButton>
-          </template>
-          下方插入行
-        </NTooltip>
-        <NTooltip trigger="hover">
-          <template #trigger>
-            <NButton size="tiny" quaternary title="左侧插入列" @click="insertColLeft">
-              <span class="i-carbon-arrow-left" />
-            </NButton>
-          </template>
-          左侧插入列
-        </NTooltip>
-        <NTooltip trigger="hover">
-          <template #trigger>
-            <NButton size="tiny" quaternary title="右侧插入列" @click="insertColRight">
-              <span class="i-carbon-arrow-right" />
-            </NButton>
-          </template>
-          右侧插入列
-        </NTooltip>
-
-        <NDivider vertical />
-
-        <NTooltip trigger="hover">
-          <template #trigger>
-            <NButton size="tiny" quaternary :disabled="!canDeleteRow" title="删除本行" @click="deleteRow">
-              <span class="i-carbon-trash-can" />
-            </NButton>
-          </template>
-          删除本行
-        </NTooltip>
-        <NTooltip trigger="hover">
-          <template #trigger>
-            <NButton size="tiny" quaternary :disabled="!canDeleteCol" title="删除本列" @click="deleteCol">
-              <span class="i-carbon-trash-can" />
-            </NButton>
-          </template>
-          删除本列
-        </NTooltip>
-
         <NButton size="tiny" quaternary @click="closeToolbar">
           <span class="i-carbon-close" />
         </NButton>
       </div>
 
-      <!-- 第三行：数据格式（仅绑定字段的单元格） -->
-      <div v-if="canFormat" class="op-cell-toolbar__row op-cell-toolbar__format">
-        <span class="op-cell-toolbar__tag">格式</span>
-        <NSelect
-          size="tiny"
-          class="w-24"
-          :value="cellFormat?.kind ?? 'none'"
-          :options="formatKindOptions"
-          @update:value="(k: CellFormatKind) => applyFormat(k === 'none' ? undefined : makeFormat(k))"
-        />
-        <template v-if="cellFormat && cellFormat.kind !== 'none'">
-          <NSelect
-            v-if="needsPattern(cellFormat.kind)"
-            size="tiny"
-            class="w-30"
-            :value="isPresetDatePattern(cellFormat.pattern) ? cellFormat.pattern : '__custom__'"
-            :options="datePatternOptions"
-            @update:value="(v: string) => { if (v !== '__custom__') applyFormat({ ...cellFormat!, pattern: v }) }"
-          />
-          <NInput
-            v-if="needsPattern(cellFormat.kind) && !isPresetDatePattern(cellFormat.pattern)"
-            size="tiny"
-            class="w-30"
-            :value="cellFormat.pattern"
-            placeholder="如 YYYY年MM月DD日"
-            @update:value="(v: string) => applyFormat({ ...cellFormat!, pattern: v || 'YYYY-MM-DD' })"
-          />
-          <NInputNumber
-            v-if="needsDigits(cellFormat.kind)"
-            size="tiny"
-            class="w-16"
-            button-placement="both"
-            :value="cellFormat.digits ?? (cellFormat.kind === 'int' ? 0 : 2)"
-            :min="0"
-            :max="6"
-            @update:value="(v: number | null) => applyFormat({ ...cellFormat!, digits: v ?? 0 })"
-          />
-          <NSelect
-            v-if="needsCode(cellFormat.kind)"
-            size="tiny"
-            class="w-20"
-            :value="cellFormat.code ?? 'CNY'"
-            :options="currencyCodeOptions"
-            @update:value="(v: string) => applyFormat({ ...cellFormat!, code: v })"
-          />
-          <NSwitch
-            v-if="supportsThousands(cellFormat.kind)"
-            size="small"
-            :value="cellFormat.thousands ?? true"
-            @update:value="(v: boolean) => applyFormat({ ...cellFormat!, thousands: v })"
-          />
-        </template>
-      </div>
-
-      <!-- 顶部新加一行：表格属性快速面板入口（独立 row 不挤占格式操作） -->
+      <!-- 第 4 行：格式与表格（斜线 + canFormat 控件 + 表格属性 icon-only button） -->
       <div class="op-cell-toolbar__row">
-        <span class="op-cell-toolbar__tag">表格</span>
-        <NButton size="tiny" quaternary title="打开表格属性快速面板" @click="openTableProps">
-          <template #icon><span class="i-carbon-settings" /></template>
-          表格属性
-        </NButton>
+        <span class="op-cell-toolbar__tag">格式与表格</span>
+
+        <!-- diagonal 修截断：宽度从 92px → 120px -->
+        <NTooltip trigger="hover">
+          <template #trigger>
+            <NSelect
+              size="tiny"
+              style="width: 120px"
+              :value="currentDiagonal"
+              :options="diagOptions"
+              @update:value="setDiagonal"
+            />
+          </template>
+          单元格斜线（课表角标）：无 / ↘左上→右下 / ↗左下→右上
+        </NTooltip>
+
+        <template v-if="canFormat">
+          <NDivider vertical />
+
+          <NSelect
+            size="tiny"
+            class="w-24"
+            :value="cellFormat?.kind ?? 'none'"
+            :options="formatKindOptions"
+            @update:value="(k: CellFormatKind) => applyFormat(k === 'none' ? undefined : makeFormat(k))"
+          />
+          <template v-if="cellFormat && cellFormat.kind !== 'none'">
+            <NSelect
+              v-if="needsPattern(cellFormat.kind)"
+              size="tiny"
+              class="w-30"
+              :value="isPresetDatePattern(cellFormat.pattern) ? cellFormat.pattern : '__custom__'"
+              :options="datePatternOptions"
+              @update:value="(v: string) => { if (v !== '__custom__') applyFormat({ ...cellFormat!, pattern: v }) }"
+            />
+            <NInput
+              v-if="needsPattern(cellFormat.kind) && !isPresetDatePattern(cellFormat.pattern)"
+              size="tiny"
+              class="w-30"
+              :value="cellFormat.pattern"
+              placeholder="如 YYYY年MM月DD日"
+              @update:value="(v: string) => applyFormat({ ...cellFormat!, pattern: v || 'YYYY-MM-DD' })"
+            />
+            <NInputNumber
+              v-if="needsDigits(cellFormat.kind)"
+              size="tiny"
+              class="w-16"
+              button-placement="both"
+              :value="cellFormat.digits ?? (cellFormat.kind === 'int' ? 0 : 2)"
+              :min="0"
+              :max="6"
+              @update:value="(v: number | null) => applyFormat({ ...cellFormat!, digits: v ?? 0 })"
+            />
+            <NSelect
+              v-if="needsCode(cellFormat.kind)"
+              size="tiny"
+              class="w-20"
+              :value="cellFormat.code ?? 'CNY'"
+              :options="currencyCodeOptions"
+              @update:value="(v: string) => applyFormat({ ...cellFormat!, code: v })"
+            />
+            <NSwitch
+              v-if="supportsThousands(cellFormat.kind)"
+              size="small"
+              :value="cellFormat.thousands ?? true"
+              @update:value="(v: boolean) => applyFormat({ ...cellFormat!, thousands: v })"
+            />
+          </template>
+        </template>
+
+        <!-- 表格属性 icon-only button + tooltip,放行末 -->
+        <NTooltip trigger="hover">
+          <template #trigger>
+            <NButton size="tiny" quaternary title="打开表格属性快速面板" @click="openTableProps">
+              <span class="i-carbon-settings" />
+            </NButton>
+          </template>
+          打开表格属性快速面板
+        </NTooltip>
       </div>
     </div>
   </div>
@@ -838,6 +886,16 @@ function deleteCol(): void {
   font-size: 11px;
   color: var(--brand-text-secondary, #86909c);
   padding-right: 2px;
+}
+
+/* 行角色 tag:固定 width:84px + 截断 ellipsis,
+   避免「数据行（影响整列）」「本页合计行」等长标签把整行排版撑变形 */
+.op-cell-toolbar__tag--role {
+  width: 84px;
+  flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .op-cell-toolbar__swatch {
