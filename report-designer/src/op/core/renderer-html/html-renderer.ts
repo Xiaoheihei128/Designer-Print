@@ -155,9 +155,18 @@ function renderCellInner(cell: RenderCell): string {
       // ★ PR-C:lockRatio=true + 仅设 widthMm 时,renderer 需输出 width AND height(高度按 aspect 算),
       //   避免 SVG 默认 30mm 高度撑爆 cell。computedW/computedH 由 measureRowHeight 预写入 meta,
       //   已 clamp 到 colWidth-4mm 并按 naturalDims.aspect 推算。
+      //
+      // ★ PR-D.1 bug fix:userW 设了但无 lockRatio 时,旧逻辑只输出 width,让 SVG 的
+      //   preserveAspectRatio="none" 自动按 viewBox 算 span 高度。在窄列(<25mm)时:
+      //     - bwip-js 输出的 viewBox 是按"目标宽度"生成的固定 bar 数 + 自然 125 高(viewBox 单位)
+      //     - SVG 撑满 15mm 宽后,height 自动变成 15/aspect ≈ 30mm(viewBox aspect 决定的)
+      //     - 但 bwip-js 输出的 bars 是按"15mm 应有 64 viewBox 单位"组织的,故每 bar ≈ 0.234mm
+      //     - 扫码枪要求 ≥0.25mm → 扫不出
+      //   修复:只要 computedW/computedH 已知(QR scaleFactor / lockRatio / 一般 widthMm),
+      //   就同时输出 width AND height,让 SVG 严格按自然 aspect 渲染,
+      //   bars 不会被纵向拉伸变窄。
       const userW = display?.widthMm
       const userH = display?.heightMm
-      const lockRatio = display?.lockRatio ?? false
       const computedW = p.meta?.computedW
       const computedH = p.meta?.computedH
       let outW: number | undefined
@@ -166,12 +175,14 @@ function renderCellInner(cell: RenderCell): string {
         // 两维都设了 → 严格按用户设值(CSS max-width:100% 隐式 clamp)
         outW = userW
         outH = userH
-      } else if (userW !== undefined && lockRatio && computedW !== undefined && computedH !== undefined) {
-        // 只设了 widthMm + lockRatio=true → 用 measurer 算的精确尺寸(高度按 aspect 推)
+      } else if (computedW !== undefined && computedH !== undefined) {
+        // ★ PR-D.1 bug fix:computedW/computedH 已知(QR scaleFactor / widthMm+naturalDims 等路径)
+        //   → 同步输出 width AND height,不论 userW/userH 是否设了
+        //   覆盖旧「lockRatio=true 才输出双维」分支 —— QR scaleFactor 路径无 lockRatio 也走这
         outW = computedW
         outH = computedH
       } else if (userW !== undefined) {
-        // 只设了 widthMm + 无 lockRatio → 只输出 width,SVG 高度由 preserveAspectRatio 决定
+        // computedH 缺失(罕见,naturalDims 缓存空 + bwip-js 同步补码失败)→ 兜底:只输出 width
         outW = userW
         outH = undefined
       } else if (userH !== undefined) {

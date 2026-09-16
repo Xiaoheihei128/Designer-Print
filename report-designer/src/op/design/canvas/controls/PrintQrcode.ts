@@ -28,6 +28,12 @@ export class PrintQrcode extends FabricImage implements IPrintObject {
   errorLevel: 'L' | 'M' | 'Q' | 'H' = 'M'
   /** ★ PR-D:用户调尺寸字段(QR 专属 scaleFactor) */
   display?: SegmentDisplayOpts
+  /**
+   * ★ PR-D.1 bug fix:用户未设 display.scaleFactor/widthMm 时,regenerate 兜底用的
+   *   原始控件几何(mm)。setElement(canvas) 会把 this.width 重置为 canvas 自然像素宽,
+   *   mm(this.width || 30) 返回 ~canvas px 而非用户原始 mm → 设计画布变小。
+   */
+  baseWidthMm: number
 
   constructor(control: QrcodeControl) {
     super(document.createElement('canvas'), {
@@ -49,6 +55,8 @@ export class PrintQrcode extends FabricImage implements IPrintObject {
     this.controlName = control.name
     // ★ PR-D:display 持久化
     this.display = control.display
+    // ★ PR-D.1 bug fix:缓存原始控件几何(mm),regenerate 兜底用
+    this.baseWidthMm = control.width
     this.set({ width: mm(control.width), height: mm(control.height) })
     void this.regenerate()
   }
@@ -67,9 +75,10 @@ export class PrintQrcode extends FabricImage implements IPrintObject {
   }
 
   async regenerate(): Promise<void> {
-    // 目标显示尺寸(mm) —— ★ PR-D:display.scaleFactor 优先,未设时退化到 control.width/height
-    //   基准 1× = 30mm(与 code-runtime-fallback.ts QR_BASE_MM 一致)
-    const sizeMM = effectiveQrSizeMm(this.display) ?? mm(this.width || 30)
+    // 目标显示尺寸(mm) —— ★ PR-D:display.scaleFactor 优先,未设时退化到 baseWidthMm
+    //   ★ PR-D.1 bug fix:不用 mm(this.width || 30) —— setElement(canvas) 后 this.width
+    //   被重置为 canvas 自然像素宽,返回 ~canvas px 而非用户原始 mm → 设计画布变小。
+    const sizeMM = effectiveQrSizeMm(this.display) ?? this.baseWidthMm
     // mm → px @ 96dpi (设计画布分辨率)
     const targetPx = mm(sizeMM)
     const text = this.displayValue() ?? 'https://open-print.dev'
@@ -125,6 +134,8 @@ export class PrintQrcode extends FabricImage implements IPrintObject {
     this.controlName = control.name
     // ★ PR-D:display 持久化,后续 regenerate 按它决定渲染尺寸
     this.display = control.display
+    // ★ PR-D.1 bug fix:同步刷新 baseWidthMm(applyControlProps 时 geometry 可能变了)
+    this.baseWidthMm = control.width
     this.set({
       lockMovementX: control.locked,
       lockMovementY: control.locked,

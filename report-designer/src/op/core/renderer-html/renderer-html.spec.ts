@@ -527,8 +527,10 @@ describe('renderer-html —— HTML 输出', () => {
       expect(html).toMatch(/height:\s*30mm/) // 用 display.heightMm=30 而非 computedH=10
     })
 
-    // ★ PR-C:lockRatio=false + 仅设 widthMm → 只输出 width,height 不限(走 CSS 撑满)
-    it('★ PR-C svg lockRatio=false + widthMm → 仅输出 width,height 不限', () => {
+    // ★ PR-D.1:lockRatio=false + 仅设 widthMm + computedH 已知 → 同步输出 width AND height
+    //   旧版只输出 width 让 SVG viewBox 自动算高度 → bwip-js bars 变窄(<0.25mm)→ 扫不出
+    //   现在不论 lockRatio,只要 computedW/computedH 已知就输出双维,保持 bars 自然厚度
+    it('★ PR-D.1 svg lockRatio=false + widthMm + computedH → 同步输出 width AND height', () => {
       const html = segTableHtml([
         {
           text: '',
@@ -548,8 +550,8 @@ describe('renderer-html —— HTML 输出', () => {
         },
       ])
       expect(html).toMatch(/width:\s*40mm/)
-      // lockRatio=false → height 不限,不应有 height 样式
-      expect(html).not.toMatch(/height:\s*10mm/)
+      // ★ PR-D.1:不论 lockRatio,只要 computedW/H 已知 → 输出双维(避免 bars 被压窄)
+      expect(html).toMatch(/height:\s*10mm/)
     })
   })
 })
