@@ -18,6 +18,13 @@
  *   - 高度由内容驱动（max-height: 360px），不同 tab 高度自适应
  *   - 挂在 <main>（CanvasStage）容器内，绝对定位底部居中，左右栏不挤压
  *   - 圆角 + 阴影更接近「弹出 popover」语义，与 TableQuickPanel 视觉一致
+ *
+ * v4 重构 (2026-09-16)：
+ *   - 高度改为固定 440px（用户决策：内容驱动会让面板忽高忽低，
+ *     尤其「首卡内容（5）」和「卡片布局」切换时跳变明显；固定高度更稳）
+ *   - grid-cols-4 行（卡宽/卡高/横间距/纵间距）输入框宽度统一 90px，
+ *     之前不设 width → NInputNumber shrink-wrap 到数字宽度（58.0 vs 0.0），
+ *     视觉错位；现在显式对齐与第一行「列数/行数」一致
  */
 import { computed, ref, watch } from 'vue'
 import {
@@ -278,7 +285,7 @@ defineExpose({ close })
               <NText depth="3" style="font-size: 12px; margin-left: 6px">多行自动跨页</NText>
             </div>
 
-            <div class="grid grid-cols-4 gap-2">
+            <div class="grid grid-cols-4 gap-x-3 gap-y-1">
               <div class="lgq-row">
                 <span class="lgq-label">卡宽</span>
                 <NInputNumber
@@ -288,6 +295,7 @@ defineExpose({ close })
                   :min="1"
                   :step="0.5"
                   :precision="1"
+                  style="width: 90px"
                   @update:value="patchGeometry({ cardWidth: $event ?? 1 })"
                 />
               </div>
@@ -300,6 +308,7 @@ defineExpose({ close })
                   :min="1"
                   :step="0.5"
                   :precision="1"
+                  style="width: 90px"
                   @update:value="patchGeometry({ cardHeight: $event ?? 1 })"
                 />
               </div>
@@ -312,6 +321,7 @@ defineExpose({ close })
                   :min="0"
                   :step="0.5"
                   :precision="1"
+                  style="width: 90px"
                   @update:value="patchGeometry({ gapX: $event ?? 0 })"
                 />
               </div>
@@ -324,6 +334,7 @@ defineExpose({ close })
                   :min="0"
                   :step="0.5"
                   :precision="1"
+                  style="width: 90px"
                   @update:value="patchGeometry({ gapY: $event ?? 0 })"
                 />
               </div>
@@ -624,8 +635,9 @@ defineExpose({ close })
   pointer-events: auto;
   display: flex;
   flex-direction: column;
-  /* 高度由内容驱动，不同 tab 行数不同时自适应 */
-  max-height: min(360px, 60vh);
+  /* 固定高度（用户决策 2026-09-16）：内容驱动会让「卡片布局」「首卡内容（5）」
+     切换时面板跳变；固定 440px 视觉稳，panes 内部仍 overflow-y: auto 可滚 */
+  height: 440px;
   background: var(--brand-surface, #fff);
   border: 1px solid var(--brand-border, #e5e7eb);
   border-radius: 8px;
