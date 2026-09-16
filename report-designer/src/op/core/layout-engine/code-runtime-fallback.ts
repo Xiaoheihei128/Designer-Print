@@ -91,6 +91,9 @@ export function measureNaturalBarcodeDimsSync(text: string, opts: {
     width: Math.max(1, probeWidthMM * (96 / 72) / 2),
     paddingtop: paddingMM,
     paddingbottom: paddingMM,
+    // ★ PR-E.1:与 renderBarcodeSvgSync 同步 paddingwidth=10,保证 measurer 测到的
+    //   naturalDims 也包含 quiet zone → 行高算对 → 渲染时 SVG 不会溢出 cell
+    paddingwidth: 10,
     includetext: opts.showText ?? true,
     textxalign: 'center',
     textsize: 12,

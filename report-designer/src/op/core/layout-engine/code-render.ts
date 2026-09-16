@@ -84,6 +84,10 @@ export function renderBarcodeSvgSync(text: string, opts: BarcodeRenderOpts = {})
   const controlWidthMM = opts.widthMm ?? 30
   const barHeightMM = Math.max(2, controlHeightMM * 0.6)
   const paddingMM = Math.max(0.5, controlHeightMM * 0.04)
+  // ★ PR-E.1 bug fix:加 paddingwidth 给 bwip-js,水平留 quiet zone (≈3mm at controlWidthMM=30)
+  //   扫码枪需要左右 quiet zone ≥ 10 modules(≈2.5mm @ 0.25mm/bar)。bwip-js 默认 paddingwidth=1
+  //   在 scale=2 时仅 2 单位 ≈ 0.18mm,完全不够,手动拉伸 cell 后仍然扫不出。
+  //   paddingwidth=10 单位(20 units @ scale=2) ≈ 3.5mm at 30mm 显示,扫枪可解码。
   const svg = BwipJs.toSVG({
     bcid: (opts.bcid ?? 'code128').toLowerCase(),
     text,
@@ -94,6 +98,7 @@ export function renderBarcodeSvgSync(text: string, opts: BarcodeRenderOpts = {})
     width: Math.max(1, controlWidthMM * (96 / 72) / 2),
     paddingtop: paddingMM,
     paddingbottom: paddingMM,
+    paddingwidth: 10,
     includetext: opts.showText ?? true,
     textxalign: 'center',
     textsize: 12,

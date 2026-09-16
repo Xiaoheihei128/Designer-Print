@@ -71,6 +71,9 @@ export async function drawBarcode(options: BarcodeDrawOptions): Promise<HTMLCanv
       ...(options.widthMM ? { width: options.widthMM } : {}),
       paddingtop: padding,
       paddingbottom: padding,
+      // ★ PR-E.1:与 code-render.ts 同步 paddingwidth=10,水平留 ~3.5mm quiet zone,
+      //   让设计画布和预览/PDF 行为一致。扫码枪需要 ≥10 modules 留白。
+      paddingwidth: 10,
       includetext: options.showText ?? true,
       textxalign: 'center',
       // BWIPP textsize（单位 point，默认 9），调到 12 让人眼可读数字更醒目
