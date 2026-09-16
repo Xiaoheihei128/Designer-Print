@@ -39,6 +39,7 @@ import {
 } from './table-engine'
 import { isDataTable } from './table-cells'
 import { precomputeCodeSvgsForCells } from './code-render'
+import { precomputeCodeNaturalDims } from './code-runtime-fallback'
 import type { Segment } from '@op/types/control'
 import {
   bodyStepMm,
@@ -280,6 +281,9 @@ async function placeStaticTables(
   const svgCacheMap = await precomputeCodeSvgsForCells(allCellSegments, allValuesByPath)
   const svgLookup = (_segIdx: number, path: string, value: string) =>
     svgCacheMap.get(`${path}:${value}`)
+  // ★ PR-C.5:naturalDims 预生成 —— measurer 用 aspect+clampedWidth 算行高,
+  //   cache miss 时由 ensureCodeNaturalDimsSync 同步补码
+  const naturalDimsMap = precomputeCodeNaturalDims(allCellSegments, allValuesByPath)
 
   for (const control of components) {
     if (control.type !== 'table' || flowIdSet.has(control.id)) continue
@@ -295,6 +299,7 @@ async function placeStaticTables(
       widthMm,
       heightMm,
       svgLookup,
+      naturalDims: naturalDimsMap,
     })
     warnings.push(...model.warnings)
     placed.push({
@@ -619,6 +624,8 @@ export async function layout(
     const svgCacheMap = await precomputeCodeSvgsForCells(cellSegmentsList, allValuesByPath)
     const svgLookup = (_segIdx: number, path: string, value: string) =>
       svgCacheMap.get(`${path}:${value}`)
+    // ★ PR-C.5:naturalDims 预生成 —— measurer 行高精确计算基础
+    const naturalDimsMap = precomputeCodeNaturalDims(cellSegmentsList, allValuesByPath)
 
     const model = buildTableModel({
       control: ft,
@@ -627,6 +634,7 @@ export async function layout(
       widthMm: toMm(ft.width, unit),
       heightMm: toMm(ft.height, unit),
       svgLookup,
+      naturalDims: naturalDimsMap,
     })
     warnings.push(...model.warnings)
     prebuiltModels.set(ft.id, {

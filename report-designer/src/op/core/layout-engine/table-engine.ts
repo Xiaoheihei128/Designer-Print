@@ -60,6 +60,14 @@ import {
 import { computeVMergeSpans } from './vmerge'
 import type { TextMeasurer } from './measure'
 import type { EvalContext, RenderCell, RenderPart, RenderRow, RenderWarning } from './types'
+import {
+  clampUserWidthToColumn,
+  ensureCodeNaturalDimsSync,
+  makeCodeKey,
+  makeNaturalDimsFailedWarning,
+  makeRuntimeFallbackWarning,
+  type NaturalCodeDims,
+} from './code-runtime-fallback'
 
 /**
  * 段级 SVG 缓存 key —— 由 pagination-engine 在 buildTableModel 之前预生成。
@@ -412,6 +420,8 @@ function measureRowHeight(
   { cells, geo }: BuiltRow,
   control: TableControl,
   measurer: TextMeasurer,
+  naturalDims?: Map<string, NaturalCodeDims>,
+  warnings?: RenderWarning[],
 ): number {
   const mode = control.options?.rowHeightMode ?? 'auto'
   if (mode === 'fixed') {
@@ -433,13 +443,104 @@ function measureRowHeight(
     let cellPartH = 0
     for (const p of cell.parts ?? []) {
       if (p.kind === 'text') continue
-      const displayH = p.meta?.display?.heightMm
-      if (displayH !== undefined && displayH > cellPartH) cellPartH = displayH
+      const display = p.meta?.display
+      // 优先级 1:用户显式设了 heightMm → 直接用(向后兼容 PR-A 行为)。
+      // PR-C.5 不改这条路径,避免无 naturalDims 缓存时回归既有 25mm 默认。
+      if (display?.heightMm !== undefined) {
+        if (display.heightMm > cellPartH) cellPartH = display.heightMm
+        continue
+      }
+      // 优先级 2:naturalDims 缓存可用 → 按 aspect + clampedWidth 算行高(PR-C.5 新)。
+      //   cache hit → 直接用;cache miss → ensureCodeNaturalDimsSync 同步补码
+      //   补码成功 → 用 + CODE_NATURAL_DIMS_RUNTIME_FALLBACK 警告
+      //   补码失败 → 走 display.heightMm 兜底 + CODE_NATURAL_DIMS_FAILED 警告
+      //   userWidth > colWidth → 静默 clamp(避免 CSS 隐式压缩导致 Bug A 复发)
+      if (naturalDims && p.meta?.field) {
+        const computedH = computePartHeightFromNaturalDims(
+          p, avail, naturalDims, warnings, control.id,
+        )
+        if (computedH !== undefined) {
+          if (computedH > cellPartH) cellPartH = computedH
+          continue
+        }
+      }
+      // 优先级 3:无 naturalDims 缓存 / 无 userWidth 设值 → 用 display.heightMm 兜底
+      //   resolveSegments 已给 qrcode=15 / barcode=25 / image=15 默认值
+      const fallbackH = display?.heightMm ?? 0
+      if (fallbackH > cellPartH) cellPartH = fallbackH
     }
     const effectiveH = Math.max(heightMm, cellPartH)
     if (effectiveH > maxH) maxH = effectiveH
   }
   return Math.max(MIN_ROW_HEIGHT, maxH + CELL_PADDING_Y * 2)
+}
+
+/**
+ * ★ PR-C.5:按 naturalDims.aspect + clamped userWidth 算 part 高度。
+ *
+ * 行为契约:
+ * - naturalDims cache hit → 用 aspect × clampedWidth(无 userWidth 时用 naturalWidthMm 兜底)
+ * - naturalDims cache miss + sync补码成功 → 同上 + push CODE_NATURAL_DIMS_RUNTIME_FALLBACK 警告
+ * - naturalDims cache miss + sync补码失败(bwip-js 抛错) → 返回 undefined,让 caller fallback
+ * - userWidth > colWidth → 静默 clamp 到 colWidth - 4mm,不警告
+ *
+ * 返回 undefined 表示无法用 naturalDims 路径(让 caller 走兜底)
+ */
+function computePartHeightFromNaturalDims(
+  part: RenderPart,
+  colAvailMm: number,
+  naturalDims: Map<string, NaturalCodeDims>,
+  warnings: RenderWarning[] | undefined,
+  controlId: string,
+): number | undefined {
+  if (part.kind === 'image') {
+    // image 暂无 aspect 概念(走 fitMode),PR-C 才接入。返回 undefined 让 caller 走 defaultDisplayForFormat
+    return undefined
+  }
+  if (part.kind !== 'svg') return undefined
+  const meta = part.meta
+  if (!meta?.field) return undefined
+  const fmtKind = meta.formatKind
+  if (fmtKind !== 'barcode' && fmtKind !== 'qrcode') return undefined
+  // 用最小化的 CellFormat 喂 makeCodeKey,只含 bcid/errorLevel(其它字段非 cache key)
+  const fmtLike = {
+    kind: fmtKind,
+    bcid: meta.bcid,
+    errorLevel: meta.errorLevel,
+  } as Parameters<typeof makeCodeKey>[2]
+  const value = meta.value ?? ''
+  // ★ PR-C.5:cache miss 同步补码 —— 写回 cache + 警告
+  const { dims, runtimeFallback } = ensureCodeNaturalDimsSync(
+    meta.field, value, fmtLike, naturalDims,
+  )
+  if (runtimeFallback) {
+    // cache miss 触发的同步补码(无论成功失败)—— 发警告
+    if (dims && warnings) {
+      warnings.push(makeRuntimeFallbackWarning(meta.field, controlId))
+    } else if (!dims && warnings) {
+      warnings.push(makeNaturalDimsFailedWarning(meta.field, controlId))
+    }
+  }
+  if (!dims) {
+    // 同步补码失败 → 让 caller fallback 到 display.heightMm 兜底
+    return undefined
+  }
+  // ★ PR-C.5 clamp:userWidth 必须先 clamp 到列宽 - padding,避免 Bug A 复发
+  const userW = meta.display?.widthMm
+  const lockRatio = meta.display?.lockRatio ?? false
+  const { actual: clampedW } = clampUserWidthToColumn(userW, colAvailMm, 4)
+  // 计算行高:
+  // - lockRatio=true + 设了 userWidth → clampedW / aspect
+  // - lockRatio=true + 没设 userWidth → naturalWidthMm / aspect = naturalHeightMm
+  // - lockRatio=false → naturalHeightMm(不按 aspect 推,renderer 撑满 cell)
+  let computedH: number
+  if (lockRatio) {
+    const baseW = userW !== undefined ? clampedW : dims.naturalWidthMm
+    computedH = baseW / Math.max(0.01, dims.aspect)
+  } else {
+    computedH = dims.naturalHeightMm
+  }
+  return computedH
 }
 
 /* -------------------------------- 建模 -------------------------------- */
@@ -465,6 +566,12 @@ export interface BuildTableOptions {
    * segIdx 是 cell-local;caller 负责把它转成全局 key,例如 `${cellIdx}:${segIdx}:...`)。
    */
   svgLookup?: (segIdx: number, path: string, value: string) => string | undefined
+  /**
+   * ★ PR-C.5:naturalDims 缓存 —— 由 pagination-engine 预生成 (path,value,bcid,errorLevel) →
+   * NaturalCodeDims。measurer 在 cache miss 时同步补码,bwip-js 失败则 25mm 兜底。
+   * 未传 → measurer 用 defaultDisplayForFormat.heightMm 兜底(向后兼容)。
+   */
+  naturalDims?: Map<string, NaturalCodeDims>
 }
 
 export function buildTableModel({
@@ -474,6 +581,7 @@ export function buildTableModel({
   widthMm,
   heightMm,
   svgLookup,
+  naturalDims,
 }: BuildTableOptions): TableModel {
   const warnings: RenderWarning[] = []
   // 老模板兼容：列无 id 时运行时补齐（不写回持久化，详见 ensureColumnIds 注释）
@@ -517,7 +625,7 @@ export function buildTableModel({
     })
     headerRows.push({
       kind: 'header',
-      height: measureRowHeight(built, control, measurer) * HEADER_ROW_FACTOR,
+      height: measureRowHeight(built, control, measurer, naturalDims, warnings) * HEADER_ROW_FACTOR,
       cells: built.cells,
     })
   }
@@ -540,7 +648,7 @@ export function buildTableModel({
     })
     return {
       kind: 'static',
-      height: height ?? measureRowHeight(built, control, measurer),
+      height: height ?? measureRowHeight(built, control, measurer, naturalDims, warnings),
       cells: built.cells,
     }
   }
@@ -602,6 +710,8 @@ export function buildTableModel({
           { cells, geo: { widths: [tableWidth], pads: [columnGeo.pads[0] ?? DEFAULT_CELL_PADDING] } },
           control,
           measurer,
+          naturalDims,
+          warnings,
         ),
         cells,
       }
@@ -613,7 +723,7 @@ export function buildTableModel({
       const cells = buildAggregateCells(plan.label ?? '小计', plan.aggregates ?? {}, style)
       return {
         kind: plan.kind,
-        height: measureRowHeight({ cells, geo: columnGeo }, control, measurer),
+        height: measureRowHeight({ cells, geo: columnGeo }, control, measurer, naturalDims, warnings),
         cells,
       }
     }
@@ -654,7 +764,7 @@ export function buildTableModel({
     return {
       kind: 'data',
       dataIndex: plan.dataIndex,
-      height: measureRowHeight(built, control, measurer),
+      height: measureRowHeight(built, control, measurer, naturalDims, warnings),
       cells: markedCells,
       cantSplit,
     }
@@ -805,7 +915,7 @@ function buildFooterRow(rowCells: TableCell[], spanRow: CellSpan[]): RenderRow {
     return {
       kind: fk === 'static' ? 'static' : fk === 'pageSubtotal' ? 'subtotal' : 'summary',
       footerKind: fk,
-      height: measureRowHeight(built, control, measurer),
+      height: measureRowHeight(built, control, measurer, naturalDims, warnings),
       cells: built.cells,
     }
   }
@@ -817,7 +927,7 @@ function buildFooterRow(rowCells: TableCell[], spanRow: CellSpan[]): RenderRow {
     footerRows.push({
       kind: 'summary',
       footerKind: 'static',
-      height: measureRowHeight({ cells, geo: columnGeo }, control, measurer),
+      height: measureRowHeight({ cells, geo: columnGeo }, control, measurer, naturalDims, warnings),
       cells,
     })
   }

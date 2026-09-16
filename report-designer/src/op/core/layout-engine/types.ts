@@ -108,7 +108,23 @@ export interface RenderCell {
  */
 export type RenderPart =
   | { kind: 'text'; text: string }
-  | { kind: 'svg'; svg: string; meta?: { display?: import('@op/types/control').SegmentDisplayOpts } }
+  | {
+      kind: 'svg'
+      svg: string
+      meta?: {
+        display?: import('@op/types/control').SegmentDisplayOpts
+        /** ★ PR-C.5:绑定的字段路径,供 measurer 查 naturalDims 缓存 */
+        field?: string
+        /** ★ PR-C.5:当前字段值,key 第二段 */
+        value?: string
+        /** ★ PR-C.5:形态段类型(qrcode/barcode),决定 naturalDims 行为 */
+        formatKind?: 'qrcode' | 'barcode'
+        /** ★ PR-C.5:条码类型(CODE128/EAN13...),区分同 path 不同 bcid 的 cache key */
+        bcid?: string
+        /** ★ PR-C.5:二维码纠错等级(L/M/Q/H),区分同 path 不同纠错级的 cache key */
+        errorLevel?: 'L' | 'M' | 'Q' | 'H'
+      }
+    }
   | {
       kind: 'image'
       src: string
@@ -116,6 +132,10 @@ export type RenderPart =
       meta?: {
         display?: import('@op/types/control').SegmentDisplayOpts
         fit?: 'contain' | 'cover' | 'fill' | 'none'
+        /** ★ PR-C.5:绑定的字段路径(图片暂未用,但与 svg 对齐) */
+        field?: string
+        /** ★ PR-C.5:当前字段值 */
+        value?: string
       }
     }
 
@@ -233,6 +253,8 @@ export type WarningCode =
   | 'PAGE_LIMIT_REACHED' // 触发最大页数保护
   | 'ROW_TOO_TALL' // 单行高于整页可用高度
   | 'ROW_HAS_CODE_NOTSPLIT' // ★ PR-B:行含不可分割内容(条形码/二维码)被强制下推到下一页
+  | 'CODE_NATURAL_DIMS_RUNTIME_FALLBACK' // ★ PR-C.5:naturalDims cache miss,运行时同步补码成功
+  | 'CODE_NATURAL_DIMS_FAILED' // ★ PR-C.5:naturalDims cache miss,运行时同步补码失败(bwip-js 抛错)
   | 'PAGE_ROWS_CONFLICT' // fixBottomRows 与 pageRows 同时设置（pageRows 优先）
   | 'LABEL_GRID_DATA_MISSING' // 标签网格 dataSource 不存在或不是数组（回退纯布局平铺）
   | 'LABEL_GRID_DATA_EMPTY' // 标签网格 dataSource 为空数组（回退纯布局平铺）

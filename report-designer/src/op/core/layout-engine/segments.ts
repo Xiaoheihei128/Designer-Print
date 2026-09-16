@@ -185,7 +185,22 @@ function resolveOne(
         if (svg) {
           return {
             text: '',
-            parts: [{ kind: 'svg', svg, meta: { display: defaultDisplayForFormat(fkind, fmt?.display) } }],
+            // ★ PR-C.5:meta 携带 field/value/formatKind/bcid/errorLevel,供 measureRowHeight
+            //   查 naturalDims 缓存(renderPart 不持有 segment 引用,只能塞到 meta 里)
+            parts: [
+              {
+                kind: 'svg',
+                svg,
+                meta: {
+                  display: defaultDisplayForFormat(fkind, fmt?.display),
+                  field: seg.path,
+                  value,
+                  formatKind: fkind === 'barcode' ? 'barcode' : 'qrcode',
+                  bcid: fmt?.bcid,
+                  errorLevel: fmt?.errorLevel,
+                },
+              },
+            ],
           }
         }
       }
