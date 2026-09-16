@@ -304,6 +304,11 @@ describe('buildTableModel —— 表格建模', () => {
     const ctx: EvalContext = { data: { items: [{ qr: 'X' }] } }
     const svgLookup = (_segIdx: number, path: string, value: string) =>
       path === 'qr' && value === 'X' ? '<svg/>' : undefined
+    // ★ PR-C:传 naturalDims(模拟预编码已完成)→ measurer 走 naturalHeightMm 路径
+    //   无 naturalDims 时,默认兜底已由 PR-C 移除,行高退化为文本高度
+    const naturalDims = new Map<string, import('./code-runtime-fallback').NaturalCodeDims>([
+      ['items[].qr:X::M', { naturalWidthMm: 15, naturalHeightMm: 15, aspect: 1 }],
+    ])
     const model = buildTableModel({
       control: c,
       ctx,
@@ -311,6 +316,7 @@ describe('buildTableModel —— 表格建模', () => {
       widthMm: 60,
       heightMm: 30,
       svgLookup,
+      naturalDims,
     })
     const dataRow = model.rows.find((r) => r.kind === 'data')!
     expect(dataRow.height).toBeGreaterThanOrEqual(8)

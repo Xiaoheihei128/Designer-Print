@@ -152,11 +152,39 @@ function renderCellInner(cell: RenderCell): string {
     if (p.kind === 'svg') {
       // 段级 svg:不携带 node.id(无 PlacedControl),inline-block 让 svg 与文字行内对齐
       const display = p.meta?.display
+      // ★ PR-C:lockRatio=true + 仅设 widthMm 时,renderer 需输出 width AND height(高度按 aspect 算),
+      //   避免 SVG 默认 30mm 高度撑爆 cell。computedW/computedH 由 measureRowHeight 预写入 meta,
+      //   已 clamp 到 colWidth-4mm 并按 naturalDims.aspect 推算。
+      const userW = display?.widthMm
+      const userH = display?.heightMm
+      const lockRatio = display?.lockRatio ?? false
+      const computedW = p.meta?.computedW
+      const computedH = p.meta?.computedH
+      let outW: number | undefined
+      let outH: number | undefined
+      if (userW !== undefined && userH !== undefined) {
+        // 两维都设了 → 严格按用户设值(CSS max-width:100% 隐式 clamp)
+        outW = userW
+        outH = userH
+      } else if (userW !== undefined && lockRatio && computedW !== undefined && computedH !== undefined) {
+        // 只设了 widthMm + lockRatio=true → 用 measurer 算的精确尺寸(高度按 aspect 推)
+        outW = computedW
+        outH = computedH
+      } else if (userW !== undefined) {
+        // 只设了 widthMm + 无 lockRatio → 只输出 width,SVG 高度由 preserveAspectRatio 决定
+        outW = userW
+        outH = undefined
+      } else if (userH !== undefined) {
+        // 只设了 heightMm → 只输出 height
+        outW = undefined
+        outH = userH
+      }
+      // 都没设 → outW/outH undefined → 不输出 style,SVG 用 viewBox 撑满 cell
       const sizeStyle =
-        display?.widthMm || display?.heightMm
+        outW !== undefined || outH !== undefined
           ? ` style="${[
-              display.widthMm ? `width:${mmv(display.widthMm)}` : '',
-              display.heightMm ? `height:${mmv(display.heightMm)}` : '',
+              outW !== undefined ? `width:${mmv(outW)}` : '',
+              outH !== undefined ? `height:${mmv(outH)}` : '',
             ]
               .filter(Boolean)
               .join(';')}"`

@@ -169,7 +169,7 @@ describe('★ resolveSegments 段级渲染形态', () => {
   //   兜底 fontSize*1.5≈13.5mm 不够 SVG 真实尺寸,SVG 被 td overflow:hidden 切。
   //   用户案例：table.cell 绑了 qrcode/barcode 后预览,SVG 顶部显示,底部被切,
   //   视觉上像「行被截断」。
-  it('★ qrcode svg part 默认 display.heightMm = 15mm（紧凑 QR）', () => {
+  it('★ qrcode svg part 用户未设 heightMm 时 = undefined（PR-C:由 measurer/naturalDims 兜底）', () => {
     const segs: Segment[] = [
       { kind: 'field', path: 'order.qr', format: { kind: 'qrcode', errorLevel: 'M' } },
     ]
@@ -179,26 +179,27 @@ describe('★ resolveSegments 段级渲染形态', () => {
     expect(r.parts.length).toBe(1)
     expect(r.parts[0]!.kind).toBe('svg')
     const part = r.parts[0] as { kind: 'svg'; meta?: { display?: { heightMm?: number } } }
-    expect(part.meta?.display?.heightMm).toBe(15)
+    // PR-C:移除无条件 defaultH 兜底,改为「未设时不写 heightMm」
+    expect(part.meta?.display?.heightMm).toBeUndefined()
   })
 
-  it('★ barcode svg part 默认 display.heightMm = 25mm（Code128+showText 需 ~10mm 数字行）', () => {
+  it('★ barcode svg part 用户未设 heightMm 时 = undefined（PR-C:由 measurer/naturalDims 兜底）', () => {
     const segs: Segment[] = [
       { kind: 'field', path: 'product.sn', format: { kind: 'barcode', bcid: 'code128', showText: true } },
     ]
     const svgLookup = (_i: number, _p: string, _v: string) => '<svg/>'
     const r = resolveSegments(segs, { data: { product: { sn: 'SN-1' } } }, { svgLookup })
     const part = r.parts[0] as { kind: 'svg'; meta?: { display?: { heightMm?: number } } }
-    expect(part.meta?.display?.heightMm).toBe(25)
+    expect(part.meta?.display?.heightMm).toBeUndefined()
   })
 
-  it('★ image part 默认 display.heightMm = 15mm', () => {
+  it('★ image part 用户未设 heightMm 时 = undefined（PR-C:由 measurer/naturalDims 兜底）', () => {
     const segs: Segment[] = [
       { kind: 'field', path: 'photo', format: { kind: 'image', fit: 'cover' } },
     ]
     const r = resolveSegments(segs, { data: { photo: 'http://x/y.jpg' } })
     const part = r.parts[0] as { kind: 'image'; meta?: { display?: { heightMm?: number } } }
-    expect(part.meta?.display?.heightMm).toBe(15)
+    expect(part.meta?.display?.heightMm).toBeUndefined()
   })
 
   it('★ 用户显式设 display.heightMm 时覆盖默认值', () => {

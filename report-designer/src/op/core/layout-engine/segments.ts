@@ -56,17 +56,18 @@ function emptyDisplayLabel(kind: 'qrcode' | 'barcode' | 'image'): string {
 }
 
 /**
- * 形态段默认显示尺寸(mm)。用户没显式设 display.heightMm/widthMm 时使用——
- * 否则 measureRowHeight 只兜底 `fontSize * 1.5` ≈ 13.5mm,远不够 SVG 真实尺寸。
- * 表格 td 用 `width:100% height:100% preserveAspectRatio="none"` 把 SVG 强压,
- * SVG 被切 → 行看起来"被截断"。
+ * 形态段默认显示尺寸(mm)。透传 userDisplay 字段,heightMm 仅在用户显式设置时输出——
+ * 否则由 measureRowHeight(自然尺寸/naturalDims)兜底,renderer 同时读
+ * meta.computedW/computedH(PR-C 写入)精确输出。
  *
  * - qrcode:紧凑型,15mm 方块够 4 级纠错 30 字符
  * - barcode:Code128+showText 默认需 25mm(条码 ~15mm + 数字行 ~10mm)
  * - image:15mm 默认(可由 fit 配合 columnWidth 自适应)
  *
  * PR-A:同时透传 userDisplay.lockRatio / fitMode,renderer 据此决定精确 vs 自适应输出。
- * 注:本函数保留默认 heightMm 兜底逻辑(25/15mm),PR-C.5/C 才完整改 measurer。
+ * PR-C:移除无条件 defaultH 兜底,改为"未设时不写 heightMm",让 measurer/naturalDims 路径兜底。
+ *   原因:用户在 properties panel 把 heightMm 设为空(原本兜底 25mm)→ renderer 不应输出 25mm,
+ *   应让 lockRatio + widthMm 路径按 naturalDims 精确算高度。
  */
 function defaultDisplayForFormat(
   kind: 'qrcode' | 'barcode' | 'image',
@@ -78,14 +79,13 @@ function defaultDisplayForFormat(
   },
 ): {
   widthMm?: number
-  heightMm: number
+  heightMm?: number
   lockRatio?: boolean
   fitMode?: 'auto' | 'fixed'
 } {
-  const defaultH = kind === 'barcode' ? 25 : 15
   return {
     widthMm: userDisplay?.widthMm,
-    heightMm: userDisplay?.heightMm ?? defaultH,
+    heightMm: userDisplay?.heightMm,
     lockRatio: userDisplay?.lockRatio,
     fitMode: userDisplay?.fitMode,
   }

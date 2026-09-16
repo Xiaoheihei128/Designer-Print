@@ -123,6 +123,22 @@ export type RenderPart =
         bcid?: string
         /** ★ PR-C.5:二维码纠错等级(L/M/Q/H),区分同 path 不同纠错级的 cache key */
         errorLevel?: 'L' | 'M' | 'Q' | 'H'
+        /**
+         * ★ PR-C:measurer 算出的最终渲染宽度(mm),已 clamp 到 colWidth-4mm。
+         * renderer 在 lockRatio=true + widthMm 设了但 heightMm 没设时,
+         * 用此值 + computedH 输出精确尺寸;lockRatio=false 或都设了时,renderer 直接用 display。
+         * 未 clamp 时(userWidth ≤ colWidth-padding)等同于 userWidth。
+         */
+        computedW?: number
+        /**
+         * ★ PR-C:measurer 算出的最终渲染高度(mm)。
+         * lockRatio=true + 仅设 widthMm 时 = computedW / aspect(精确匹配 barcode 自然比例)
+         * lockRatio=false + 仅设 widthMm 时 = naturalHeightMm(bwip-js 默认)
+         * 设了 heightMm 时 = heightMm(直接用)
+         */
+        computedH?: number
+        /** ★ PR-C:naturalDims aspect(供 renderer 参考,renderer 一般不直接用,因为 computedW/computedH 已包含) */
+        aspect?: number
       }
     }
   | {
@@ -136,6 +152,10 @@ export type RenderPart =
         field?: string
         /** ★ PR-C.5:当前字段值 */
         value?: string
+        /** ★ PR-C:图片最终渲染宽度(mm) */
+        computedW?: number
+        /** ★ PR-C:图片最终渲染高度(mm) */
+        computedH?: number
       }
     }
 

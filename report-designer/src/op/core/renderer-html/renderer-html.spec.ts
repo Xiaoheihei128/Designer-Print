@@ -477,5 +477,79 @@ describe('renderer-html —— HTML 输出', () => {
       const html = segTableHtml([{ text: 'hello', align: 'left' }])
       expect(html).toContain('<td style="text-align:left">hello</td>')
     })
+
+    // ★ PR-C:lockRatio=true + 仅设 widthMm → 用 computedW/computedH 输出 width + height
+    //   (renderer 读 meta.computedW/computedH,确保 measurer 算出的精确尺寸被原样渲染)
+    it('★ PR-C svg lockRatio + widthMm → 输出 width + height (读 meta.computedW/H)', () => {
+      const html = segTableHtml([
+        {
+          text: '',
+          align: 'left',
+          parts: [
+            {
+              kind: 'svg',
+              svg: '<svg/>',
+              meta: {
+                display: { widthMm: 40, lockRatio: true },
+                computedW: 40,
+                computedH: 10,
+                aspect: 4,
+              },
+            },
+          ],
+        },
+      ])
+      expect(html).toMatch(/width:\s*40mm/)
+      expect(html).toMatch(/height:\s*10mm/)
+    })
+
+    // ★ PR-C:用户都设了 widthMm + heightMm → renderer 直接用 display,忽略 computedW/H
+    it('★ PR-C svg widthMm + heightMm 都设 → 严格用 display,忽略 lockRatio', () => {
+      const html = segTableHtml([
+        {
+          text: '',
+          align: 'left',
+          parts: [
+            {
+              kind: 'svg',
+              svg: '<svg/>',
+              meta: {
+                display: { widthMm: 40, heightMm: 30, lockRatio: true },
+                computedW: 40,
+                computedH: 10,
+                aspect: 4,
+              },
+            },
+          ],
+        },
+      ])
+      expect(html).toMatch(/width:\s*40mm/)
+      expect(html).toMatch(/height:\s*30mm/) // 用 display.heightMm=30 而非 computedH=10
+    })
+
+    // ★ PR-C:lockRatio=false + 仅设 widthMm → 只输出 width,height 不限(走 CSS 撑满)
+    it('★ PR-C svg lockRatio=false + widthMm → 仅输出 width,height 不限', () => {
+      const html = segTableHtml([
+        {
+          text: '',
+          align: 'left',
+          parts: [
+            {
+              kind: 'svg',
+              svg: '<svg/>',
+              meta: {
+                display: { widthMm: 40, lockRatio: false },
+                computedW: 40,
+                computedH: 10,
+                aspect: 4,
+              },
+            },
+          ],
+        },
+      ])
+      expect(html).toMatch(/width:\s*40mm/)
+      // lockRatio=false → height 不限,不应有 height 样式
+      expect(html).not.toMatch(/height:\s*10mm/)
+    })
   })
 })

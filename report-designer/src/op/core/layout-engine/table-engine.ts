@@ -457,7 +457,7 @@ function measureRowHeight(
       //   userWidth > colWidth → 静默 clamp(避免 CSS 隐式压缩导致 Bug A 复发)
       if (naturalDims && p.meta?.field) {
         const computedH = computePartHeightFromNaturalDims(
-          p, avail, naturalDims, warnings, control.id,
+          p, avail, geo.widths[i] ?? 0, naturalDims, warnings, control.id,
         )
         if (computedH !== undefined) {
           if (computedH > cellPartH) cellPartH = computedH
@@ -489,6 +489,7 @@ function measureRowHeight(
 function computePartHeightFromNaturalDims(
   part: RenderPart,
   colAvailMm: number,
+  rawColWidthMm: number,
   naturalDims: Map<string, NaturalCodeDims>,
   warnings: RenderWarning[] | undefined,
   controlId: string,
@@ -526,20 +527,30 @@ function computePartHeightFromNaturalDims(
     return undefined
   }
   // ★ PR-C.5 clamp:userWidth 必须先 clamp 到列宽 - padding,避免 Bug A 复发
+  // 注:clampUserWidthToColumn 内部再减一次 padding(默认 4mm),所以传原始 colWidth
+  //   而不是 colAvail(已被 measureRowHeight 减过一次)。否则双重 padding → over-clamp。
+  //   当前从 caller 拿不到原始 colWidth,只能让 caller 改传 —— 见 measureRowHeight 改法。
   const userW = meta.display?.widthMm
   const lockRatio = meta.display?.lockRatio ?? false
-  const { actual: clampedW } = clampUserWidthToColumn(userW, colAvailMm, 4)
+  const { actual: clampedW } = clampUserWidthToColumn(userW, rawColWidthMm, 4)
   // 计算行高:
   // - lockRatio=true + 设了 userWidth → clampedW / aspect
   // - lockRatio=true + 没设 userWidth → naturalWidthMm / aspect = naturalHeightMm
   // - lockRatio=false → naturalHeightMm(不按 aspect 推,renderer 撑满 cell)
   let computedH: number
+  let computedW: number
   if (lockRatio) {
-    const baseW = userW !== undefined ? clampedW : dims.naturalWidthMm
-    computedH = baseW / Math.max(0.01, dims.aspect)
+    computedW = userW !== undefined ? clampedW : dims.naturalWidthMm
+    computedH = computedW / Math.max(0.01, dims.aspect)
   } else {
+    computedW = userW !== undefined ? clampedW : dims.naturalWidthMm
     computedH = dims.naturalHeightMm
   }
+  // ★ PR-C:写回 part.meta,renderer 据此精确输出 style。
+  //   cell.parts 由 segments.ts 在 buildTableModel 一次性创建,无跨 cell 共享引用 → 直接 mutate 安全
+  meta.computedW = computedW
+  meta.computedH = computedH
+  meta.aspect = dims.aspect
   return computedH
 }
 
