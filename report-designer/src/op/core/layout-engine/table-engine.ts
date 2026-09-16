@@ -68,6 +68,7 @@ import {
   makeRuntimeFallbackWarning,
   type NaturalCodeDims,
 } from './code-runtime-fallback'
+import { effectiveQrSizeMm } from './qr-scale'
 
 /**
  * 段级 SVG 缓存 key —— 由 pagination-engine 在 buildTableModel 之前预生成。
@@ -534,12 +535,19 @@ function computePartHeightFromNaturalDims(
   const lockRatio = meta.display?.lockRatio ?? false
   const { actual: clampedW } = clampUserWidthToColumn(userW, rawColWidthMm, 4)
   // 计算行高:
+  // - PR-D QR(新):scaleFactor 或 widthMm → 方形尺寸(mm) clamp 到 colWidth
   // - lockRatio=true + 设了 userWidth → clampedW / aspect
   // - lockRatio=true + 没设 userWidth → naturalWidthMm / aspect = naturalHeightMm
   // - lockRatio=false → naturalHeightMm(不按 aspect 推,renderer 撑满 cell)
   let computedH: number
   let computedW: number
-  if (lockRatio) {
+  // ★ PR-D:QR cell 走「倍率」或「绝对 mm」,两边都收口到方形边长
+  const qrSizeMm = fmtKind === 'qrcode' ? effectiveQrSizeMm(meta.display) : undefined
+  if (qrSizeMm !== undefined) {
+    const { actual: clampedSize } = clampUserWidthToColumn(qrSizeMm, rawColWidthMm, 4)
+    computedW = clampedSize
+    computedH = clampedSize
+  } else if (lockRatio) {
     computedW = userW !== undefined ? clampedW : dims.naturalWidthMm
     computedH = computedW / Math.max(0.01, dims.aspect)
   } else {

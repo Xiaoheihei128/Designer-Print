@@ -76,18 +76,25 @@ function defaultDisplayForFormat(
     heightMm?: number
     lockRatio?: boolean
     fitMode?: 'auto' | 'fixed'
+    /**
+     * ★ PR-D:QR 倍率(基准 30mm)。仅 QR 形态有意义,barcode/image 透传但不消费。
+     * measurer 用 effectiveQrSizeMm 读这个字段把 QR 边长按「30mm × scaleFactor」算。
+     */
+    scaleFactor?: number
   },
 ): {
   widthMm?: number
   heightMm?: number
   lockRatio?: boolean
   fitMode?: 'auto' | 'fixed'
+  scaleFactor?: number
 } {
   return {
     widthMm: userDisplay?.widthMm,
     heightMm: userDisplay?.heightMm,
     lockRatio: userDisplay?.lockRatio,
     fitMode: userDisplay?.fitMode,
+    scaleFactor: userDisplay?.scaleFactor,
   }
 }
 

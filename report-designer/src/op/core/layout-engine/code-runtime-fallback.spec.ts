@@ -465,3 +465,154 @@ describe('PR-C measureRowHeight —— 写回 computedW/computedH 到 part.meta'
     expect(model.warnings.some((w) => w.code === 'CODE_NATURAL_DIMS_RUNTIME_FALLBACK')).toBe(true)
   })
 })
+
+/* ============================================================
+ * PR-D:QR cell scaleFactor / 兼容 widthMm 路径(measurer 计算行高)
+ * ============================================================ */
+describe('computePartHeightFromNaturalDims —— PR-D QR cell 倍率路径', () => {
+  // 复用 code-runtime-fallback.spec.ts 的 mkTableModel 风格,但换成 QR 段
+  function mkQrTableModel(opts: {
+    widthMm: number
+    qrDisplay?: { scaleFactor?: number; widthMm?: number; heightMm?: number; lockRatio?: boolean }
+    naturalDims?: Map<string, NaturalCodeDims>
+  }) {
+    const segs: Segment[][] = [
+      [
+        {
+          kind: 'field',
+          path: 'qr',
+          format: {
+            kind: 'qrcode',
+            errorLevel: 'M',
+            display: opts.qrDisplay,
+          },
+        },
+      ],
+    ]
+    const values = new Map<string, Set<string>>([['qr', new Set(['https://x'])]])
+    const naturalDims =
+      opts.naturalDims ?? precomputeCodeNaturalDims(segs, values)
+    const c: TableControl = {
+      id: 'tbl',
+      type: 'table',
+      left: 0,
+      top: 0,
+      width: opts.widthMm,
+      height: 30,
+      dataSource: 'items',
+      columns: [{ field: 'qr', title: '码', width: opts.widthMm }],
+      cells: [
+        [],
+        [
+          {
+            segments: [
+              {
+                kind: 'field',
+                path: 'qr',
+                format: {
+                  kind: 'qrcode',
+                  errorLevel: 'M',
+                  display: opts.qrDisplay,
+                },
+              },
+            ],
+          },
+        ],
+      ],
+    } as unknown as TableControl
+    const ctx: EvalContext = { data: { items: [{ qr: 'https://x' }] } } as unknown as EvalContext
+    const measurer = createCjkMeasurer()
+    const svgLookup = () => '<svg></svg>'
+    return {
+      model: buildTableModel({
+        control: c,
+        ctx,
+        measurer,
+        widthMm: opts.widthMm,
+        heightMm: 30,
+        svgLookup,
+        naturalDims,
+      }),
+      naturalDims,
+    }
+  }
+
+  function getQrPart(model: ReturnType<typeof buildTableModel>) {
+    const dataRow = model.rows.find((r) => r.kind === 'data')!
+    const svgPart = dataRow.cells[0]!.parts!.find((p) => p.kind === 'svg')!.meta
+    return svgPart as {
+      computedW?: number
+      computedH?: number
+      aspect?: number
+      field?: string
+      formatKind?: string
+    }
+  }
+
+  it('QR cell scaleFactor=2 → computedW = computedH = 60mm (2× 基准 30mm)', () => {
+    const { model } = mkQrTableModel({
+      widthMm: 80,
+      qrDisplay: { scaleFactor: 2 },
+    })
+    const part = getQrPart(model)
+    expect(part.computedW).toBe(60)
+    expect(part.computedH).toBe(60)
+  })
+
+  it('QR cell scaleFactor=0.5 → computedW = computedH = 15mm (0.5× 基准)', () => {
+    const { model } = mkQrTableModel({
+      widthMm: 80,
+      qrDisplay: { scaleFactor: 0.5 },
+    })
+    const part = getQrPart(model)
+    expect(part.computedW).toBe(15)
+    expect(part.computedH).toBe(15)
+  })
+
+  it('QR cell scaleFactor=2 + colWidth=30 → 尺寸 clamp 到 colWidth-padding(26mm)', () => {
+    // 30mm 列 → maxW = 30 - 4 = 26mm → 2×=60mm 被 clamp 到 26mm
+    const { model } = mkQrTableModel({
+      widthMm: 30,
+      qrDisplay: { scaleFactor: 2 },
+    })
+    const part = getQrPart(model)
+    expect(part.computedW).toBe(26)
+    expect(part.computedH).toBe(26)
+  })
+
+  it('QR cell legacy widthMm=45 (不迁移) → computedW = computedH = 45mm(绝对 mm)', () => {
+    // 段级 QR 模板:display.widthMm=45 → 视为绝对 mm(顶层已迁移,cell 不迁移)
+    const { model } = mkQrTableModel({
+      widthMm: 80,
+      qrDisplay: { widthMm: 45 },
+    })
+    const part = getQrPart(model)
+    expect(part.computedW).toBe(45)
+    expect(part.computedH).toBe(45)
+  })
+
+  it('QR cell scaleFactor 优先于 widthMm(scaleFactor 设了就走倍率)', () => {
+    const { model } = mkQrTableModel({
+      widthMm: 80,
+      qrDisplay: { scaleFactor: 1.5, widthMm: 99 }, // 99mm 应被忽略
+    })
+    const part = getQrPart(model)
+    // 1.5 × 30 = 45mm
+    expect(part.computedW).toBe(45)
+    expect(part.computedH).toBe(45)
+  })
+
+  it('QR cell 未设 display → computedW/computedH 仍写回(走 naturalDims 兜底,naturalWidth=naturalHeight=30)', () => {
+    // 未传 display → fmt?.display = undefined → defaultDisplayForFormat 输出空对象
+    // 但 meta.display 仍是 {} → effectiveQrSizeMm 返回 undefined → 走 lockRatio 分支
+    // 此时 lockRatio 默认 false → computedH = naturalHeight, computedW = naturalWidth
+    // QR 自然宽高都是 30mm(1:1)
+    const { model } = mkQrTableModel({
+      widthMm: 80,
+      // qrDisplay 不传
+    })
+    const part = getQrPart(model)
+    expect(part.computedW).toBeCloseTo(30, 4)
+    expect(part.computedH).toBeCloseTo(30, 4)
+  })
+})
