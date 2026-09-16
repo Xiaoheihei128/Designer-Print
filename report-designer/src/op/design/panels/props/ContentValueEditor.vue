@@ -19,7 +19,17 @@
  *   渲染层 resolveBinding 找不到 → 字段值丢了。
  */
 import { computed, ref, watch } from 'vue'
-import { NButton, NInput, NPopover, NRadioButton, NRadioGroup, NSelect, NTag } from 'naive-ui'
+import {
+  NButton,
+  NInput,
+  NInputNumber,
+  NPopover,
+  NRadioButton,
+  NRadioGroup,
+  NSelect,
+  NSwitch,
+  NTag,
+} from 'naive-ui'
 import type { CellFormat, LabelGridControl, Segment } from '@op/types/control'
 import { resolveSegments } from '@op/core/layout-engine/segments'
 import { isAggToken } from '@op/core/layout-engine/aggregate'
@@ -273,6 +283,40 @@ function onSegFormatSubChange(segIdx: number, patch: Partial<CellFormat>): void 
   const base = cur.format ?? { kind: 'none' as const }
   const next: CellFormat = { ...base, ...patch }
   emit('update:segmentFormat', segIdx, next)
+}
+
+/**
+ * PR-A:段级 display 字段写回(widthMm/heightMm/lockRatio)。
+ * 与 CodeProps.vue 的 patchDisplay 同形:首次写入时建 display 对象;
+ * 传 undefined 删除对应字段(走 defaultDisplayForFormat 兜底)。
+ */
+function onSegDisplaySubChange(
+  segIdx: number,
+  patch: {
+    widthMm?: number | undefined
+    heightMm?: number | undefined
+    lockRatio?: boolean | undefined
+  },
+): void {
+  const cur = props.segments?.[segIdx]
+  if (!cur || cur.kind !== 'field') return
+  const baseFmt = cur.format ?? { kind: 'none' as const }
+  const curDisplay = baseFmt.display ?? {}
+  const nextDisplay: Record<string, unknown> = { ...curDisplay }
+  if ('widthMm' in patch) {
+    if (patch.widthMm === undefined) delete nextDisplay.widthMm
+    else nextDisplay.widthMm = patch.widthMm
+  }
+  if ('heightMm' in patch) {
+    if (patch.heightMm === undefined) delete nextDisplay.heightMm
+    else nextDisplay.heightMm = patch.heightMm
+  }
+  if ('lockRatio' in patch) {
+    if (patch.lockRatio === undefined) delete nextDisplay.lockRatio
+    else nextDisplay.lockRatio = patch.lockRatio
+  }
+  const nextFmt: CellFormat = { ...baseFmt, display: nextDisplay as CellFormat['display'] }
+  emit('update:segmentFormat', segIdx, nextFmt)
 }
 
 /**
@@ -573,6 +617,44 @@ function onExprConfirm(snippet: string): void {
               :options="imageFitOptions"
               @update:value="(v: 'contain' | 'cover' | 'fill' | 'none') => onSegFormatSubChange(i, { fit: v })"
             />
+
+            <!-- ★ PR-A:cell 内尺寸可调 —— 段级 display.widthMm/heightMm/lockRatio
+                 仅在 qrcode/barcode/image 形态段展示(其它 kind 无意义)
+                 用紧凑 inline-block 行内排布,避免 seg-item 折行过多 -->
+            <template
+              v-if="
+                seg.format?.kind === 'qrcode' ||
+                seg.format?.kind === 'barcode' ||
+                seg.format?.kind === 'image'
+              "
+            >
+              <NInputNumber
+                size="tiny"
+                style="width: 70px"
+                :value="seg.format?.display?.widthMm"
+                :min="0"
+                :step="1"
+                placeholder="宽 mm"
+                @update:value="(v) => onSegDisplaySubChange(i, { widthMm: v ?? undefined })"
+              />
+              <NInputNumber
+                size="tiny"
+                style="width: 70px"
+                :value="seg.format?.display?.heightMm"
+                :min="0"
+                :step="1"
+                placeholder="高 mm"
+                @update:value="(v) => onSegDisplaySubChange(i, { heightMm: v ?? undefined })"
+              />
+              <NSwitch
+                size="tiny"
+                :value="seg.format?.display?.lockRatio ?? false"
+                @update:value="onSegDisplaySubChange(i, { lockRatio: $event })"
+              >
+                <template #checked>锁比</template>
+                <template #unchecked>自由</template>
+              </NSwitch>
+            </template>
           </template>
         </div>
       </div>

@@ -64,15 +64,30 @@ function emptyDisplayLabel(kind: 'qrcode' | 'barcode' | 'image'): string {
  * - qrcode:紧凑型,15mm 方块够 4 级纠错 30 字符
  * - barcode:Code128+showText 默认需 25mm(条码 ~15mm + 数字行 ~10mm)
  * - image:15mm 默认(可由 fit 配合 columnWidth 自适应)
+ *
+ * PR-A:同时透传 userDisplay.lockRatio / fitMode,renderer 据此决定精确 vs 自适应输出。
+ * 注:本函数保留默认 heightMm 兜底逻辑(25/15mm),PR-C.5/C 才完整改 measurer。
  */
 function defaultDisplayForFormat(
   kind: 'qrcode' | 'barcode' | 'image',
-  userDisplay?: { widthMm?: number; heightMm?: number },
-): { widthMm?: number; heightMm: number } {
+  userDisplay?: {
+    widthMm?: number
+    heightMm?: number
+    lockRatio?: boolean
+    fitMode?: 'auto' | 'fixed'
+  },
+): {
+  widthMm?: number
+  heightMm: number
+  lockRatio?: boolean
+  fitMode?: 'auto' | 'fixed'
+} {
   const defaultH = kind === 'barcode' ? 25 : 15
   return {
     widthMm: userDisplay?.widthMm,
     heightMm: userDisplay?.heightMm ?? defaultH,
+    lockRatio: userDisplay?.lockRatio,
+    fitMode: userDisplay?.fitMode,
   }
 }
 

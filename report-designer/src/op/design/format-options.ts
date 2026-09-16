@@ -55,13 +55,14 @@ export function makeFormat(kind: CellFormatKind): CellFormat {
       return { kind, digits: 2 }
     case 'qrcode':
       // 段级二维码默认：M 纠错 + 不指定 width/height（由 cell/段自动推算）
-      return { kind, errorLevel: 'M' }
+      // PR-A：fitMode='auto' 让 cell 没设尺寸时按 cell 内容区撑满
+      return { kind, errorLevel: 'M', display: { fitMode: 'auto' } }
     case 'barcode':
-      // 段级条形码默认：CODE128 + 显示数字
-      return { kind, bcid: 'code128', showText: true }
+      // 段级条形码默认：CODE128 + 显示数字 + fitMode='auto'（同 qrcode）
+      return { kind, bcid: 'code128', showText: true, display: { fitMode: 'auto' } }
     case 'image':
-      // 段级图片默认：contain 模式
-      return { kind, fit: 'contain' }
+      // 段级图片默认：contain 模式 + fitMode='auto'（与 qrcode/barcode 对齐）
+      return { kind, fit: 'contain', display: { fitMode: 'auto' } }
     case 'none':
     case 'text':
     default:

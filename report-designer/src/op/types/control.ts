@@ -161,12 +161,33 @@ export type CellFormatKind =
   | 'barcode' // ★ 段级条形码渲染（仅 field 段有意义）
   | 'image' // ★ 段级图片渲染（仅 field 段有意义，字段值是 URL/dataURL）
 
-/** 段级渲染形态的几何/显示参数（qrcode/barcode/image 共有） */
+/** 段级渲染形态的几何/显示参数（qrcode/barcode/image 共有）
+ *
+ * PR-A 字段语义：
+ * - 都没设：renderer 按 fitMode='auto' 走 cell 内容区自适应撑满
+ * - 只设 widthMm：renderer 用 widthMm 精确输出 + 高度按 lockRatio/natural 计算
+ * - 只设 heightMm：同上反向
+ * - 都设：renderer 严格用,lockRatio=true 时按自然 aspect clamp 一维
+ */
 export interface SegmentDisplayOpts {
   /** 渲染元素宽度（mm），缺省走 cell 列宽 / 子元素数 */
   widthMm?: number
   /** 渲染元素高度（mm），缺省走 row.height 测量结果 */
   heightMm?: number
+  /**
+   * 锁定 width:height 比例。用户只设一维时,另一维按自然比例自动算
+   * (qrcode 永远 1:1,barcode 按预编码自然宽高 — PR-C.5 引入 naturalDims 后实现)。
+   * 默认 false。
+   */
+  lockRatio?: boolean
+  /**
+   * 填充策略:
+   * - 'auto'(默认):用户没设尺寸时,renderer 按 cell 内容区自动撑满;用户设了就用设的
+   * - 'fixed':严格按 widthMm/heightMm 渲染,不自动撑(没设则渲染占位 + 警告)
+   *
+   * 注:本字段先在类型层引入,renderer/measurer 行为 PR-C 完整实现。
+   */
+  fitMode?: 'auto' | 'fixed'
 }
 
 export interface CellFormat {

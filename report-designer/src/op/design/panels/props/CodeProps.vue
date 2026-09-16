@@ -3,9 +3,13 @@
  * CodeProps —— 条码 / 二维码控件属性（§5.7）
  * 内容三态与文本一致：固定值（直接输入编码）/ 变量（弹窗选字段）/ 表达式（弹窗插函数）。
  * v2 segments：已有 segments 时切到 textarea 模式（与 TextProps 一致）。
+ *
+ * PR-A 扩展：cell 内尺寸可调 —— 在面板暴露 display.widthMm / heightMm / lockRatio
+ * 让用户可在 cell 约束内调整条码 / 二维码渲染尺寸。fitMode 暂未在 UI 暴露
+ * （默认 auto，写回 format.display）。renderer/measurer 行为 PR-C 完整实现。
  */
 import { computed, watch } from 'vue'
-import { NSelect, NSwitch } from 'naive-ui'
+import { NButton, NInputNumber, NSelect, NSwitch } from 'naive-ui'
 import type { BarcodeControl, QrcodeControl, Segment as SegmentT, CellFormat } from '@op/types/control'
 import { useDesignerStore } from '@op/design/stores/designer'
 import ContentValueEditor from './ContentValueEditor.vue'
@@ -23,6 +27,31 @@ const hostLabelGrid = computed(() =>
 
 function patch(p: Record<string, unknown>): void {
   if (control.value) store.updateControl(control.value.id, p)
+}
+
+/**
+ * 写回 display 字段的 helper。display 可能不存在(undefined),首次写入时建空对象。
+ * patchDisplay({widthMm: 40}) → c.display = { ...c.display, widthMm: 40 }
+ * patchDisplay({widthMm: undefined}) → 删除 widthMm 字段(走默认兜底)
+ */
+function patchDisplay(p: { widthMm?: number | undefined; heightMm?: number | undefined; lockRatio?: boolean | undefined }): void {
+  const c = control.value
+  if (!c) return
+  const cur = (c as any).display ?? {}
+  const next: Record<string, unknown> = { ...cur }
+  if ('widthMm' in p) {
+    if (p.widthMm === undefined) delete next.widthMm
+    else next.widthMm = p.widthMm
+  }
+  if ('heightMm' in p) {
+    if (p.heightMm === undefined) delete next.heightMm
+    else next.heightMm = p.heightMm
+  }
+  if ('lockRatio' in p) {
+    if (p.lockRatio === undefined) delete next.lockRatio
+    else next.lockRatio = p.lockRatio
+  }
+  patch({ display: next })
 }
 
 const contentMode = computed<ContentMode | undefined>(() => {
@@ -105,6 +134,40 @@ const barcodeFormats = [
   { label: 'ITF-14', value: 'ITF14' },
   { label: 'UPC-A', value: 'UPCA' },
 ]
+
+/* ============================== PR-A 尺寸控件 ============================== */
+
+/** 当前 display 字段（可能 undefined —— 老控件没设过） */
+const currentDisplay = computed(() => (control.value as any)?.display as
+  | { widthMm?: number; heightMm?: number; lockRatio?: boolean; fitMode?: 'auto' | 'fixed' }
+  | undefined)
+
+/** 控件自身的 width/height（来自 Box，用于"适应控件宽度"按钮） */
+const controlBox = computed(() => {
+  const c = control.value
+  return c ? { width: (c as any).width, height: (c as any).height } : null
+})
+
+/** "适应控件宽度"按钮 —— 把 display.widthMm 设为控件宽度,heightMm 按 lockRatio 同步
+ *  顶层面板无 cell 列宽上下文,这是 PR-A 的兜底(精准的"适应列宽"留作 PR-D 设计画布同步)
+ */
+function fitControlWidth(): void {
+  const box = controlBox.value
+  if (!box) return
+  const lock = currentDisplay.value?.lockRatio ?? false
+  const curH = currentDisplay.value?.heightMm
+  let nextH = curH
+  if (lock && typeof curH === 'number' && box.width) {
+    // 按当前宽高比例缩放
+    nextH = Math.round((curH / (currentDisplay.value?.widthMm ?? curH || 1)) * box.width * 10) / 10
+  }
+  patchDisplay({ widthMm: box.width, heightMm: nextH })
+}
+
+/** "重置尺寸"按钮 —— 清空 widthMm/heightMm,renderer 回退到默认撑满 cell 行为 */
+function resetDisplay(): void {
+  patchDisplay({ widthMm: undefined, heightMm: undefined })
+}
 </script>
 
 <template>
@@ -165,5 +228,80 @@ const barcodeFormats = [
         @update:value="patch({ errorLevel: $event })"
       />
     </div>
+
+    <!-- ★ PR-A:尺寸可调 —— 在 cell 约束内调整条码/二维码渲染尺寸 -->
+    <div class="display-section">
+      <div class="props-subtitle">尺寸（cell 内可调）</div>
+      <div class="props-row">
+        <span class="props-label">宽度</span>
+        <NInputNumber
+          size="small"
+          button-placement="both"
+          :value="currentDisplay?.widthMm"
+          :min="0"
+          :step="1"
+          placeholder="自动"
+          @update:value="(v) => patchDisplay({ widthMm: v ?? undefined })"
+        />
+        <span class="props-unit">mm</span>
+      </div>
+      <div class="props-row">
+        <span class="props-label">高度</span>
+        <NInputNumber
+          size="small"
+          button-placement="both"
+          :value="currentDisplay?.heightMm"
+          :min="0"
+          :step="1"
+          placeholder="自动"
+          @update:value="(v) => patchDisplay({ heightMm: v ?? undefined })"
+        />
+        <span class="props-unit">mm</span>
+      </div>
+      <div class="props-row">
+        <span class="props-label">锁定比例</span>
+        <NSwitch
+          size="small"
+          :value="currentDisplay?.lockRatio ?? false"
+          @update:value="patchDisplay({ lockRatio: $event })"
+        />
+      </div>
+      <div class="props-row props-row-buttons">
+        <NButton size="small" @click="fitControlWidth">适应控件宽度</NButton>
+        <NButton size="small" quaternary @click="resetDisplay">重置</NButton>
+      </div>
+      <div class="props-tip">
+        留空则按 cell 内容区自动撑满。锁定比例后只设一维,另一维按自然比例自动算。
+      </div>
+    </div>
   </div>
 </template>
+
+<style scoped>
+.display-section {
+  border-top: 1px dashed rgba(127, 127, 127, 0.2);
+  padding-top: 8px;
+  margin-top: 8px;
+}
+.props-subtitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--n-text-color-3, #888);
+  margin-bottom: 6px;
+}
+.props-row-buttons {
+  gap: 6px;
+}
+.props-unit {
+  font-size: 11px;
+  color: var(--n-text-color-3, #888);
+  min-width: 24px;
+  text-align: left;
+}
+.props-tip {
+  font-size: 11px;
+  color: var(--n-text-color-3, #888);
+  line-height: 1.5;
+  padding: 4px 0;
+}
+</style>
