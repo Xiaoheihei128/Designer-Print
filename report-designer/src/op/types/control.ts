@@ -188,6 +188,16 @@ export interface SegmentDisplayOpts {
    * 注:本字段先在类型层引入,renderer/measurer 行为 PR-C 完整实现。
    */
   fitMode?: 'auto' | 'fixed'
+  /**
+   * ★ PR-D:二维码专属倍率(0.5 ~ 3.0,step 0.5)。QR 永远 1:1,用倍率比 width/height 更直观。
+   * - 仅 qrcode 形态有意义;barcode/image 忽略
+   * - 语义:有效尺寸 = 30mm × scaleFactor(基准 30mm = 1×)
+   * - 与 widthMm/heightMm 共存时,以 scaleFactor 为准(QR 永远方形)
+   * - 缺省(=undefined)走 fitMode='auto' 的 cell 撑满行为
+   *
+   * 单源常量在 [src/op/core/layout-engine/qr-scale.ts](@op/core/layout-engine/qr-scale)。
+   */
+  scaleFactor?: number
 }
 
 export interface CellFormat {
@@ -482,6 +492,13 @@ export interface BarcodeControl extends ControlBase {
   format?: string
   /** 是否显示文字 */
   showText?: boolean
+  /**
+   * ★ PR-D:用户调尺寸 UI 持久化字段
+   * - widthMm/heightMm/lockRatio:barcode 实际像素控制
+   * - fitMode:auto(默认)/fixed
+   * 顶层控件渲染入口(PrintBarcode.regenerate)在 PR-D 接入 display。
+   */
+  display?: SegmentDisplayOpts
 }
 
 export interface QrcodeControl extends ControlBase {
@@ -504,6 +521,11 @@ export interface QrcodeControl extends ControlBase {
   expression?: string
   /** 纠错级别 L/M/Q/H */
   errorLevel?: 'L' | 'M' | 'Q' | 'H'
+  /**
+   * ★ PR-D:用户调尺寸 UI 持久化字段(QR 用 scaleFactor 倍率,详见 SegmentDisplayOpts.scaleFactor)
+   * 顶层控件渲染入口(PrintQrcode.regenerate)在 PR-D 接入 display,有效尺寸 = 30mm × scaleFactor。
+   */
+  display?: SegmentDisplayOpts
 }
 
 /* --------------------------------- 形状 ---------------------------------- */
