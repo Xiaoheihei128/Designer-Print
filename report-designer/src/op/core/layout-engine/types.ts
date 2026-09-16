@@ -69,6 +69,12 @@ export interface RenderCell {
    * 让相邻行的"非 vMerge 列"仍按自己的数据渲染。
    */
   consumed?: true
+  /**
+   * ★ PR-B:cell 内含不可分割内容(svg/image part)。仅在 row.cantSplit=true 时被
+   * sliceTable 用于决定"整行下推"或"拆 cell"。混排(text+svg)cell 也设 true,
+   * 但 row.cantSplit 走混排路径(可切),实际不会强制下推整行。
+   */
+  hasCode?: true
   background?: string
   bold?: boolean
   /** 字号（pt） */
@@ -122,6 +128,16 @@ export interface RenderRow {
   dataIndex?: number
   /** 表尾块内语义：本页合计 / 总计 / 大写金额 / 静态尾行（仅 footerRows 有意义） */
   footerKind?: 'pageSubtotal' | 'grandTotal' | 'capital' | 'static'
+  /**
+   * ★ PR-B:整行不可切(纯 svg/image cell 触发)。
+   * - true 时 sliceTable 把整行下推到下一页,避免条形码被切成两半
+   * - false 时按既有 budget 逻辑正常切(混排 cell 走此路径)
+   *
+   * 判定规则:buildTableModel 在 buildRow 检测 cell.parts,只有"所有非空 cell
+   * 都只有 svg/image part(无 text part)"时 row.cantSplit=true。文字+条码
+   * 混排时 hasCode=true(标注 cell),但 row.cantSplit=false(允许切文字)。
+   */
+  cantSplit?: true
 }
 
 /** 表格在某一页上的切片 */
@@ -216,6 +232,7 @@ export type WarningCode =
   | 'SIGNATURE_EMPTY' // 签名为空（未手写）
   | 'PAGE_LIMIT_REACHED' // 触发最大页数保护
   | 'ROW_TOO_TALL' // 单行高于整页可用高度
+  | 'ROW_HAS_CODE_NOTSPLIT' // ★ PR-B:行含不可分割内容(条形码/二维码)被强制下推到下一页
   | 'PAGE_ROWS_CONFLICT' // fixBottomRows 与 pageRows 同时设置（pageRows 优先）
   | 'LABEL_GRID_DATA_MISSING' // 标签网格 dataSource 不存在或不是数组（回退纯布局平铺）
   | 'LABEL_GRID_DATA_EMPTY' // 标签网格 dataSource 为空数组（回退纯布局平铺）

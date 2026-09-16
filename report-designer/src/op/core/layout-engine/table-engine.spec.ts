@@ -366,6 +366,106 @@ describe('sliceTable —— 分页切片（含空尾片回归）', () => {
   })
 })
 
+/* ----------------------- PR-B:cell 级别 cantSplit ----------------------- */
+
+describe('sliceTable —— PR-B:整行不可切(纯 svg/image cell 触发)', () => {
+  function mkRow(h: number, opts: { cantSplit?: boolean; partsKind?: 'svg' | 'image' | 'text-and-svg' }): RenderRow {
+    let parts: RenderPart[]
+    if (opts.partsKind === 'text-and-svg') {
+      parts = [
+        { kind: 'text', text: '前缀' },
+        { kind: 'svg', svg: '<svg></svg>', meta: { display: { widthMm: 30, heightMm: 25 } } },
+      ]
+    } else if (opts.partsKind === 'image') {
+      parts = [{ kind: 'image', src: 'data:image/png;base64,xxx' }]
+    } else {
+      // 默认 svg
+      parts = [{ kind: 'svg', svg: '<svg></svg>', meta: { display: { widthMm: 30, heightMm: 25 } } }]
+    }
+    return {
+      kind: 'data',
+      height: h,
+      dataIndex: 0,
+      cantSplit: opts.cantSplit ? true : undefined,
+      cells: [
+        {
+          text: '',
+          align: 'left',
+          parts,
+          hasCode: opts.partsKind !== undefined ? true : undefined,
+        } as RenderCell,
+      ],
+    } as RenderRow
+  }
+
+  function mkModel(rows: RenderRow[]): Model {
+    return {
+      control: { id: 't', type: 'table', options: { repeatHeader: true, repeatFooter: false } } as Model['control'],
+      columns: [],
+      columnWidths: [],
+      headerRows: [{ kind: 'header', height: 8, cells: [] }],
+      rows,
+      footerRows: [],
+      dataRows: [],
+      warnings: [],
+      isLayoutGrid: false,
+    } as Model
+  }
+
+  it('纯 svg 行 + 超 budget → 整行下推,picked 不含此行 + ROW_HAS_CODE_NOTSPLIT 警告', () => {
+    // 3 行: r1(8) r2(cantSplit, 8) r3(cantSplit, 8);avail=20 → budget=20-8.2=11.8
+    // i=0: r1 picked (used=8.2)
+    // i=1: r2 cantSplit=true + used+rowH=16.4 > 11.8 + picked.length>0 → emit NOTSPLIT, break
+    const rows = [
+      mkRow(8, {}),
+      mkRow(8, { cantSplit: true, partsKind: 'svg' }),
+      mkRow(8, { cantSplit: true, partsKind: 'svg' }),
+    ]
+    const slice = sliceTable(mkModel(rows), { avail: 20, start: 0 })
+    expect(slice.rows.length).toBe(1) // 只 picked r1
+    expect(slice.nextStart).toBe(1) // r2 是下一个要尝试的行(由 caller 再调一次)
+    expect(slice.warnings.some((w) => w.code === 'ROW_HAS_CODE_NOTSPLIT')).toBe(true)
+  })
+
+  it('纯 image 行 + 超 budget → 整行下推 + ROW_HAS_CODE_NOTSPLIT', () => {
+    const rows = [
+      mkRow(8, {}),
+      mkRow(8, { cantSplit: true, partsKind: 'image' }),
+    ]
+    const slice = sliceTable(mkModel(rows), { avail: 20, start: 0 })
+    expect(slice.rows.length).toBe(1)
+    expect(slice.warnings.some((w) => w.code === 'ROW_HAS_CODE_NOTSPLIT')).toBe(true)
+  })
+
+  it('混排 cell(text+svg) + 超 budget → 允许切(走默认 break),不发 NOTSPLIT 警告', () => {
+    // 关键改进:混排不被连坐,不会浪费垂直空间
+    const rows = [
+      mkRow(8, {}),
+      mkRow(8, { partsKind: 'text-and-svg' }), // cantSplit undefined(混排路径)
+    ]
+    const slice = sliceTable(mkModel(rows), { avail: 20, start: 0 })
+    expect(slice.rows.length).toBe(1) // r1 picked, r2 走默认 break(无 NOTSPLIT)
+    expect(slice.warnings.some((w) => w.code === 'ROW_HAS_CODE_NOTSPLIT')).toBe(false)
+  })
+
+  it('纯 svg 行 + rowH > req.avail → 强制放置 + ROW_TOO_TALL(死循环兜底)', () => {
+    // picked.length=0 + cantSplit + rowH > req.avail 走原 force-place 路径
+    const rows = [mkRow(150, { cantSplit: true, partsKind: 'svg' })]
+    const slice = sliceTable(mkModel(rows), { avail: 100, start: 0 })
+    expect(slice.rows.length).toBe(1)
+    expect(slice.warnings.some((w) => w.code === 'ROW_TOO_TALL')).toBe(true)
+    // 注意:force-place 不发 NOTSPLIT(避免双重警告)
+    expect(slice.warnings.some((w) => w.code === 'ROW_HAS_CODE_NOTSPLIT')).toBe(false)
+  })
+
+  it('纯 svg 行正常 fit 到 budget → picked 正常,无警告', () => {
+    const rows = [mkRow(8, { cantSplit: true, partsKind: 'svg' })]
+    const slice = sliceTable(mkModel(rows), { avail: 100, start: 0 })
+    expect(slice.rows.length).toBe(1)
+    expect(slice.warnings.length).toBe(0)
+  })
+})
+
 /* ----------------------- 合计行（options.summaryRow） ----------------------- */
 
 function mkSummaryControl(opts: TableControl['options']): Parameters<typeof buildTableModel>[0]['control'] {

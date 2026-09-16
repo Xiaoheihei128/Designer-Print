@@ -635,11 +635,28 @@ export function buildTableModel({
         'data',
       )
     })
+    // ★ PR-B:cell.hasCode + row.cantSplit 判定
+    //   - cell 含 svg/image part → cell.hasCode=true
+    //   - 行内全部 cell 都只有 svg/image(无 text part) → row.cantSplit=true
+    //   - 行内含 text part → row.cantSplit=false(允许文字被切,barcode 不下移)
+    let hasAnySvgCell = false
+    let hasAnyTextCell = false
+    const markedCells = built.cells.map((c) => {
+      const parts = c.parts ?? []
+      const hasSvg = parts.some((p) => p.kind === 'svg' || p.kind === 'image')
+      const hasText = parts.some((p) => p.kind === 'text' && (p as { text: string }).text !== '')
+      if (hasSvg) hasAnySvgCell = true
+      if (hasText) hasAnyTextCell = true
+      return hasSvg ? { ...c, hasCode: true as const } : c
+    })
+    // 仅纯 svg/image cell 触发行级 cantSplit;混排(text+svg)允许切
+    const cantSplit = hasAnySvgCell && !hasAnyTextCell ? (true as const) : undefined
     return {
       kind: 'data',
       dataIndex: plan.dataIndex,
       height: measureRowHeight(built, control, measurer),
-      cells: built.cells,
+      cells: markedCells,
+      cantSplit,
     }
   }
 
@@ -996,6 +1013,13 @@ export function sliceTable(model: TableModel, req: SliceRequest): SliceResult {
         picked.push(row)
         used += rowH
         i++
+      } else if (row.cantSplit) {
+        // ★ PR-B:整行不可切(纯 svg/image cell) → 整行下推到下一页,发警告
+        warnings.push({
+          code: 'ROW_HAS_CODE_NOTSPLIT',
+          message: `第 ${(row.dataIndex ?? i) + 1} 行含不可分割内容(条形码/二维码),已强制下推到下一页`,
+          controlId: model.control.id,
+        })
       }
       break
     }
