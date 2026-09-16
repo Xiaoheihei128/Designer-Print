@@ -54,9 +54,10 @@ export function makeFormat(kind: CellFormatKind): CellFormat {
     case 'percent':
       return { kind, digits: 2 }
     case 'qrcode':
-      // 段级二维码默认：M 纠错 + 不指定 width/height（由 cell/段自动推算）
-      // PR-A：fitMode='auto' 让 cell 没设尺寸时按 cell 内容区撑满
-      return { kind, errorLevel: 'M', display: { fitMode: 'auto' } }
+      // 段级二维码默认：M 纠错 + scaleFactor=1(30mm×30mm 基准)
+      // ★ PR-D:scaleFactor 优先于 fitMode 走倍率路径,确保新建段就有明确尺寸
+      //   (不设 scaleFactor 时 lockRatio 分支会用 naturalDims 兜底,但显式写更稳)
+      return { kind, errorLevel: 'M', display: { scaleFactor: 1, fitMode: 'auto' } }
     case 'barcode':
       // 段级条形码默认：CODE128 + 显示数字 + fitMode='auto'（同 qrcode）
       return { kind, bcid: 'code128', showText: true, display: { fitMode: 'auto' } }
