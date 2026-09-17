@@ -532,9 +532,14 @@ function onRowColAction(key: string): void {
         />
       </div>
 
-      <!-- 第 2 行：字体（行角色 / 字体 / 字号 / 字形 / 水平对齐 / 垂直对齐） -->
+      <!-- 第 2 行：字体样式（字体 / 字号 / 字形 / 水平对齐 / 垂直对齐） -->
       <div class="op-cell-toolbar__row">
-        <span class="op-cell-toolbar__tag op-cell-toolbar__tag--role" :title="roleLabel">{{ roleLabel }}</span>
+        <!--
+          ★ 2026-09-17 改名:row tag 从动态 roleLabel(标题行 2/数据行/合计行...)
+          改为静态 '字体样式',与 row 1 '内容' / row 3 '样式与合并' / row 4 '格式与表格'
+          节奏一致,row role 信息通过 :title=roleLabel 鼠标悬停可见。
+        -->
+        <span class="op-cell-toolbar__tag" :title="roleLabel">字体样式</span>
 
         <NDivider vertical />
 
@@ -907,16 +912,6 @@ function onRowColAction(key: string): void {
   font-size: 11px;
   color: var(--brand-text-secondary, #86909c);
   padding-right: 2px;
-}
-
-/* 行角色 tag:固定 width:96px + 截断 ellipsis,
-   避免「数据行（影响整列）」「本页合计行」等长标签把整行排版撑变形 */
-.op-cell-toolbar__tag--role {
-  width: 96px;
-  flex-shrink: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .op-cell-toolbar__swatch {
