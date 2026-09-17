@@ -542,7 +542,7 @@ function onRowColAction(key: string): void {
           <template #trigger>
             <NSelect
               size="tiny"
-              class="w-24"
+              style="width: 120px"
               :value="style.fontFamily ?? ''"
               :options="fontOptions"
               filterable
@@ -555,7 +555,7 @@ function onRowColAction(key: string): void {
           <template #trigger>
             <NInputNumber
               size="tiny"
-              class="w-18"
+              style="width: 96px"
               button-placement="both"
               :value="style.fontSize ?? null"
               :min="5"
@@ -693,7 +693,7 @@ function onRowColAction(key: string): void {
           <template #trigger>
             <NInputNumber
               size="tiny"
-              style="width: 88px"
+              style="width: 100px"
               :value="currentSpan"
               :min="1"
               :max="spanMax"
@@ -710,7 +710,7 @@ function onRowColAction(key: string): void {
           <template #trigger>
             <NInputNumber
               size="tiny"
-              style="width: 88px"
+              style="width: 100px"
               :value="currentRowSpan"
               :min="1"
               :max="rowSpanMax"
@@ -782,7 +782,7 @@ function onRowColAction(key: string): void {
             <template #trigger>
               <NSelect
                 size="tiny"
-                class="w-24"
+                style="width: 110px"
                 :value="cellFormat?.kind ?? 'none'"
                 :options="formatKindOptions"
                 @update:value="(k: CellFormatKind) => applyFormat(k === 'none' ? undefined : makeFormat(k))"
@@ -817,7 +817,7 @@ function onRowColAction(key: string): void {
                 <NInputNumber
                   v-if="needsDigits(cellFormat.kind)"
                   size="tiny"
-                  class="w-16"
+                  style="width: 96px"
                   button-placement="both"
                   :value="cellFormat.digits ?? (cellFormat.kind === 'int' ? 0 : 2)"
                   :min="0"
@@ -832,7 +832,7 @@ function onRowColAction(key: string): void {
                 <NSelect
                   v-if="needsCode(cellFormat.kind)"
                   size="tiny"
-                  class="w-20"
+                  style="width: 100px"
                   :value="cellFormat.code ?? 'CNY'"
                   :options="currencyCodeOptions"
                   @update:value="(v: string) => applyFormat({ ...cellFormat!, code: v })"
@@ -884,20 +884,23 @@ function onRowColAction(key: string): void {
 .op-cell-toolbar__inner {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 4px 6px;
-  border-radius: 6px;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 8px;
   background: var(--brand-surface, #ffffff);
   border: 1px solid var(--brand-border, #e5e6eb);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
   max-width: 92vw;
+  /* ★ 2026-09-17 整体加宽:不允许工具栏缩到 760px 以下,避免控件挤一起;
+     实际宽度由 flex-wrap + 控件 width 决定,viewport 够宽时一行能放下更多 */
+  min-width: 760px;
 }
 
 .op-cell-toolbar__row {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 10px;
 }
 
 .op-cell-toolbar__tag {
@@ -906,10 +909,10 @@ function onRowColAction(key: string): void {
   padding-right: 2px;
 }
 
-/* 行角色 tag:固定 width:84px + 截断 ellipsis,
+/* 行角色 tag:固定 width:96px + 截断 ellipsis,
    避免「数据行（影响整列）」「本页合计行」等长标签把整行排版撑变形 */
 .op-cell-toolbar__tag--role {
-  width: 84px;
+  width: 96px;
   flex-shrink: 0;
   overflow: hidden;
   text-overflow: ellipsis;

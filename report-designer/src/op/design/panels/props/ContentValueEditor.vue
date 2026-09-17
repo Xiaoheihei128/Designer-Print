@@ -780,9 +780,10 @@ function onExprConfirm(snippet: string): void {
   margin-bottom: 0;
 }
 /* compact 模式（CellToolbar 浮动工具栏用）textarea max-width 限制，
-   避免贴满整行 toolbar 让字体/合并等控件被挤换行。*/
+   避免贴满整行 toolbar 让字体/合并等控件被挤换行。
+   2026-09-17:CellToolbar 整体加宽(min-width: 760px),textarea 限制相应放宽到 560。*/
 .compact .props-row :deep(.n-input) {
-  max-width: 360px;
+  max-width: 560px;
 }
 /* 拖拽宿主机：包一层让 dragover/drop 拦截生效，不影响内部 textarea 布局 */
 .segments-drop-host {
