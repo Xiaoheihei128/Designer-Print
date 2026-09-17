@@ -411,10 +411,10 @@ function onSegmentsTextareaDragOver(e: DragEvent): void {
 
 /**
  * segments 模式 textarea 行数。
- * - compact(CellToolbar 浮动工具栏用):固定 1 行,避免撑高把工具栏挤出可视区
+ * - compact(CellToolbar 浮动工具栏用):固定 2 行,1 行太短看不清 1 个片段的内容
  * - 非 compact(Properties Panel 文本控件用):用 props.segmentsRows(默认 3)
  */
-const effectiveSegmentsRows = computed(() => (props.compact ? 1 : props.segmentsRows))
+const effectiveSegmentsRows = computed(() => (props.compact ? 2 : props.segmentsRows))
 
 /** 实时预览：用 sample ctx 调 resolveSegments。空字段段解为空是预期的。 */
 const segmentsPreview = computed(() => {

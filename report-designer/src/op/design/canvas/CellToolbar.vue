@@ -389,64 +389,11 @@ function setRowSpan(n: number | null): void {
   emit('apply', setCellRowSpan(props.control, props.row, props.col, n ?? 1))
 }
 
-/* -------------------------------- 合并预设 -------------------------------- */
-
-/** 合并 NSelect 预设值 —— 替代两个独立 NInputNumber (横合并/纵合并) */
-const mergeOptions = [
-  { label: '无', value: 'none' },
-  { label: '1×2 (横 2 列)', value: '1x2' },
-  { label: '2×1 (纵 2 行)', value: '2x1' },
-  { label: '2×2', value: '2x2' },
-  { label: '合并整行', value: 'row-full' },
-  { label: '合并整列', value: 'col-full' },
-]
-
-/**
- * 当前合并状态 → 预设值字符串。
- * 优先级: 整行/整列 > 标准预设 > none (用户自定义 col/row span 不在预设内时归为 none)
- */
-const currentMerge = computed<string>(() => {
-  const cs = currentSpan.value
-  const rs = currentRowSpan.value
-  const fullCols = grid.value.colCount - props.col
-  const fullRows = grid.value.rowCount - props.row
-  if (cs >= fullCols && rs === 1 && cs > 1) return 'row-full'
-  if (cs === 1 && rs >= fullRows && rs > 1) return 'col-full'
-  if (cs === 1 && rs === 1) return 'none'
-  if (cs === 2 && rs === 1) return '1x2'
-  if (cs === 1 && rs === 2) return '2x1'
-  if (cs === 2 && rs === 2) return '2x2'
-  return 'none'
-})
-
-function setMerge(v: string): void {
-  switch (v) {
-    case 'none':
-      setSpan(1)
-      setRowSpan(1)
-      break
-    case '1x2':
-      setSpan(2)
-      setRowSpan(1)
-      break
-    case '2x1':
-      setSpan(1)
-      setRowSpan(2)
-      break
-    case '2x2':
-      setSpan(2)
-      setRowSpan(2)
-      break
-    case 'row-full':
-      setSpan(grid.value.colCount - props.col)
-      setRowSpan(1)
-      break
-    case 'col-full':
-      setSpan(1)
-      setRowSpan(grid.value.rowCount - props.row)
-      break
-  }
-}
+/* -------------------------------- 行列合并（v2:± NInputNumber） -------------------------------- */
+// 合并 UI 还原为两个 NInputNumber ± 自定义（用户决策 2026-09-17）:
+// - 横向合并列数 / 纵向合并行数 直接控制,± 按钮可微调
+// - NSelect 预设(无/1×2/2×1/2×2/合并整行/合并整列)删除
+// - 数据行(纵向)由 canRowSpan 禁用,与 sliceTable 行为一致
 
 function clearStyle(): void {
   emit('apply', patchCell(props.control, props.row, props.col, { style: undefined }))
@@ -741,18 +688,39 @@ function onRowColAction(key: string): void {
 
         <NDivider vertical />
 
-        <!-- 合并 NSelect 预设 —— 替代两个独立 NInputNumber (横合并/纵合并) -->
+        <!-- 横向合并：NInputNumber ± 自定义,默认值 1 -->
         <NTooltip trigger="hover">
           <template #trigger>
-            <NSelect
+            <NInputNumber
               size="tiny"
-              style="width: 130px"
-              :value="currentMerge"
-              :options="mergeOptions"
-              @update:value="setMerge"
+              style="width: 88px"
+              :value="currentSpan"
+              :min="1"
+              :max="spanMax"
+              :step="1"
+              button-placement="both"
+              @update:value="(v: number | null) => setSpan(v)"
             />
           </template>
-          合并预设（无 / 1×2 / 2×1 / 2×2 / 合并整行 / 合并整列）
+          横向合并列数
+        </NTooltip>
+
+        <!-- 纵向合并：NInputNumber ± 自自定义,数据行禁用(canRowSpan=false) -->
+        <NTooltip :disabled="!canRowSpan" trigger="hover">
+          <template #trigger>
+            <NInputNumber
+              size="tiny"
+              style="width: 88px"
+              :value="currentRowSpan"
+              :min="1"
+              :max="rowSpanMax"
+              :step="1"
+              :disabled="!canRowSpan"
+              button-placement="both"
+              @update:value="(v: number | null) => setRowSpan(v)"
+            />
+          </template>
+          {{ canRowSpan ? '纵向合并行数' : '纵向合并行数（数据行由运行期逐条生成，禁用）' }}
         </NTooltip>
 
         <!-- 行列操作 NDropdown —— 替代 6 个独立 NButton (插入↑/↓/←/→ + 删行/删列) -->
