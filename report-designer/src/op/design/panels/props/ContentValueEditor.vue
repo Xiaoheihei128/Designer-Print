@@ -28,6 +28,7 @@ import {
   NRadioGroup,
   NSelect,
   NTag,
+  NTooltip,
 } from 'naive-ui'
 import type { CellFormat, LabelGridControl, Segment } from '@op/types/control'
 import { resolveSegments } from '@op/core/layout-engine/segments'
@@ -680,23 +681,36 @@ function onExprConfirm(snippet: string): void {
                   高级用户可去那里打开
               -->
               <template v-else>
-                <NInputNumber
-                  size="tiny"
-                  style="width: 70px"
-                  :value="seg.format?.display?.widthMm"
-                  :min="0"
-                  :step="1"
-                  placeholder="宽 mm"
-                  @update:value="(v) => onSegDisplaySubChange(i, { widthMm: v ?? undefined })"
-                />
-                <NInputNumber
-                  size="tiny"
-                  style="width: 70px"
-                  :value="seg.format?.display?.heightMm"
-                  :min="0"
-                  :step="1"
-                  placeholder="高 mm"
-                  @update:value="(v) => onSegDisplaySubChange(i, { heightMm: v ?? undefined })"
+                <NTooltip trigger="hover">
+                  <template #trigger>
+                    <NInputNumber
+                      size="tiny"
+                      style="width: 100px"
+                      :value="seg.format?.display?.widthMm"
+                      :min="0"
+                      :step="1"
+                      button-placement="both"
+                      placeholder="宽 mm"
+                      @update:value="(v) => onSegDisplaySubChange(i, { widthMm: v ?? undefined })"
+                    />
+                  </template>
+                  条形码/图片宽（mm，± 按钮可微调，留空走自然尺寸）
+                </NTooltip>
+                <NTooltip trigger="hover">
+                  <template #trigger>
+                    <NInputNumber
+                      size="tiny"
+                      style="width: 100px"
+                      :value="seg.format?.display?.heightMm"
+                      :min="0"
+                      :step="1"
+                      button-placement="both"
+                      placeholder="高 mm"
+                      @update:value="(v) => onSegDisplaySubChange(i, { heightMm: v ?? undefined })"
+                    />
+                  </template>
+                  条形码/图片高（mm，± 按钮可微调，留空走自然尺寸）
+                </NTooltip>
                 />
               </template>
             </template>
