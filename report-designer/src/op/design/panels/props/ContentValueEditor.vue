@@ -711,7 +711,6 @@ function onExprConfirm(snippet: string): void {
                   </template>
                   条形码/图片高（mm，± 按钮可微调，留空走自然尺寸）
                 </NTooltip>
-                />
               </template>
             </template>
           </template>
