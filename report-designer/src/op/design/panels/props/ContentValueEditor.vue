@@ -409,6 +409,13 @@ function onSegmentsTextareaDragOver(e: DragEvent): void {
   }
 }
 
+/**
+ * segments 模式 textarea 行数。
+ * - compact(CellToolbar 浮动工具栏用):固定 1 行,避免撑高把工具栏挤出可视区
+ * - 非 compact(Properties Panel 文本控件用):用 props.segmentsRows(默认 3)
+ */
+const effectiveSegmentsRows = computed(() => (props.compact ? 1 : props.segmentsRows))
+
 /** 实时预览：用 sample ctx 调 resolveSegments。空字段段解为空是预期的。 */
 const segmentsPreview = computed(() => {
   if (!isSegmentsMode.value) return ''
@@ -520,7 +527,7 @@ function onExprConfirm(snippet: string): void {
           <NInput
             type="textarea"
             size="small"
-            :autosize="{ minRows: segmentsRows, maxRows: segmentsRows + 3 }"
+            :autosize="{ minRows: effectiveSegmentsRows, maxRows: effectiveSegmentsRows + 2 }"
             :value="segmentsText"
             :placeholder="placeholder || segmentsPlaceholder"
             @update:value="onSegmentsInput"

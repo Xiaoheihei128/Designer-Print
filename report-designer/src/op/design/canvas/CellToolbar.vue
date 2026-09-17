@@ -591,25 +591,35 @@ function onRowColAction(key: string): void {
 
         <NDivider vertical />
 
-        <NSelect
-          size="tiny"
-          class="w-24"
-          :value="style.fontFamily ?? ''"
-          :options="fontOptions"
-          filterable
-          @update:value="(v: string) => applyStyle({ fontFamily: v || undefined })"
-        />
-        <NInputNumber
-          size="tiny"
-          class="w-18"
-          button-placement="both"
-          :value="style.fontSize ?? null"
-          :min="5"
-          :max="72"
-          :step="1"
-          placeholder="9"
-          @update:value="(v: number | null) => applyStyle({ fontSize: v ?? undefined })"
-        />
+        <NTooltip trigger="hover">
+          <template #trigger>
+            <NSelect
+              size="tiny"
+              class="w-24"
+              :value="style.fontFamily ?? ''"
+              :options="fontOptions"
+              filterable
+              @update:value="(v: string) => applyStyle({ fontFamily: v || undefined })"
+            />
+          </template>
+          字体族（默认 / 预设 / 本机已装）
+        </NTooltip>
+        <NTooltip trigger="hover">
+          <template #trigger>
+            <NInputNumber
+              size="tiny"
+              class="w-18"
+              button-placement="both"
+              :value="style.fontSize ?? null"
+              :min="5"
+              :max="72"
+              :step="1"
+              placeholder="9"
+              @update:value="(v: number | null) => applyStyle({ fontSize: v ?? undefined })"
+            />
+          </template>
+          字号（pt，± 按钮可 ±1 自定义）
+        </NTooltip>
 
         <NButtonGroup size="tiny">
           <NTooltip trigger="hover">
@@ -680,44 +690,54 @@ function onRowColAction(key: string): void {
         <span class="op-cell-toolbar__tag">样式与合并</span>
 
         <!-- 文字颜色：自定义触发器 + to=false 让面板留在工具栏内，避免点选时工具栏被收起 -->
-        <NColorPicker
-          :value="style.color ?? '#1f2329'"
-          :show-alpha="false"
-          :modes="['hex']"
-          :to="false"
-          size="small"
-          @update:value="(v: string) => applyStyle({ color: v || undefined })"
-        >
-          <template #trigger="{ value, onClick, ref: triggerRef }">
-            <NButton :ref="triggerRef" size="tiny" quaternary title="文字颜色" @click="onClick">
-              <span class="i-carbon-text-color" />
-              <span class="op-cell-toolbar__swatch" :style="{ background: value || '#1f2329' }" />
-            </NButton>
+        <NTooltip trigger="hover">
+          <template #trigger>
+            <NColorPicker
+              :value="style.color ?? '#1f2329'"
+              :show-alpha="false"
+              :modes="['hex']"
+              :to="false"
+              size="small"
+              @update:value="(v: string) => applyStyle({ color: v || undefined })"
+            >
+              <template #trigger="{ value, onClick, ref: triggerRef }">
+                <NButton :ref="triggerRef" size="tiny" quaternary title="文字颜色" @click="onClick">
+                  <span class="i-carbon-text-color" />
+                  <span class="op-cell-toolbar__swatch" :style="{ background: value || '#1f2329' }" />
+                </NButton>
+              </template>
+            </NColorPicker>
           </template>
-        </NColorPicker>
+          文字颜色
+        </NTooltip>
 
         <!--
           填充颜色：show-alpha=true 让面板内置透明度滑杆;
           naive-ui NColorPicker 自带「透明」快捷按钮(右上角 clear 图标)替代独立清除填充按钮。
         -->
-        <NColorPicker
-          :value="style.backgroundColor ?? '#ffffff00'"
-          :show-alpha="true"
-          :modes="['hex', 'rgb']"
-          :to="false"
-          size="small"
-          @update:value="(v: string) => applyStyle({ backgroundColor: v || undefined })"
-        >
-          <template #trigger="{ value, onClick, ref: triggerRef }">
-            <NButton :ref="triggerRef" size="tiny" quaternary title="填充颜色（内置透明快捷）" @click="onClick">
-              <span class="i-carbon-paint-brush" />
-              <span
-                class="op-cell-toolbar__swatch"
-                :style="{ background: value || 'transparent' }"
-              />
-            </NButton>
+        <NTooltip trigger="hover">
+          <template #trigger>
+            <NColorPicker
+              :value="style.backgroundColor ?? '#ffffff00'"
+              :show-alpha="true"
+              :modes="['hex', 'rgb']"
+              :to="false"
+              size="small"
+              @update:value="(v: string) => applyStyle({ backgroundColor: v || undefined })"
+            >
+              <template #trigger="{ value, onClick, ref: triggerRef }">
+                <NButton :ref="triggerRef" size="tiny" quaternary title="填充颜色（内置透明快捷）" @click="onClick">
+                  <span class="i-carbon-paint-brush" />
+                  <span
+                    class="op-cell-toolbar__swatch"
+                    :style="{ background: value || 'transparent' }"
+                  />
+                </NButton>
+              </template>
+            </NColorPicker>
           </template>
-        </NColorPicker>
+          填充颜色（面板内置「透明」快捷）
+        </NTooltip>
 
         <NDivider vertical />
 
@@ -759,9 +779,14 @@ function onRowColAction(key: string): void {
           清除本格样式
         </NTooltip>
 
-        <NButton size="tiny" quaternary @click="closeToolbar">
-          <span class="i-carbon-close" />
-        </NButton>
+        <NTooltip trigger="hover">
+          <template #trigger>
+            <NButton size="tiny" quaternary @click="closeToolbar">
+              <span class="i-carbon-close" />
+            </NButton>
+          </template>
+          关闭工具栏（不影响右侧快速面板）
+        </NTooltip>
       </div>
 
       <!-- 第 4 行：格式与表格（斜线 + canFormat 控件 + 表格属性 icon-only button） -->
@@ -785,22 +810,32 @@ function onRowColAction(key: string): void {
         <template v-if="canFormat">
           <NDivider vertical />
 
-          <NSelect
-            size="tiny"
-            class="w-24"
-            :value="cellFormat?.kind ?? 'none'"
-            :options="formatKindOptions"
-            @update:value="(k: CellFormatKind) => applyFormat(k === 'none' ? undefined : makeFormat(k))"
-          />
+          <NTooltip trigger="hover">
+            <template #trigger>
+              <NSelect
+                size="tiny"
+                class="w-24"
+                :value="cellFormat?.kind ?? 'none'"
+                :options="formatKindOptions"
+                @update:value="(k: CellFormatKind) => applyFormat(k === 'none' ? undefined : makeFormat(k))"
+              />
+            </template>
+            单元格格式（none/text/date/int/decimal/currency/percent/qrcode/barcode/image）
+          </NTooltip>
           <template v-if="cellFormat && cellFormat.kind !== 'none'">
-            <NSelect
-              v-if="needsPattern(cellFormat.kind)"
-              size="tiny"
-              class="w-30"
-              :value="isPresetDatePattern(cellFormat.pattern) ? cellFormat.pattern : '__custom__'"
-              :options="datePatternOptions"
-              @update:value="(v: string) => { if (v !== '__custom__') applyFormat({ ...cellFormat!, pattern: v }) }"
-            />
+            <NTooltip trigger="hover">
+              <template #trigger>
+                <NSelect
+                  v-if="needsPattern(cellFormat.kind)"
+                  size="tiny"
+                  class="w-30"
+                  :value="isPresetDatePattern(cellFormat.pattern) ? cellFormat.pattern : '__custom__'"
+                  :options="datePatternOptions"
+                  @update:value="(v: string) => { if (v !== '__custom__') applyFormat({ ...cellFormat!, pattern: v }) }"
+                />
+              </template>
+              日期格式（预设 / 自定义 pattern）
+            </NTooltip>
             <NInput
               v-if="needsPattern(cellFormat.kind) && !isPresetDatePattern(cellFormat.pattern)"
               size="tiny"
@@ -809,30 +844,45 @@ function onRowColAction(key: string): void {
               placeholder="如 YYYY年MM月DD日"
               @update:value="(v: string) => applyFormat({ ...cellFormat!, pattern: v || 'YYYY-MM-DD' })"
             />
-            <NInputNumber
-              v-if="needsDigits(cellFormat.kind)"
-              size="tiny"
-              class="w-16"
-              button-placement="both"
-              :value="cellFormat.digits ?? (cellFormat.kind === 'int' ? 0 : 2)"
-              :min="0"
-              :max="6"
-              @update:value="(v: number | null) => applyFormat({ ...cellFormat!, digits: v ?? 0 })"
-            />
-            <NSelect
-              v-if="needsCode(cellFormat.kind)"
-              size="tiny"
-              class="w-20"
-              :value="cellFormat.code ?? 'CNY'"
-              :options="currencyCodeOptions"
-              @update:value="(v: string) => applyFormat({ ...cellFormat!, code: v })"
-            />
-            <NSwitch
-              v-if="supportsThousands(cellFormat.kind)"
-              size="small"
-              :value="cellFormat.thousands ?? true"
-              @update:value="(v: boolean) => applyFormat({ ...cellFormat!, thousands: v })"
-            />
+            <NTooltip trigger="hover">
+              <template #trigger>
+                <NInputNumber
+                  v-if="needsDigits(cellFormat.kind)"
+                  size="tiny"
+                  class="w-16"
+                  button-placement="both"
+                  :value="cellFormat.digits ?? (cellFormat.kind === 'int' ? 0 : 2)"
+                  :min="0"
+                  :max="6"
+                  @update:value="(v: number | null) => applyFormat({ ...cellFormat!, digits: v ?? 0 })"
+                />
+              </template>
+              小数位数（± 按钮可微调，int 时 0）
+            </NTooltip>
+            <NTooltip trigger="hover">
+              <template #trigger>
+                <NSelect
+                  v-if="needsCode(cellFormat.kind)"
+                  size="tiny"
+                  class="w-20"
+                  :value="cellFormat.code ?? 'CNY'"
+                  :options="currencyCodeOptions"
+                  @update:value="(v: string) => applyFormat({ ...cellFormat!, code: v })"
+                />
+              </template>
+              货币代码
+            </NTooltip>
+            <NTooltip trigger="hover">
+              <template #trigger>
+                <NSwitch
+                  v-if="supportsThousands(cellFormat.kind)"
+                  size="small"
+                  :value="cellFormat.thousands ?? true"
+                  @update:value="(v: boolean) => applyFormat({ ...cellFormat!, thousands: v })"
+                />
+              </template>
+              千分位分隔（12,345.67）
+            </NTooltip>
           </template>
         </template>
 
