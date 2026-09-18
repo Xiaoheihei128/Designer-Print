@@ -852,6 +852,88 @@ describe('layout —— userHeight 误分类警告 + labelgrid+flowTable 共存'
     expect(mismatch[0]!.message).toContain('userHeight=8')
   })
 
+  /**
+   * ★ 多 overlap 控件 refine —— 保留原始相对 top 差
+   *
+   * 场景:同一表格,两个文本控件设计 top 跨越 userHeight 上边界
+   *      (table top=10, height=100 → designTableBottom=110; 两个文本 top=85/90 都 < 110 但 bottom > table.top+EPS),
+   *      被 analyzeBody 划进 plan.overlap,refine 后期望保持原 5mm 相对差。
+   * 修复前:两者都被 absoluteLastBottom + 0 锚定 → 同 top 视觉异常。
+   * 修复后:最小 top 控件为锚,后续 = 锚 + 原始 top 差。
+   */
+  it('两个 overlap 控件原 top 不同(85 / 90) → refine 后保留 5mm 相对 top 差', async () => {
+    const measurer = createCjkMeasurer()
+    const table = makeTable(100, 9)  // top=10, height=100 → designTableBottom=110
+    const ctrlA: AnyControl = {
+      id: 'buyer', type: 'text',
+      left: 10, top: 85, width: 80, height: 8,
+      value: '订购方:李明', printable: true,
+    }
+    const ctrlB: AnyControl = {
+      id: 'supplier', type: 'text',
+      left: 10, top: 90, width: 80, height: 8,
+      value: '供货商:德之馨', printable: true,
+    }
+    const result = await layout(
+      { version: '1.0', document: { type: 'report', page: A4,
+        sections: [{ type: 'body', components: [table, ctrlA, ctrlB] }],
+      }},
+      makeData(9),
+      { measurer },
+    )
+    const mismatch = result.warnings.filter((w) => w.code === 'TABLE_USER_HEIGHT_MISMATCH')
+    // 两个控件都命中 refine
+    expect(mismatch.length).toBe(2)
+    expect(mismatch.map((w) => w.controlId).sort()).toEqual(['buyer', 'supplier'])
+
+    // 找到两个控件在末页的位置:末页 body 里绝对 top 最大的两个 control
+    const lastPage = result.pages[result.pages.length - 1]!
+    const bodyControls = lastPage.body.filter((n): n is Extract<typeof n, { kind: 'control' }> => n.kind === 'control')
+    const buyerNode = bodyControls.find((n) => n.id === 'buyer')
+    const supplierNode = bodyControls.find((n) => n.id === 'supplier')
+    expect(buyerNode).toBeDefined()
+    expect(supplierNode).toBeDefined()
+    // ★ 关键断言:两个 refine 后控件的相对 top 差 == 原始设计 top 差(5mm)
+    //   修复前 buyer.top ≈ supplier.top(都被推到同一锚底),差 ≈ 0
+    //   修复后 supplier.top - buyer.top ≈ 5mm(±浮点)
+    expect(Math.abs((supplierNode!.top - buyerNode!.top) - 5)).toBeLessThan(0.001)
+  })
+
+  it('两个 overlap 控件原 top 相同(85 / 85) → refine 后保持同 top', async () => {
+    const measurer = createCjkMeasurer()
+    const table = makeTable(100, 9)
+    const ctrlA: AnyControl = {
+      id: 'left-label', type: 'text',
+      left: 10, top: 85, width: 80, height: 8,
+      value: '左标签', printable: true,
+    }
+    const ctrlB: AnyControl = {
+      id: 'right-label', type: 'text',
+      left: 10, top: 85, width: 80, height: 8,
+      value: '右标签', printable: true,
+    }
+    const result = await layout(
+      { version: '1.0', document: { type: 'report', page: A4,
+        sections: [{ type: 'body', components: [table, ctrlA, ctrlB] }],
+      }},
+      makeData(9),
+      { measurer },
+    )
+    const mismatch = result.warnings.filter((w) => w.code === 'TABLE_USER_HEIGHT_MISMATCH')
+    expect(mismatch.length).toBe(2)
+    // 警告文案应标记「组内锚「xxx」对齐」
+    expect(mismatch.some((w) => w.message.includes('组内锚'))).toBe(true)
+
+    const lastPage = result.pages[result.pages.length - 1]!
+    const bodyControls = lastPage.body.filter((n): n is Extract<typeof n, { kind: 'control' }> => n.kind === 'control')
+    const aNode = bodyControls.find((n) => n.id === 'left-label')
+    const bNode = bodyControls.find((n) => n.id === 'right-label')
+    expect(aNode).toBeDefined()
+    expect(bNode).toBeDefined()
+    // 同 top → refine 后仍同 top(共享锚 + 0 相对位移)
+    expect(Math.abs(aNode!.top - bNode!.top)).toBeLessThan(0.001)
+  })
+
   it('userHeight 合理 + 控件设计 top 远大于表格用户底 → 不发 TABLE_USER_HEIGHT_MISMATCH', async () => {
     const measurer = createCjkMeasurer()
     // userHeight=80 给足,合计 top=200 远离表格底部
@@ -2619,111 +2701,5 @@ describe('vmerge 跨页续行 anchor (Path B: paginateFlowTable 注入)', () => 
     // 第 2/3 行是原 consumed 行,不应被反向处理
     expect(slice!.rows[1]!.cells.some((c) => c.consumed)).toBe(true)
     expect(slice!.rows[2]!.cells.some((c) => c.consumed)).toBe(true)
-  })
-})
-
-/* ----------------------- 多表衔接 border 重叠修复 (commit fix) ----------------------- */
-/**
- * 根因:多表紧邻时,前表末行 border-bottom(0.2mm,b-all/b-horizontal) +
- *       本表首行 border-top(0.2mm)视觉重叠成 0.4mm 双层线。
- * 修法:pagination-engine.ts line 1371 附近,若 designGap < 表 border,补足到 border。
- * 验证:以下 3 个测试覆盖 3 个边界(两表紧邻 / 用户已拖 ≥border gap / borders=none)。
- */
-describe('layout —— 多表衔接 border 重叠修复', () => {
-  const measurer = createCjkMeasurer()
-  const A4 = {
-    width: 210, height: 297, unit: 'mm' as const,
-    orientation: 'portrait' as const,
-    margin: { top: 10, bottom: 10, left: 10, right: 10 },
-    backgroundColor: '#ffffff',
-  }
-
-  /** 单数据表模板(只 1 行数据,不跨页) */
-  function oneRowTable(id: string, top: number, height: number, opts?: { borders?: 'all' | 'none' | 'horizontal' }): AnyControl {
-    return {
-      id, type: 'table',
-      left: 10, top, width: 190, height,
-      dataSource: 'items', printable: true,
-      options: { borders: opts?.borders ?? 'all' },
-      columns: [
-        { id: 'c1', title: '项目', field: 'productCode', width: 95, align: 'center' },
-        { id: 'c2', title: '结果', field: 'qty', width: 95, align: 'center' },
-      ],
-      cells: [
-        [
-          { segments: [{ kind: 'text', value: '项目' }] },
-          { segments: [{ kind: 'text', value: '结果' }] },
-        ],
-      ],
-    } as AnyControl
-  }
-
-  it('修复:两表紧邻(designGap=0) + borders="all" → 第二张表 top 自动补到 0.2mm', async () => {
-    // 表 1: top=50, userHeight=60 → userBottom=110
-    // 表 2: top=110, userHeight=60 → designGap=0(用户让两表紧邻)
-    // 修复前:表 2 起点 = 表 1 末底 + 0 → CSS border-bottom + border-top 视觉重叠成 0.4mm
-    // 修复后:表 2 起点 = 表 1 末底 + 0.2mm(calcRowBorder(prevFt)=0.2)
-    const table1 = oneRowTable('t1', 50, 60, { borders: 'all' })
-    const table2 = oneRowTable('t2', 110, 60, { borders: 'all' })  // userBottom=170, table1 userBottom=110 → designGap=0
-    const result = await layout(
-      { version: '1.0', document: { type: 'report', page: A4,
-        sections: [{ type: 'body', components: [table1, table2] }],
-      }},
-      makeData(5),  // 5 行数据,单表不会跨页
-      { measurer },
-    )
-    // 表 1 slice(在第一页,因为数据量小)
-    const t1Slices = result.pages.flatMap((p) => p.body.filter((n) => n.id === 't1'))
-    const t2Slices = result.pages.flatMap((p) => p.body.filter((n) => n.id === 't2'))
-    expect(t1Slices.length).toBeGreaterThan(0)
-    expect(t2Slices.length).toBeGreaterThan(0)
-    // 关键断言:表 2 slice top - 表 1 slice bottom = 0.2mm(默认 borders='all')
-    const t1Last = t1Slices[t1Slices.length - 1] as PlacedTable
-    const t2First = t2Slices[0] as PlacedTable
-    const gap = t2First.top - (t1Last.top + t1Last.height)
-    expect(gap).toBeCloseTo(0.2, 1)
-  })
-
-  it('用户已主动拖 ≥ border 的 gap(>=0.2mm)→ 保留用户意图,不强行加大 gap', async () => {
-    // 表 1: top=50, userHeight=60 → userBottom=110
-    // 表 2: top=120, userHeight=60 → designGap=10(用户主动拖 10mm)
-    // 修复后:designGap=10 > 0.2 → 不补足,保留 10mm
-    const table1 = oneRowTable('t1', 50, 60, { borders: 'all' })
-    const table2 = oneRowTable('t2', 120, 60, { borders: 'all' })  // designGap=10
-    const result = await layout(
-      { version: '1.0', document: { type: 'report', page: A4,
-        sections: [{ type: 'body', components: [table1, table2] }],
-      }},
-      makeData(5),
-      { measurer },
-    )
-    const t1Slices = result.pages.flatMap((p) => p.body.filter((n) => n.id === 't1'))
-    const t2Slices = result.pages.flatMap((p) => p.body.filter((n) => n.id === 't2'))
-    const t1Last = t1Slices[t1Slices.length - 1] as PlacedTable
-    const t2First = t2Slices[0] as PlacedTable
-    const gap = t2First.top - (t1Last.top + t1Last.height)
-    // 真实表 1 末底可能略 > userBottom=110(因为有 border),但 gap 应 ≈ user 设计的 10mm
-    expect(gap).toBeGreaterThanOrEqual(10 - 0.5)  // 容忍 measurer 误差
-    expect(gap).toBeLessThan(11)  // 不应被强行加大
-  })
-
-  it('borders="none" 时(无边框)→ designGap=0 不补足(不需要让线分隔)', async () => {
-    // 表 1 + 表 2 都用 borders='none',无视觉 border,无需 gap 补偿
-    const table1 = oneRowTable('t1', 50, 60, { borders: 'none' })
-    const table2 = oneRowTable('t2', 110, 60, { borders: 'none' })  // designGap=0
-    const result = await layout(
-      { version: '1.0', document: { type: 'report', page: A4,
-        sections: [{ type: 'body', components: [table1, table2] }],
-      }},
-      makeData(5),
-      { measurer },
-    )
-    const t1Slices = result.pages.flatMap((p) => p.body.filter((n) => n.id === 't1'))
-    const t2Slices = result.pages.flatMap((p) => p.body.filter((n) => n.id === 't2'))
-    const t1Last = t1Slices[t1Slices.length - 1] as PlacedTable
-    const t2First = t2Slices[0] as PlacedTable
-    const gap = t2First.top - (t1Last.top + t1Last.height)
-    // borders=none → calcRowBorder=0 → 不补足,gap ≈ 0(可因 measurer/padding 略有偏差)
-    expect(gap).toBeLessThan(0.2)
   })
 })

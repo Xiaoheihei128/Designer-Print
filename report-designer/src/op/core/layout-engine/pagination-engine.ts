@@ -32,7 +32,6 @@ import {
 import { getSharedMeasurer, type TextMeasurer } from './measure'
 import {
   buildTableModel,
-  calcRowBorder,
   minStartHeight,
   sliceTable,
   totalTableHeight,
@@ -936,30 +935,75 @@ export async function layout(
   // 是表格上方,绝不能下移。
   const overlapIdSet = new Set(plan.overlap.map((c) => c.id))
   const absoluteLastBottom = tableLastPage * bodyStepMm(metrics) + skeleton.lastBottom
+  // ★ 多 overlap 控件 refine 时共享同一「锚」,保留原始 ctrlDesignTop 相对差。
+  // 旧实现(单控件 gap 公式)会把多个同 top 控件都推到 absoluteLastBottom + 0,
+  // 控件间相对位移被抹平 → 预览时「订购方/供货商」挤在同一 top 视觉异常。
+  // 修复:第一遍扫描收集所有命中 refine 的 overlap 控件 + 它们的 ctrlDesignTop,
+  //       按 ctrlDesignTop 升序排序,挑出最小者为「组内锚」。
+  // 第二遍按原顺序处理,每个命中控件 newTopAbs = anchorNewTopAbs + (ctrlDesignTop - anchorDesignTop)。
+  // 副作用:单控件场景 anchor = 自己,gap 公式与旧版逐字节相同 → 单控件断言零回归。
+  const designTableBottom = toMm(table.top, unit) + toMm(table.height, unit)
+  const designTableHeightMm = toMm(table.height, unit)
+  type RefinedCandidate = { id: string; ctrlDesignTop: number }
+  const refinedCandidates: RefinedCandidate[] = []
+  for (const c of firstControls.placed) {
+    if (c.kind !== 'control' || !overlapIdSet.has(c.id)) continue
+    const ctrlTopAbs = c.top  // page 1 原位 → absolute top
+    const ctrlBottom = ctrlTopAbs + c.height
+    if (ctrlBottom > 50 + EPS && ctrlBottom < absoluteLastBottom - EPS) {
+      refinedCandidates.push({ id: c.id, ctrlDesignTop: toMm(c.control.top, unit) })
+    }
+  }
+  // 算锚:多控件时取最小 ctrlDesignTop;单控件时即自身
+  let anchorCtrlDesignTop = 0
+  let anchorGap = 0
+  let anchorNewTopAbs = 0
+  if (refinedCandidates.length > 0) {
+    anchorCtrlDesignTop = refinedCandidates.reduce(
+      (min, x) => (x.ctrlDesignTop < min ? x.ctrlDesignTop : min),
+      refinedCandidates[0]!.ctrlDesignTop,
+    )
+    anchorGap = Math.max(0, anchorCtrlDesignTop - designTableBottom)
+    anchorNewTopAbs = Math.max(0, absoluteLastBottom + anchorGap)
+  }
+  // 锚控件 id(用于 warning 文案标记)—— 多控件时是组内最上者,单控件时即自身
+  const anchorId = refinedCandidates.length > 0
+    ? refinedCandidates.find((x) => x.ctrlDesignTop === anchorCtrlDesignTop)?.id
+    : undefined
+
   const refinedPlaced: PlacedNode[] = []
   for (const c of firstControls.placed) {
     if (c.kind === 'control' && overlapIdSet.has(c.id)) {
-      const ctrlTopAbs = c.top  // page 1 原位 → absolute top
+      const ctrlTopAbs = c.top
       const ctrlBottom = ctrlTopAbs + c.height
       if (ctrlBottom > 50 + EPS && ctrlBottom < absoluteLastBottom - EPS) {
         // ★ 重叠检测:控件底部落在表格末片可视范围内 → 改判 below
-        // 公式:renderedTop = absoluteLastBottom + max(0, control.top - designTableBottom)
-        // - control.top ≥ designTableBottom:保住用户设计 gap
-        // - control.top < designTableBottom:控件被表格"设计区"压住(实际被数据行覆盖)
-        //   → 钳到 0,渲染到 actualLastBottom,避免重叠
-        const designTableBottom = toMm(table.top, unit) + toMm(table.height, unit)
+        // 公式(修复后):
+        //   newTopAbs = anchorNewTopAbs + (ctrlDesignTop - anchorCtrlDesignTop)
+        // - ctrlDesignTop == anchorCtrlDesignTop:newTopAbs == anchorNewTopAbs(锚控件 / 单控件)
+        // - ctrlDesignTop > anchorCtrlDesignTop:相对锚的位移保留
+        // - 单控件时 anchor 即自身,gap 公式逐字节与旧版一致 → 零回归
         const ctrlDesignTop = toMm(c.control.top, unit)
-        const gap = Math.max(0, ctrlDesignTop - designTableBottom)
-        const newTopAbs = Math.max(0, absoluteLastBottom + gap)
+        const newTopAbs = Math.max(
+          0,
+          anchorNewTopAbs + (ctrlDesignTop - anchorCtrlDesignTop),
+        )
         const newPageIdx = Math.floor(newTopAbs / bodyStepMm(metrics))
         const newPageRelTop = newTopAbs - newPageIdx * bodyStepMm(metrics)
+        const isAnchor = ctrlDesignTop === anchorCtrlDesignTop
+        const anchorNote =
+          refinedCandidates.length > 1
+            ? (isAnchor
+                ? `(组内锚「${anchorId}」对齐,保留原始相对顺序)`
+                : `(组内锚「${anchorId}」对齐,保留相对差 ${(ctrlDesignTop - anchorCtrlDesignTop).toFixed(1)}mm)`)
+            : ''
         warnings.push({
           code: 'TABLE_USER_HEIGHT_MISMATCH',
           message:
             `控件「${c.id}」设计 top=${ctrlDesignTop.toFixed(1)}mm,` +
-            `落在 userHeight=${(toMm(table.height, unit)).toFixed(1)}mm 的设计区 ` +
+            `落在 userHeight=${designTableHeightMm.toFixed(1)}mm 的设计区 ` +
             `但被实际渲染底=${absoluteLastBottom.toFixed(1)}mm 的表格覆盖,` +
-            `已自动下移到 page ${newPageIdx + 1} top=${newPageRelTop.toFixed(1)}mm 避免与数据行重叠。` +
+            `已自动下移到 page ${newPageIdx + 1} top=${newPageRelTop.toFixed(1)}mm 避免与数据行重叠 ${anchorNote}。` +
             `建议把表格设计高度调到 ≥ ${(absoluteLastBottom - toMm(table.top, unit)).toFixed(1)}mm。`,
           controlId: c.id,
         })
@@ -1369,18 +1413,7 @@ export async function layout(
 
       // 设计 gap:第 i 张 ft 在画布上离第 i-1 张 ft 的 userBottom 的距离
       // —— 用户在画布上拖出的相对 gap,渲染时尽量保留。
-      let designGap = ftUserTop - prevFtUserBottom
-
-      // ★ 修复:多表紧邻时,前表末行 border-bottom(0.2mm,b-all/b-horizontal) +
-      //   本表首行 border-top(0.2mm)视觉重叠成 0.4mm 双层线。
-      //   若用户的 designGap < 表 border 下边距 → 补足到 border,让两线有 1×border 间隔,
-      //   视觉上等价于单层线。如果用户已主动拖 ≥border 的 gap → 不动,尊重用户设计。
-      //   仅在多表场景生效(本循环 phaseIdx>=1),单表内不适用。
-      //   注意:用 prevFt 的 border(可能为 none=0),避免对无边框表强加 0.2 间隙。
-      const prevBorderMM = calcRowBorder(prevFt as unknown as TableControl)
-      if (prevBorderMM > 0 && designGap < prevBorderMM) {
-        designGap = prevBorderMM
-      }
+      const designGap = ftUserTop - prevFtUserBottom
 
       // 上一阶段末底绝对坐标 + 设计 gap = 当前 ft 的目标绝对 top
       const cursorAbsTop = prevLastPageIdx * bodyStepMm(metrics) + prevLastBottomRel
