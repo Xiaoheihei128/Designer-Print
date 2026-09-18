@@ -2621,3 +2621,109 @@ describe('vmerge 跨页续行 anchor (Path B: paginateFlowTable 注入)', () => 
     expect(slice!.rows[2]!.cells.some((c) => c.consumed)).toBe(true)
   })
 })
+
+/* ----------------------- 多表衔接 border 重叠修复 (commit fix) ----------------------- */
+/**
+ * 根因:多表紧邻时,前表末行 border-bottom(0.2mm,b-all/b-horizontal) +
+ *       本表首行 border-top(0.2mm)视觉重叠成 0.4mm 双层线。
+ * 修法:pagination-engine.ts line 1371 附近,若 designGap < 表 border,补足到 border。
+ * 验证:以下 3 个测试覆盖 3 个边界(两表紧邻 / 用户已拖 ≥border gap / borders=none)。
+ */
+describe('layout —— 多表衔接 border 重叠修复', () => {
+  const measurer = createCjkMeasurer()
+  const A4 = {
+    width: 210, height: 297, unit: 'mm' as const,
+    orientation: 'portrait' as const,
+    margin: { top: 10, bottom: 10, left: 10, right: 10 },
+    backgroundColor: '#ffffff',
+  }
+
+  /** 单数据表模板(只 1 行数据,不跨页) */
+  function oneRowTable(id: string, top: number, height: number, opts?: { borders?: 'all' | 'none' | 'horizontal' }): AnyControl {
+    return {
+      id, type: 'table',
+      left: 10, top, width: 190, height,
+      dataSource: 'items', printable: true,
+      options: { borders: opts?.borders ?? 'all' },
+      columns: [
+        { id: 'c1', title: '项目', field: 'productCode', width: 95, align: 'center' },
+        { id: 'c2', title: '结果', field: 'qty', width: 95, align: 'center' },
+      ],
+      cells: [
+        [
+          { segments: [{ kind: 'text', value: '项目' }] },
+          { segments: [{ kind: 'text', value: '结果' }] },
+        ],
+      ],
+    } as AnyControl
+  }
+
+  it('修复:两表紧邻(designGap=0) + borders="all" → 第二张表 top 自动补到 0.2mm', async () => {
+    // 表 1: top=50, userHeight=60 → userBottom=110
+    // 表 2: top=110, userHeight=60 → designGap=0(用户让两表紧邻)
+    // 修复前:表 2 起点 = 表 1 末底 + 0 → CSS border-bottom + border-top 视觉重叠成 0.4mm
+    // 修复后:表 2 起点 = 表 1 末底 + 0.2mm(calcRowBorder(prevFt)=0.2)
+    const table1 = oneRowTable('t1', 50, 60, { borders: 'all' })
+    const table2 = oneRowTable('t2', 110, 60, { borders: 'all' })  // userBottom=170, table1 userBottom=110 → designGap=0
+    const result = await layout(
+      { version: '1.0', document: { type: 'report', page: A4,
+        sections: [{ type: 'body', components: [table1, table2] }],
+      }},
+      makeData(5),  // 5 行数据,单表不会跨页
+      { measurer },
+    )
+    // 表 1 slice(在第一页,因为数据量小)
+    const t1Slices = result.pages.flatMap((p) => p.body.filter((n) => n.id === 't1'))
+    const t2Slices = result.pages.flatMap((p) => p.body.filter((n) => n.id === 't2'))
+    expect(t1Slices.length).toBeGreaterThan(0)
+    expect(t2Slices.length).toBeGreaterThan(0)
+    // 关键断言:表 2 slice top - 表 1 slice bottom = 0.2mm(默认 borders='all')
+    const t1Last = t1Slices[t1Slices.length - 1] as PlacedTable
+    const t2First = t2Slices[0] as PlacedTable
+    const gap = t2First.top - (t1Last.top + t1Last.height)
+    expect(gap).toBeCloseTo(0.2, 1)
+  })
+
+  it('用户已主动拖 ≥ border 的 gap(>=0.2mm)→ 保留用户意图,不强行加大 gap', async () => {
+    // 表 1: top=50, userHeight=60 → userBottom=110
+    // 表 2: top=120, userHeight=60 → designGap=10(用户主动拖 10mm)
+    // 修复后:designGap=10 > 0.2 → 不补足,保留 10mm
+    const table1 = oneRowTable('t1', 50, 60, { borders: 'all' })
+    const table2 = oneRowTable('t2', 120, 60, { borders: 'all' })  // designGap=10
+    const result = await layout(
+      { version: '1.0', document: { type: 'report', page: A4,
+        sections: [{ type: 'body', components: [table1, table2] }],
+      }},
+      makeData(5),
+      { measurer },
+    )
+    const t1Slices = result.pages.flatMap((p) => p.body.filter((n) => n.id === 't1'))
+    const t2Slices = result.pages.flatMap((p) => p.body.filter((n) => n.id === 't2'))
+    const t1Last = t1Slices[t1Slices.length - 1] as PlacedTable
+    const t2First = t2Slices[0] as PlacedTable
+    const gap = t2First.top - (t1Last.top + t1Last.height)
+    // 真实表 1 末底可能略 > userBottom=110(因为有 border),但 gap 应 ≈ user 设计的 10mm
+    expect(gap).toBeGreaterThanOrEqual(10 - 0.5)  // 容忍 measurer 误差
+    expect(gap).toBeLessThan(11)  // 不应被强行加大
+  })
+
+  it('borders="none" 时(无边框)→ designGap=0 不补足(不需要让线分隔)', async () => {
+    // 表 1 + 表 2 都用 borders='none',无视觉 border,无需 gap 补偿
+    const table1 = oneRowTable('t1', 50, 60, { borders: 'none' })
+    const table2 = oneRowTable('t2', 110, 60, { borders: 'none' })  // designGap=0
+    const result = await layout(
+      { version: '1.0', document: { type: 'report', page: A4,
+        sections: [{ type: 'body', components: [table1, table2] }],
+      }},
+      makeData(5),
+      { measurer },
+    )
+    const t1Slices = result.pages.flatMap((p) => p.body.filter((n) => n.id === 't1'))
+    const t2Slices = result.pages.flatMap((p) => p.body.filter((n) => n.id === 't2'))
+    const t1Last = t1Slices[t1Slices.length - 1] as PlacedTable
+    const t2First = t2Slices[0] as PlacedTable
+    const gap = t2First.top - (t1Last.top + t1Last.height)
+    // borders=none → calcRowBorder=0 → 不补足,gap ≈ 0(可因 measurer/padding 略有偏差)
+    expect(gap).toBeLessThan(0.2)
+  })
+})

@@ -32,6 +32,7 @@ import {
 import { getSharedMeasurer, type TextMeasurer } from './measure'
 import {
   buildTableModel,
+  calcRowBorder,
   minStartHeight,
   sliceTable,
   totalTableHeight,
@@ -1368,7 +1369,18 @@ export async function layout(
 
       // 设计 gap:第 i 张 ft 在画布上离第 i-1 张 ft 的 userBottom 的距离
       // —— 用户在画布上拖出的相对 gap,渲染时尽量保留。
-      const designGap = ftUserTop - prevFtUserBottom
+      let designGap = ftUserTop - prevFtUserBottom
+
+      // ★ 修复:多表紧邻时,前表末行 border-bottom(0.2mm,b-all/b-horizontal) +
+      //   本表首行 border-top(0.2mm)视觉重叠成 0.4mm 双层线。
+      //   若用户的 designGap < 表 border 下边距 → 补足到 border,让两线有 1×border 间隔,
+      //   视觉上等价于单层线。如果用户已主动拖 ≥border 的 gap → 不动,尊重用户设计。
+      //   仅在多表场景生效(本循环 phaseIdx>=1),单表内不适用。
+      //   注意:用 prevFt 的 border(可能为 none=0),避免对无边框表强加 0.2 间隙。
+      const prevBorderMM = calcRowBorder(prevFt as unknown as TableControl)
+      if (prevBorderMM > 0 && designGap < prevBorderMM) {
+        designGap = prevBorderMM
+      }
 
       // 上一阶段末底绝对坐标 + 设计 gap = 当前 ft 的目标绝对 top
       const cursorAbsTop = prevLastPageIdx * bodyStepMm(metrics) + prevLastBottomRel
