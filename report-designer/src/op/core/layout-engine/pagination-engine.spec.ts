@@ -853,15 +853,17 @@ describe('layout —— userHeight 误分类警告 + labelgrid+flowTable 共存'
   })
 
   /**
-   * ★ 多 overlap 控件 refine —— 保留原始相对 top 差
+   * ★ 多 overlap 控件 refine —— 跨组保留原始相对 top 差(v3 容差外)
    *
    * 场景:同一表格,两个文本控件设计 top 跨越 userHeight 上边界
-   *      (table top=10, height=100 → designTableBottom=110; 两个文本 top=85/90 都 < 110 但 bottom > table.top+EPS),
-   *      被 analyzeBody 划进 plan.overlap,refine 后期望保持原 5mm 相对差。
+   *      (table top=10, height=100 → designTableBottom=110; 两个文本 top=85/95 都 < 110 但 bottom > table.top+EPS),
+   *      被 analyzeBody 划进 plan.overlap。差 10mm 超出 SAME_TOP_TOLERANCE_MM=5mm,
+   *      refine 后保留原 10mm 相对差。
    * 修复前:两者都被 absoluteLastBottom + 0 锚定 → 同 top 视觉异常。
-   * 修复后:最小 top 控件为锚,后续 = 锚 + 原始 top 差。
+   * v2 修复:最小 top 控件为锚,后续 = 锚 + 原始 top 差。
+   * v3 修复:差 ≤ 5mm 视为同行(吸收),> 5mm 视为跨组(保留差)。
    */
-  it('两个 overlap 控件原 top 不同(85 / 90) → refine 后保留 5mm 相对 top 差', async () => {
+  it('两个 overlap 控件原 top 差 10mm(超出容差) → refine 后保留 10mm 相对 top 差', async () => {
     const measurer = createCjkMeasurer()
     const table = makeTable(100, 9)  // top=10, height=100 → designTableBottom=110
     const ctrlA: AnyControl = {
@@ -871,7 +873,7 @@ describe('layout —— userHeight 误分类警告 + labelgrid+flowTable 共存'
     }
     const ctrlB: AnyControl = {
       id: 'supplier', type: 'text',
-      left: 10, top: 90, width: 80, height: 8,
+      left: 10, top: 95, width: 80, height: 8,  // 差 10mm > 5mm 容差,保留差
       value: '供货商:德之馨', printable: true,
     }
     const result = await layout(
@@ -893,10 +895,43 @@ describe('layout —— userHeight 误分类警告 + labelgrid+flowTable 共存'
     const supplierNode = bodyControls.find((n) => n.id === 'supplier')
     expect(buyerNode).toBeDefined()
     expect(supplierNode).toBeDefined()
-    // ★ 关键断言:两个 refine 后控件的相对 top 差 == 原始设计 top 差(5mm)
-    //   修复前 buyer.top ≈ supplier.top(都被推到同一锚底),差 ≈ 0
-    //   修复后 supplier.top - buyer.top ≈ 5mm(±浮点)
-    expect(Math.abs((supplierNode!.top - buyerNode!.top) - 5)).toBeLessThan(0.001)
+    // ★ 跨组断言:相对 top 差 == 原始设计 top 差(10mm,超出容差被精确保留)
+    expect(Math.abs((supplierNode!.top - buyerNode!.top) - 10)).toBeLessThan(0.001)
+  })
+
+  /**
+   * ★ v3 容差:两个 overlap 控件原 top 差 3mm(≤ 5mm 容差)→ 视作同组,共享基线
+   */
+  it('两个 overlap 控件原 top 差 3mm(在容差内) → 视作同组,共享基线', async () => {
+    const measurer = createCjkMeasurer()
+    const table = makeTable(100, 9)
+    const ctrlA: AnyControl = {
+      id: 'a-text', type: 'text',
+      left: 10, top: 85, width: 80, height: 8,
+      value: '文本 A', printable: true,
+    }
+    const ctrlB: AnyControl = {
+      id: 'b-text', type: 'text',
+      left: 10, top: 88, width: 80, height: 8,  // 差 3mm ≤ 5mm 容差
+      value: '文本 B', printable: true,
+    }
+    const result = await layout(
+      { version: '1.0', document: { type: 'report', page: A4,
+        sections: [{ type: 'body', components: [table, ctrlA, ctrlB] }],
+      }},
+      makeData(9),
+      { measurer },
+    )
+    const lastPage = result.pages[result.pages.length - 1]!
+    const bodyControls = lastPage.body.filter((n): n is Extract<typeof n, { kind: 'control' }> => n.kind === 'control')
+    const aNode = bodyControls.find((n) => n.id === 'a-text')
+    const bNode = bodyControls.find((n) => n.id === 'b-text')
+    expect(aNode).toBeDefined()
+    expect(bNode).toBeDefined()
+    // ★ 同组:差 ≤ 容差 → 共享基线,两者 top 完全相等
+    //   修复前:v2 精确保留差 → |bNode.top - aNode.top| ≈ 3mm
+    //   修复后:v3 容差吸收 → |bNode.top - aNode.top| < 0.001
+    expect(Math.abs(aNode!.top - bNode!.top)).toBeLessThan(0.001)
   })
 
   it('两个 overlap 控件原 top 相同(85 / 85) → refine 后保持同 top', async () => {

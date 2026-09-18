@@ -70,6 +70,15 @@ import {
 const EPS = 0.5
 
 /**
+ * 「同 top」容差（mm）：控件设计 top 差 ≤ 该阈值视为同一行（共享渲染基线，差被吸收）。
+ * 设计意图：画布默认网格 5mm，用户拖到同一网格内的两个控件肉眼看着同 y，
+ * 但实际 top 数值可能差几 mm（拖动时肉眼无法精确定位）。若精确保留差，预览
+ * 会按数值精确平移 → 视觉上「分两行」。
+ * 选 5mm = 画布默认网格：拖到同一网格的两个控件视作同行，跨网格的两个控件视作不同行。
+ */
+const SAME_TOP_TOLERANCE_MM = 5
+
+/**
  * 取 labelgrid 的数据源数组（reserveBelow 估算专用，不发警告）。
  * 与 label-grid 内部 gridDataArray 同语义，但不需要 warning 副作用。
  */
@@ -984,9 +993,15 @@ export async function layout(
         // - ctrlDesignTop > anchorCtrlDesignTop:相对锚的位移保留
         // - 单控件时 anchor 即自身,gap 公式逐字节与旧版一致 → 零回归
         const ctrlDesignTop = toMm(c.control.top, unit)
+        // ★ v3 容差:与锚 top 差 ≤ SAME_TOP_TOLERANCE_MM(默认 5mm)视为同行,
+        //   newTopAbs 直接等于 anchorNewTopAbs(差被吸收,共享基线)。
+        //   > 容差 → 保留相对差(异组)。
+        const deltaFromAnchor = ctrlDesignTop - anchorCtrlDesignTop
         const newTopAbs = Math.max(
           0,
-          anchorNewTopAbs + (ctrlDesignTop - anchorCtrlDesignTop),
+          deltaFromAnchor <= SAME_TOP_TOLERANCE_MM
+            ? anchorNewTopAbs
+            : anchorNewTopAbs + deltaFromAnchor,
         )
         const newPageIdx = Math.floor(newTopAbs / bodyStepMm(metrics))
         const newPageRelTop = newTopAbs - newPageIdx * bodyStepMm(metrics)
@@ -1197,14 +1212,16 @@ export async function layout(
         // ★ per-control 末底溢出检测(取代旧的整组 textFitsOnTablePage 判断):
         //   仅把超容的那个控件单独跳下一页;前面已经在末页放下的控件保留原位。
         //   旧的"按最后控件底端判断"会让中间可放控件也被一并推到下一页(用户反馈的 bug)。
-        // ★ below-stream 同 designTop 组共享基线(对应 overlap refine 修复 v2):
+        // ★ below-stream 同 designTop 组共享基线(v2) + 容差吸收(v3):
         //   phaseStream 按 designTop 升序排序,同 designTop 必然相邻。
         //   旧逻辑用 max(cursorAbsBottom, candidateTop) 让同 top 的第二个被 cursor 推到下一行。
-        //   修复:同组(item.designTop === 上一个 item.designTop)直接用 candidateTop,
-        //   不被 cursorAbsBottom 推挤,保证同 designTop 的控件共享同一基线 → 同行。
+        //   v2 修复:同组(item.designTop === 上一个 item.designTop)直接用 candidateTop。
+        //   v3 修复:判定改用容差(差 ≤ SAME_TOP_TOLERANCE_MM=5mm 即视为同组),
+        //          吸收画布上肉眼看着同 y 但 top 数值差几 mm 的情况。
         //   跨页钳制仍由下面 cStartTopRel + cHeight > cFooterLimit 分支负责。
         const _idx = phaseStream.indexOf(item)
-        const _sameGroup = _idx > 0 && phaseStream[_idx - 1]!.designTop === item.designTop
+        const _prevTop = _idx > 0 ? phaseStream[_idx - 1]!.designTop : -Infinity
+        const _sameGroup = _idx > 0 && (item.designTop - _prevTop) <= SAME_TOP_TOLERANCE_MM
         let cAbsTop = _sameGroup ? candidateTop : itemStartAbsTop
         const cStartPageIdx = Math.floor(cAbsTop / bodyStepMm(metrics))
         const cStartTopRel = cAbsTop - cStartPageIdx * bodyStepMm(metrics)
