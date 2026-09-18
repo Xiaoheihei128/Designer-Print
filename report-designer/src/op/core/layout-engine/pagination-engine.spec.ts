@@ -953,6 +953,46 @@ describe('layout —— userHeight 误分类警告 + labelgrid+flowTable 共存'
     expect(result.warnings.filter((w) => w.code === 'TABLE_USER_HEIGHT_MISMATCH')).toEqual([])
   })
 
+  /**
+   * ★ below-stream 同 designTop 组共享基线(对应 overlap refine 修复 v2)
+   *
+   * 场景:两个文本控件完全同 top,被 analyzeBody 划进 plan.below(都远在表格下方),
+   *      走 below-stream 而非 overlap refine。旧逻辑 max(cursorAbsBottom, candidateTop)
+   *      会让第二个被 cursor 推到下一行;新逻辑同 designTop 共享 candidateTop。
+   */
+  it('两个 below 控件完全同 top → 预览同行(不被 cursor 推挤)', async () => {
+    const measurer = createCjkMeasurer()
+    const table = makeTable(50, 3)  // top=10, height=50 → designTableBottom=60
+    const ctrlA: AnyControl = {
+      id: 'below-a', type: 'text',
+      left: 10, top: 200, width: 60, height: 8,
+      value: '文本 A', printable: true,
+    }
+    const ctrlB: AnyControl = {
+      id: 'below-b', type: 'text',
+      left: 80, top: 200, width: 60, height: 8,
+      value: '文本 B', printable: true,
+    }
+    const result = await layout(
+      { version: '1.0', document: { type: 'report', page: A4,
+        sections: [{ type: 'body', components: [table, ctrlA, ctrlB] }],
+      }},
+      makeData(3),
+      { measurer },
+    )
+    // 找到两个控件在末页的位置
+    const lastPage = result.pages[result.pages.length - 1]!
+    const bodyControls = lastPage.body.filter((n): n is Extract<typeof n, { kind: 'control' }> => n.kind === 'control')
+    const aNode = bodyControls.find((n) => n.id === 'below-a')
+    const bNode = bodyControls.find((n) => n.id === 'below-b')
+    expect(aNode).toBeDefined()
+    expect(bNode).toBeDefined()
+    // ★ 关键断言:同 designTop 组共享基线,两者 top 相等(不被 cursor 推到下一行)
+    //   修复前:|bNode.top - aNode.top| ≈ 8(被推到下一行)
+    //   修复后:|bNode.top - aNode.top| < 0.001(同行)
+    expect(Math.abs(aNode!.top - bNode!.top)).toBeLessThan(0.001)
+  })
+
   it('labelgrid 附录 + flowTable 共存(单据正文 + 附录图片墙) → 不再发 CONTENT_OVERFLOW 误报', async () => {
     const measurer = createCjkMeasurer()
     const table: AnyControl = {

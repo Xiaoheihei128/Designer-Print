@@ -1197,7 +1197,15 @@ export async function layout(
         // ★ per-control 末底溢出检测(取代旧的整组 textFitsOnTablePage 判断):
         //   仅把超容的那个控件单独跳下一页;前面已经在末页放下的控件保留原位。
         //   旧的"按最后控件底端判断"会让中间可放控件也被一并推到下一页(用户反馈的 bug)。
-        let cAbsTop = itemStartAbsTop
+        // ★ below-stream 同 designTop 组共享基线(对应 overlap refine 修复 v2):
+        //   phaseStream 按 designTop 升序排序,同 designTop 必然相邻。
+        //   旧逻辑用 max(cursorAbsBottom, candidateTop) 让同 top 的第二个被 cursor 推到下一行。
+        //   修复:同组(item.designTop === 上一个 item.designTop)直接用 candidateTop,
+        //   不被 cursorAbsBottom 推挤,保证同 designTop 的控件共享同一基线 → 同行。
+        //   跨页钳制仍由下面 cStartTopRel + cHeight > cFooterLimit 分支负责。
+        const _idx = phaseStream.indexOf(item)
+        const _sameGroup = _idx > 0 && phaseStream[_idx - 1]!.designTop === item.designTop
+        let cAbsTop = _sameGroup ? candidateTop : itemStartAbsTop
         const cStartPageIdx = Math.floor(cAbsTop / bodyStepMm(metrics))
         const cStartTopRel = cAbsTop - cStartPageIdx * bodyStepMm(metrics)
         // footerLimit = 当前 page 在 zoneTop 之下的可用底(无页脚时回退 bodyStep)
