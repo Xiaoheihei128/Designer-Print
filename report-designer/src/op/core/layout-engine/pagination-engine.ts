@@ -1176,6 +1176,11 @@ export async function layout(
     const absoluteLastBottom = tableLastPage * bodyStepMm(metrics) + skeleton.lastBottom
     // 物理 cursor:从 textBaseStartAbsTop 起(末片底 或 下一页页眉下方),作为重叠防护
     let cursorAbsBottom = textBaseStartAbsTop
+    // ★ v5:同 designTop 组共享 anchor。prevDesignTop 跟踪前一个 item 的设计 top(初值 -Inf
+    //   → 第一 item 视为「不在任何组内」);groupAnchorAbsTop 缓存本组第一 item 的 itemStartAbsTop
+    //   (= max(cursorAbsBottom, clampedCandidateTop),含 cursor 钳制)。
+    let prevDesignTop = -Infinity
+    let groupAnchorAbsTop = 0
 
     for (const item of phaseStream) {
       // ★ 关键修法:itemStartAbsTop = max(物理 cursor, 真实末片底 + 设计 gap)
@@ -1246,17 +1251,25 @@ export async function layout(
         // ★ per-control 末底溢出检测(取代旧的整组 textFitsOnTablePage 判断):
         //   仅把超容的那个控件单独跳下一页;前面已经在末页放下的控件保留原位。
         //   旧的"按最后控件底端判断"会让中间可放控件也被一并推到下一页(用户反馈的 bug)。
-        // ★ below-stream 同 designTop 组共享基线(v2) + 容差吸收(v3):
+        // ★ below-stream 同 designTop 组共享基线(v2→v3→v5):
         //   phaseStream 按 designTop 升序排序,同 designTop 必然相邻。
         //   旧逻辑用 max(cursorAbsBottom, candidateTop) 让同 top 的第二个被 cursor 推到下一行。
         //   v2 修复:同组(item.designTop === 上一个 item.designTop)直接用 candidateTop。
         //   v3 修复:判定改用容差(差 ≤ SAME_TOP_TOLERANCE_MM=5mm 即视为同组),
         //          吸收画布上肉眼看着同 y 但 top 数值差几 mm 的情况。
+        //   v5 修复:**组内所有项用「组内第一个 item 的 cAbsTop」(即 itemStartAbsTop)共享基线**。
+        //     v2/v3 的 _sameGroup 路径用 candidateTop(=absoluteLastBottom+designGap),
+        //     不考虑 cursorAbsBottom。前组高 ctrl 撑高 cursorAbsBottom →
+        //     新组第一 item 用 itemStartAbsTop= max(cursorAbsBottom, ...)> candidateTop
+        //     被 cursor 推下去,但同组兄弟用 candidateTop 留在设计位 → 视觉错开 = 「换行」。
+        //     v5 改用 groupAnchorAbsTop(第一 item 缓存的 itemStartAbsTop),保证组内所有项同 y。
         //   跨页钳制仍由下面 cStartTopRel + cHeight > cFooterLimit 分支负责。
-        const _idx = phaseStream.indexOf(item)
-        const _prevTop = _idx > 0 ? phaseStream[_idx - 1]!.designTop : -Infinity
-        const _sameGroup = _idx > 0 && (item.designTop - _prevTop) <= SAME_TOP_TOLERANCE_MM
-        let cAbsTop = _sameGroup ? candidateTop : itemStartAbsTop
+        const _sameGroup = item.designTop - prevDesignTop <= SAME_TOP_TOLERANCE_MM
+        if (!_sameGroup) {
+          // ★ 第一 item:缓存其 itemStartAbsTop 作为整组 anchor(尊重 cursor 钳制)
+          groupAnchorAbsTop = itemStartAbsTop
+        }
+        let cAbsTop = groupAnchorAbsTop
         const cStartPageIdx = Math.floor(cAbsTop / bodyStepMm(metrics))
         const cStartTopRel = cAbsTop - cStartPageIdx * bodyStepMm(metrics)
         // footerLimit = 当前 page 在 zoneTop 之下的可用底(无页脚时回退 bodyStep)
@@ -1283,6 +1296,8 @@ export async function layout(
         })
         // 推进 cursor:用控件真实渲染末底,作为「不让下一个 below 控件与此控件重叠」的下限
         cursorAbsBottom = Math.max(cursorAbsBottom, cAbsBottom)
+        // ★ v5:推进 prevDesignTop,供下一 item 判定 sameGroup
+        prevDesignTop = item.designTop
       } else {
         // grid:基于 cursor 用 placeAppendixGrid 实时决定 pageIndex + originTop
         //   (decideGridTarget 按 pageBreak 三态:always 优先新页,auto 放得下就跟,
@@ -1345,6 +1360,13 @@ export async function layout(
           totalPages = pl.lastPageIdx + 1
           lastPageNo = totalPages
         }
+        // ★ v5:grid 视为「组边界」—— 后续同 designTop 的 text item 应跟随 grid 的 itemStartAbsTop
+        //   (grid 用 itemStartAbsTop 渲染,与 text 同组时 text 也应取此值,而不是上一 text 组的 anchor)
+        const _gridSameGroup = item.designTop - prevDesignTop <= SAME_TOP_TOLERANCE_MM
+        if (!_gridSameGroup) {
+          groupAnchorAbsTop = itemStartAbsTop
+        }
+        prevDesignTop = item.designTop
       }
     }
 

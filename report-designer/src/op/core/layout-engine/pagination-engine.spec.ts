@@ -1009,6 +1009,48 @@ describe('layout —— userHeight 误分类警告 + labelgrid+flowTable 共存'
     expect(Math.abs(aNode!.top - bNode!.top)).toBeLessThan(0.001)
   })
 
+  /**
+   * ★ below-stream v5:前组高 ctrl 推 cursor → 新组第一 ctrl 被推到 cursorAbsBottom,兄弟却用 candidateTop
+   *     → cAbsTop 分裂 → 视觉「换行」。复现用户场景:下面有多个组,前组有大 ctrl 撑高 cursor,后续同 y 两 ctrl 错位。
+   */
+  it('below-stream:前组高 ctrl 推 cursor 后,新组同 y 两 ctrl 必须同行', async () => {
+    const measurer = createCjkMeasurer()
+    const table = makeTable(50, 3)  // top=50, height=50 → belowOriginTop=100
+    const tall: AnyControl = {
+      id: 'tall-prior', type: 'text',
+      left: 10, top: 200, width: 80, height: 80,  // 把 cursor 推到 ~270 附近
+      value: '前组高控', printable: true,
+    }
+    const ctrlA: AnyControl = {
+      id: 'group2-a', type: 'text',
+      left: 10, top: 210, width: 60, height: 8,
+      value: 'A', printable: true,
+    }
+    const ctrlB: AnyControl = {
+      id: 'group2-b', type: 'text',
+      left: 80, top: 210, width: 60, height: 8,  // 同 designTop,与 A 同组
+      value: 'B', printable: true,
+    }
+    const result = await layout(
+      { version: '1.0', document: { type: 'report', page: A4,
+        sections: [{ type: 'body', components: [table, tall, ctrlA, ctrlB] }],
+      }},
+      makeData(3),
+      { measurer },
+    )
+    const lastPage = result.pages[result.pages.length - 1]!
+    const bodyControls = lastPage.body.filter((n): n is Extract<typeof n, { kind: 'control' }> => n.kind === 'control')
+    const aNode = bodyControls.find((n) => n.id === 'group2-a')
+    const bNode = bodyControls.find((n) => n.id === 'group2-b')
+    expect(aNode).toBeDefined()
+    expect(bNode).toBeDefined()
+    // ★ 关键断言:同 y 兄弟必须同行。
+    //   修复前(commit b98335f 前):第一 ctrl 用 itemStartAbsTop(=cursorAbsBottom~270),
+    //   兄弟用 candidateTop(~180)→ 差 ~90mm → 视觉「换行」。
+    //   修复后:兄弟也用组 anchor(itemStartAbsTop)=同 y。
+    expect(Math.abs(aNode!.top - bNode!.top)).toBeLessThan(0.001)
+  })
+
   it('userHeight 合理 + 控件设计 top 远大于表格用户底 → 不发 TABLE_USER_HEIGHT_MISMATCH', async () => {
     const measurer = createCjkMeasurer()
     // userHeight=80 给足,合计 top=200 远离表格底部
