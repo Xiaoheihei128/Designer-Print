@@ -1595,6 +1595,12 @@ export async function layout(
       const subAbsoluteLastBottom =
         subLastPageIdx * bodyStepMm(metrics) + subLastBottomRel
       let phaseCursorAbsBottom = subAbsoluteLastBottom
+      // ★ v6:multi-flow phase loop 同 designTop 组共享 anchor(与第一阶段 v5 修复对称)。
+      //   多流式场景下,末 ft 下方常有「同 y 两 ctrl」(例:订购方/供货商)。
+      //   旧逻辑用 max(phaseCursorAbsBottom, cCandidateTop) 让第二 ctrl 被 cursor 推下 cHeight → 视觉「换行」。
+      //   v6 修复:第一 ctrl 缓存 cAbsTop 作为组 anchor,后续 ctrl 同组用 anchor(跨越 cFooterLimit 钳制也共享)。
+      let phasePrevDesignTop = -Infinity
+      let phaseGroupAnchorAbsTop = 0
       for (const item of phaseStream) {
         if (item.kind === 'text') {
           const c = item.control
@@ -1614,6 +1620,14 @@ export async function layout(
           const cNextPageTop = cCursorPageTop + bodyStepMm(metrics) + zoneTop
           cAbsTop = Math.min(cAbsTop, cNextPageTop)
           cAbsTop = Math.max(phaseCursorAbsBottom, cAbsTop)
+          // ★ v6:同组共享 anchor。第一 ctrl 缓存 cAbsTop,后续同 designTop(差 ≤ SAME_TOP_TOLERANCE_MM)
+          //   用 anchor 而非 cAbsTop,防止 phaseCursorAbsBottom 推进后把兄弟推到下一行。
+          const _phaseSameGroup = toMm(c.top, unit) - phasePrevDesignTop <= SAME_TOP_TOLERANCE_MM
+          if (!_phaseSameGroup) {
+            phaseGroupAnchorAbsTop = cAbsTop
+          } else {
+            cAbsTop = phaseGroupAnchorAbsTop
+          }
           // ★ per-control 末底溢出检测(与第一阶段 line 1024+ 一致)
           const cStartPageIdx = Math.floor(cAbsTop / bodyStepMm(metrics))
           const cStartTopRel = cAbsTop - cStartPageIdx * bodyStepMm(metrics)
@@ -1642,6 +1656,8 @@ export async function layout(
           })
           // 推进 cursor:取 abs bottom
           phaseCursorAbsBottom = Math.max(phaseCursorAbsBottom, cAbsTop + cHeight)
+          // ★ v6:推进 phasePrevDesignTop,供下一 item 判定 sameGroup
+          phasePrevDesignTop = toMm(c.top, unit)
         } else {
           // grid:基于 cursor 用 placeAppendixGrid 实时决定 pageIndex + originTop
           const pl = await placeAppendixGrid(
@@ -1694,6 +1710,13 @@ export async function layout(
             totalPages = pl.lastPageIdx + 1
             lastPageNo = totalPages
           }
+          // ★ v6:grid 也作为组边界(同 v5 修复对称)。grid 用 phaseCursorAbsBottom 渲染,
+          // 后续同 designTop 的 text 应跟随 grid 的 cAbsTop(=phaseCursorAbsBottom),而不是上一 text 组的 anchor。
+          const _gridSameGroup = toMm(item.lc.top, unit) - phasePrevDesignTop <= SAME_TOP_TOLERANCE_MM
+          if (!_gridSameGroup) {
+            phaseGroupAnchorAbsTop = phaseCursorAbsBottom
+          }
+          phasePrevDesignTop = toMm(item.lc.top, unit)
         }
       }
 

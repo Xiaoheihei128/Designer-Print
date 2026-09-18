@@ -1010,9 +1010,92 @@ describe('layout —— userHeight 误分类警告 + labelgrid+flowTable 共存'
   })
 
   /**
-   * ★ below-stream v5:前组高 ctrl 推 cursor → 新组第一 ctrl 被推到 cursorAbsBottom,兄弟却用 candidateTop
-   *     → cAbsTop 分裂 → 视觉「换行」。复现用户场景:下面有多个组,前组有大 ctrl 撑高 cursor,后续同 y 两 ctrl 错位。
+   * ★ v5 用户场景镜像:数据表下方 3 组(纯文本/绑定字段/条码),每组 2 ctrl 同 y,组间不同 y。
+   *   即便没有前组高 ctrl 推 cursor,相邻组 + 跨组间不同 y 也会触发换行吗?—— 排查。
    */
+  it('multi-flow v6:末 ft 下方 2 ctrl 同 y → 必须同行(phase loop 漏掉 v5 修复)', async () => {
+    const measurer = createCjkMeasurer()
+    // ★ 两个流式表格 + 用户场景复现:每对 ctrl 同 designTop,组间 y 不同
+    const table1 = makeTable(40, 3)  // top=50, height=40 → userBottom=90
+    const table2: AnyControl = {
+      id: 't2', type: 'table',
+      left: 10, top: 150, width: 190, height: 40,  // 第二张 ft
+      columns: [
+        { id: 'c1', title: '名称', field: 'productCode', width: 60, align: 'center' },
+        { id: 'c2', title: '数量', field: 'qty', width: 60, align: 'center' },
+      ],
+      headerRows: 1,
+      cells: [
+        [
+          { segments: [{ kind: 'text', value: '名称' }] },
+          { segments: [{ kind: 'text', value: '数量' }] },
+        ],
+        ...Array.from({ length: 3 }, () => [
+          { segments: [{ kind: 'field', path: 'items[0].productCode' }] },
+          { segments: [{ kind: 'field', path: 'items[0].qty' }] },
+        ]),
+      ],
+      dataSource: 'items', printable: true,
+    }
+    // 末 ft 下方 3 对同 y ctrl
+    const ctrl1a: AnyControl = { id: 'm1a', type: 'text', left: 10, top: 220, width: 60, height: 8, value: 'A', printable: true }
+    const ctrl1b: AnyControl = { id: 'm1b', type: 'text', left: 80, top: 220, width: 60, height: 8, value: 'B', printable: true }
+    const ctrl2a: AnyControl = { id: 'm2a', type: 'barcode', left: 10, top: 240, width: 60, height: 20, value: '0123456', printable: true }
+    const ctrl2b: AnyControl = { id: 'm2b', type: 'barcode', left: 80, top: 240, width: 60, height: 20, value: 'DEM0123', printable: true }
+    const result = await layout(
+      { version: '1.0', document: { type: 'report', page: A4,
+        sections: [{ type: 'body', components: [table1, table2, ctrl1a, ctrl1b, ctrl2a, ctrl2b] }],
+      }},
+      makeData(3),
+      { measurer },
+    )
+    const lastPage = result.pages[result.pages.length - 1]!
+    const bodyControls = lastPage.body.filter((n): n is Extract<typeof n, { kind: 'control' }> => n.kind === 'control')
+    const find = (id: string) => bodyControls.find((n) => n.id === id)
+    const n1a = find('m1a'), n1b = find('m1b')
+    const n2a = find('m2a'), n2b = find('m2b')
+    expect(n1a).toBeDefined(); expect(n1b).toBeDefined()
+    expect(n2a).toBeDefined(); expect(n2b).toBeDefined()
+    expect(Math.abs(n1a!.top - n1b!.top)).toBeLessThan(0.001)
+    expect(Math.abs(n2a!.top - n2b!.top)).toBeLessThan(0.001)
+    // 组间保留差
+    expect(n1a!.top).toBeLessThan(n2a!.top)
+  })
+
+  it('overlap(单表 userHeight 大):3 组用户场景同 y 不同组 → 不换行', async () => {
+    const measurer = createCjkMeasurer()
+    // ★ 关键:userHeight 拖得很大,让 ctrl 进 overlap 路径(不走 below-stream)
+    //   table top=10, height=120 → tBottom=130; ctrl top=101/115/129.5 → 全部 < 130 → overlap
+    const table = makeTable(120, 7)  // 7 rows 实际渲染 > userHeight,所以 absoluteLastBottom 大
+    const ctrl1a: AnyControl = { id: 't1a', type: 'text', left: 10, top: 101, width: 60, height: 8, value: '文本 A', printable: true }
+    const ctrl1b: AnyControl = { id: 't1b', type: 'text', left: 80, top: 101, width: 60, height: 8, value: '文本 B', printable: true }
+    const ctrl2a: AnyControl = { id: 't2a', type: 'text', left: 10, top: 115, width: 60, height: 8, value: '订购方:李明', printable: true }
+    const ctrl2b: AnyControl = { id: 't2b', type: 'text', left: 80, top: 115, width: 60, height: 8, value: '供货方:德之馨', printable: true }
+    const ctrl3a: AnyControl = { id: 't3a', type: 'barcode', left: 10, top: 129.5, width: 60, height: 20, value: '0123456', printable: true }
+    const ctrl3b: AnyControl = { id: 't3b', type: 'barcode', left: 80, top: 129.5, width: 60, height: 20, value: 'DEM0123', printable: true }
+    const result = await layout(
+      { version: '1.0', document: { type: 'report', page: A4,
+        sections: [{ type: 'body', components: [table, ctrl1a, ctrl1b, ctrl2a, ctrl2b, ctrl3a, ctrl3b] }],
+      }},
+      makeData(7),
+      { measurer },
+    )
+    const lastPage = result.pages[result.pages.length - 1]!
+    const bodyControls = lastPage.body.filter((n): n is Extract<typeof n, { kind: 'control' }> => n.kind === 'control')
+    const find = (id: string) => bodyControls.find((n) => n.id === id)
+    const n1a = find('t1a'), n1b = find('t1b')
+    const n2a = find('t2a'), n2b = find('t2b')
+    const n3a = find('t3a'), n3b = find('t3b')
+    expect(n1a).toBeDefined(); expect(n1b).toBeDefined()
+    expect(n2a).toBeDefined(); expect(n2b).toBeDefined()
+    expect(n3a).toBeDefined(); expect(n3b).toBeDefined()
+    expect(Math.abs(n1a!.top - n1b!.top)).toBeLessThan(0.001)
+    expect(Math.abs(n2a!.top - n2b!.top)).toBeLessThan(0.001)
+    expect(Math.abs(n3a!.top - n3b!.top)).toBeLessThan(0.001)
+    // 组间不同 y 必须保留差
+    expect(n1a!.top).toBeLessThan(n2a!.top)
+    expect(n2a!.top).toBeLessThan(n3a!.top)
+  })
   it('below-stream:前组高 ctrl 推 cursor 后,新组同 y 两 ctrl 必须同行', async () => {
     const measurer = createCjkMeasurer()
     const table = makeTable(50, 3)  // top=50, height=50 → belowOriginTop=100
