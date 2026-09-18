@@ -980,12 +980,19 @@ export async function layout(
     ? refinedCandidates.find((x) => x.ctrlDesignTop === anchorCtrlDesignTop)?.id
     : undefined
 
+  // ★ v4 partial-hit 兄弟:首次扫描只收「bottom 命中」的子集,但同 designTop 容差组
+  //   里的兄弟即便 bottom 已超出 absoluteLastBottom,也必须跟着命中兄弟一起位移,
+  //   否则会与命中兄弟在不同页(一个推末页、另一个留 page 0 原 top)→ 视觉错开 = 「换行」。
+  //   提前算一份「命中候选的 designTop 集合」,第二遍扫描用它识别 partial-hit 兄弟。
+  const hitDesignTops = refinedCandidates.map((r) => r.ctrlDesignTop)
+
   const refinedPlaced: PlacedNode[] = []
   for (const c of firstControls.placed) {
     if (c.kind === 'control' && overlapIdSet.has(c.id)) {
       const ctrlTopAbs = c.top
       const ctrlBottom = ctrlTopAbs + c.height
-      if (ctrlBottom > 50 + EPS && ctrlBottom < absoluteLastBottom - EPS) {
+      const isHit = ctrlBottom > 50 + EPS && ctrlBottom < absoluteLastBottom - EPS
+      if (isHit) {
         // ★ 重叠检测:控件底部落在表格末片可视范围内 → 改判 below
         // 公式(修复后):
         //   newTopAbs = anchorNewTopAbs + (ctrlDesignTop - anchorCtrlDesignTop)
@@ -1029,6 +1036,33 @@ export async function layout(
         } else {
           refinedPlaced.push({ ...c, top: newTopAbs })
           continue
+        }
+      } else if (hitDesignTops.length > 0) {
+        // ★ v4 partial-hit 兄弟:本身 bottom 已超 absoluteLastBottom 不算命中 refine,
+        //   但若 designTop 与命中候选同组(差 ≤ SAME_TOP_TOLERANCE_MM)→ 跟着同步,
+        //   否则留在 page 0 表格上方 → 与命中兄弟视觉错开。
+        //   不 push TABLE_USER_HEIGHT_MISMATCH warning(本身没被覆盖,只是跟随)。
+        const ctrlDesignTop = toMm(c.control.top, unit)
+        const isBrotherOfHit = hitDesignTops.some(
+          (ht) => Math.abs(ht - ctrlDesignTop) <= SAME_TOP_TOLERANCE_MM,
+        )
+        if (isBrotherOfHit) {
+          const deltaFromAnchor = ctrlDesignTop - anchorCtrlDesignTop
+          const newTopAbs = Math.max(
+            0,
+            deltaFromAnchor <= SAME_TOP_TOLERANCE_MM
+              ? anchorNewTopAbs
+              : anchorNewTopAbs + deltaFromAnchor,
+          )
+          const newPageIdx = Math.floor(newTopAbs / bodyStepMm(metrics))
+          const newPageRelTop = newTopAbs - newPageIdx * bodyStepMm(metrics)
+          if (newPageIdx > 0) {
+            pushNode(newPageIdx, { ...c, top: newPageRelTop })
+            continue
+          } else {
+            refinedPlaced.push({ ...c, top: newTopAbs })
+            continue
+          }
         }
       }
     }

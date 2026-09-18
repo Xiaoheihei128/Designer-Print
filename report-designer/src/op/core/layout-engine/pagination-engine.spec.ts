@@ -900,6 +900,46 @@ describe('layout —— userHeight 误分类警告 + labelgrid+flowTable 共存'
   })
 
   /**
+   * ★ v4 partial-hit 兄弟:两个 overlap 控件 designTop 相同,但 ctrlBottom 一个命中 refine、
+   *   一个超出 absoluteLastBottom 不命中。修复前:命中的被推末页、不命中的留 page 0 原 top → 视觉错开 = 「换行」。
+   *   v4 修复:把不命中的同 designTop 兄弟也纳入 v3 公式(共享基线),保证两个控件末页同 y。
+   */
+  it('两个 overlap 控件同 designTop、ctrlBottom 一命中一不命中 → 兄弟同步到 anchor 基线', async () => {
+    const measurer = createCjkMeasurer()
+    const table = makeTable(100, 9)
+    const ctrlA: AnyControl = {
+      id: 'short', type: 'text',
+      left: 10, top: 85, width: 80, height: 8,  // bottom=93,命中 refine
+      value: '短文本', printable: true,
+    }
+    const ctrlB: AnyControl = {
+      id: 'tall', type: 'text',
+      left: 10, top: 85, width: 80, height: 120,  // bottom=205,远超 absoluteLastBottom 不命中
+      value: '长文本', printable: true,
+    }
+    const result = await layout(
+      { version: '1.0', document: { type: 'report', page: A4,
+        sections: [{ type: 'body', components: [table, ctrlA, ctrlB] }],
+      }},
+      makeData(9),
+      { measurer },
+    )
+    // ★ warning 只 push 给真正命中的 ctrlA,ctrlB 是 partial-hit 兄弟不应有 TABLE_USER_HEIGHT_MISMATCH
+    const mismatch = result.warnings.filter((w) => w.code === 'TABLE_USER_HEIGHT_MISMATCH')
+    expect(mismatch.length).toBe(1)
+    expect(mismatch[0]!.controlId).toBe('short')
+
+    // ★ 末页应同时包含 short 和 tall,两者 top 完全相等(partial-hit 兄弟同步基线)
+    const lastPage = result.pages[result.pages.length - 1]!
+    const bodyControls = lastPage.body.filter((n): n is Extract<typeof n, { kind: 'control' }> => n.kind === 'control')
+    const shortNode = bodyControls.find((n) => n.id === 'short')
+    const tallNode = bodyControls.find((n) => n.id === 'tall')
+    expect(shortNode).toBeDefined()
+    expect(tallNode).toBeDefined()
+    expect(Math.abs(shortNode!.top - tallNode!.top)).toBeLessThan(0.001)
+  })
+
+  /**
    * ★ v3 容差:两个 overlap 控件原 top 差 3mm(≤ 5mm 容差)→ 视作同组,共享基线
    */
   it('两个 overlap 控件原 top 差 3mm(在容差内) → 视作同组,共享基线', async () => {
