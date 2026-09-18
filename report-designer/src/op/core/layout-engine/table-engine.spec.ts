@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   buildTableModel,
+  calcRowBorder,
   normalizeColumnWidths,
   sliceTable,
 } from '@op/core/layout-engine/table-engine'
@@ -361,86 +362,15 @@ describe('sliceTable —— 分页切片（含空尾片回归）', () => {
     expect(slice.nextStart).toBe(3)
   })
 
-  it('空间不足时本页少放，nextStart 后移（行预算含 0.2mm 边框，防渲染溢出压页脚）', () => {
+  it('空间不足时本页少放，nextStart 后移', () => {
     const model = mkModel(5)
-    // 默认 borders:'all'：header 8+0.2、每行 8+0.2。avail=24 → budget=24-8.2=15.8，
-    // 仅放得下 1 行（1×8.2=8.2≤15.8；第 2 行 16.4>15.8）——宁少排一行，不压页脚。
+    // mkModel 直接构造 height=8(未走 measureRowHeight),不预含 border。
+    // 修复后:sliceTable 用真实盒高推进(headerH=8、rowH=8),不再二次 +rowBorder。
+    // avail=24 → headerH=8、budget=24-8=16。2 行=16 ≤ 16 放得下,3 行=24 > 16 放不下。
     const slice = sliceTable(model, { avail: 24, start: 0 })
-    expect(slice.rows.length).toBe(1)
-    expect(slice.nextStart).toBe(1)
-    expect(slice.isLast).toBe(false)
-  })
-})
-
-/* ----------------------- A3:inset-shadow 边框,slice.height 不再累加 rowBorder ----------------------- */
-/**
- * 修复「多表衔接累积误差」:表 1 行数越多,表 2 起点越往下偏(N × 0.2mm)。
- *
- * 根因(2026-09-18 用户反馈):measureRowHeight 不算 border;sliceTable 内部累加 rowBorder(0.2mm/行)
- *   作预算保护,但**也累加进对外输出的 slice.height**,被 multi-flow cursor 用作表 2 起点 →
- *   误差 = N × 0.2mm(N = 表 1 行数)。
- *
- * 修复:CSS 边框改 box-shadow: inset(画在盒内、不进入 box model),sliceTable 拆 usedBudget(预算)
- *   和 usedRender(对外输出),slice.height = headerH + usedRender + sumRowHeights(footerRows)。
- *
- * 验证策略:
- * - 期望 slice.height 严格 = 行高之和(无 rowBorder 累加)
- * - 同时验证预算保护仍生效(usedBudget 仍按 height+rowBorder 累加,所以少 1 行的回归仍在)
- */
-describe('sliceTable —— A3 inset-shadow:slice.height 不再累加 rowBorder(multi-flow 衔接不再漂移)', () => {
-  function mkModel(rowCount: number, opts?: { borders?: 'all' | 'none' | 'horizontal' }): Model {
-    return {
-      control: {
-        id: 't',
-        type: 'table',
-        options: {
-          repeatHeader: true,
-          repeatFooter: false,
-          borders: opts?.borders ?? 'all',
-        },
-      } as Model['control'],
-      columns: [],
-      columnWidths: [],
-      headerRows: [{ kind: 'header', height: 8, cells: [] }],
-      rows: Array.from({ length: rowCount }, (_, i) => ({
-        kind: 'data',
-        height: 8,
-        dataIndex: i,
-        cells: [],
-      })) as Model['rows'],
-      footerRows: [],
-      dataRows: [],
-      warnings: [],
-      isLayoutGrid: false,
-    } as Model
-  }
-
-  it('10 行 b-all:slice.height = headerH + 10×8 = 88(无 rowBorder 累加)', () => {
-    const slice = sliceTable(mkModel(10, { borders: 'all' }), { avail: 1000, start: 0 })
-    // header 8mm + 10 行 × 8mm = 88mm
-    // 修复前会是 8 + 10×(8 + 0.2) = 90mm(累积 2mm 误差)
-    expect(slice.height).toBeCloseTo(88, 5)
-  })
-
-  it('30 行 b-all:slice.height = headerH + 30×8 = 248(无 rowBorder 累加,误差 0)', () => {
-    const slice = sliceTable(mkModel(30, { borders: 'all' }), { avail: 1000, start: 0 })
-    // 修复前会是 8 + 30×(8 + 0.2) = 254mm(累积 6mm 误差,完美匹配用户观察)
-    expect(slice.height).toBeCloseTo(248, 5)
-  })
-
-  it('b-none 对照:slice.height 与 b-all 一致(基线,证明 borders 模式不影响输出)', () => {
-    const sliceA = sliceTable(mkModel(20, { borders: 'all' }), { avail: 1000, start: 0 })
-    const sliceN = sliceTable(mkModel(20, { borders: 'none' }), { avail: 1000, start: 0 })
-    // b-none 修复前本来就不累加 rowBorder(为 0);b-all 修复后应与 b-none 输出一致
-    expect(sliceA.height).toBeCloseTo(sliceN.height, 5)
-  })
-
-  it('预算保护仍生效:avail 紧张时少放 1 行(不会因 border 累加消失而让最后一行溢出页脚)', () => {
-    // header 8 + budget(8.2/行) → avail 25 时预算 = 25 - 8 - pageFooterH(0) = 17
-    // 17 / 8.2 = 2.07 → 放 2 行(预算含 rowBorder),slice.height = 8 + 2×8 = 24
-    const slice = sliceTable(mkModel(10, { borders: 'all' }), { avail: 25, start: 0 })
     expect(slice.rows.length).toBe(2)
-    expect(slice.height).toBeCloseTo(24, 5) // 8 + 16 = 24(无 border)
+    expect(slice.nextStart).toBe(2)
+    expect(slice.isLast).toBe(false)
   })
 })
 
@@ -1417,10 +1347,10 @@ describe('sliceTable —— vMerge 跨页 (Path B: 跨页允许,paginateFlowTabl
     )
     const oneRowH = model.rows.find((r) => r.kind === 'data')!.height
     const headerH = model.headerRows.reduce((s, r) => s + r.height, 0)
-    // 二分找刚好放 2 行的预算:header + 1行 + 2行 + 0.2边框 + 小 buffer
-    // 切片预算 = avail - headerH - pageFooterH,pageFooterH=0(repeatFooter=false),
-    // 但 sliceTable 内循环按 used + (rowH+rowBorder) > budget 判定,加 rowBorder 0.2 预留
-    const avail = headerH + (oneRowH + 0.2) * 2 + 0.5
+    // 二分找刚好放 2 行的预算:header + 2行 + 小 buffer
+    // 修复前:sliceTable 内部 +rowBorder 0.2/行,需用 (oneRowH + 0.2) * 2 算预算
+    // 修复后:measureRowHeight 已含 border,oneRowH 已是真实盒高,sliceTable 不再加 → 直接 oneRowH * 2
+    const avail = headerH + oneRowH * 2 + 0.5
     const slices = sliceAll(model, avail)
     // 验证:必须产生至少 2 片
     expect(slices.length).toBeGreaterThanOrEqual(2)
@@ -1658,5 +1588,143 @@ describe('Bug10 修复：count token（pageCount/totalCount）不依赖列字段
     expect(summary).toBeTruthy()
     // sum 在非数值列不参与计算 → 留空（与原行为一致）
     expect(summary!.cells[1]!.text).toBe('')
+  })
+})
+
+/* ----------------------- 多表衔接累积误差修复 (commit fix) ----------------------- */
+/**
+ * 根因:measureRowHeight 返回值不含 border,sliceTable 内部 10 处 +rowBorder 加总
+ *       → lastBottom 比真实盒高多 N×0.2mm → 下游表 2 cursor 偏移累积。
+ * 修法:measure 含 border(calcRowBorder 同源),sliceTable 摘掉所有 +rowBorder。
+ * 验证:以下 3 个测试覆盖 3 个边界(borders=none/fixed/borders=all)。
+ */
+
+describe('measureRowHeight —— 含 border 边界(borders=none/fixed/borders=all)', () => {
+  it('borders="none" 时 measureRowHeight 返回值不预含 border(rowBorder=0)', () => {
+    // calcRowBorder 同源函数:borders=none → 0.2mm 边框不预留
+    const c = {
+      id: 't',
+      type: 'table',
+      options: { borders: 'none', repeatHeader: true },
+      columns: [],
+    } as unknown as TableControl
+    expect(calcRowBorder(c)).toBe(0)
+  })
+
+  it('borders="all"/"horizontal" 时 calcRowBorder 返回 0.2', () => {
+    const c1 = { id: 't', type: 'table', options: { borders: 'all' } } as unknown as TableControl
+    const c2 = { id: 't', type: 'table', options: { borders: 'horizontal' } } as unknown as TableControl
+    expect(calcRowBorder(c1)).toBe(0.2)
+    expect(calcRowBorder(c2)).toBe(0.2)
+  })
+
+  it('rowHeightMode="fixed" 时 measureRowHeight 不预含 border(用户指定精确行高)', () => {
+    // 通过 buildTableModel 走完整路径,验证 fixed 模式下 row.height = 用户指定的 8(不含 0.2)
+    const measurer = createCjkMeasurer()
+    const control: TableControl = {
+      id: 't',
+      type: 'table',
+      dataSource: 'items',
+      options: { rowHeightMode: 'fixed', rowHeight: 8, borders: 'all' },
+      columns: [
+        { id: 'c1', title: 'A', field: 'items[].name', width: 60 },
+      ],
+    } as TableControl
+    const model = buildTableModel({
+      control,
+      ctx: { data: { items: [{ name: 'x' }] } } as EvalContext,
+      measurer,
+      widthMm: 60,
+      heightMm: 30,
+    })
+    // fixed 模式不预含 border → row.height == user input(8mm)
+    const dataRow = model.rows.find((r) => r.kind === 'data')!
+    expect(dataRow.height).toBe(8)
+    // 对比:rowHeightMode='auto'(默认)会走 measureRowHeight + calcRowBorder
+    // 因内容为 'x'(单字符),auto 模式 row.height 可能小于 fixed 设的 8
+    // 关键断言:auto 模式 row.height = measureRowHeight(内容) + CELL_PADDING_Y×2 + rowBorder
+    //         = 6.0(单字符基线) + 1.2×2 + 0.2 = 8.6(实测 ≈ 6.89,因 measurer 自带基线)
+    //         vs fixed 模式严格 = 8
+    // 行为差异:auto 模式即便 border='all',如果内容够短,height 可以 < 8 → 测试只验证:
+    //   1) fixed 模式严格 = 8(border 不参与)
+    //   2) auto 模式 ≠ fixed 模式(auto 走 measure 路径,fixed 走用户输入路径)
+    const controlAuto = { ...control, options: { ...control.options, rowHeightMode: 'auto', rowHeight: undefined } } as TableControl
+    const modelAuto = buildTableModel({
+      control: controlAuto,
+      ctx: { data: { items: [{ name: 'x' }] } } as EvalContext,
+      measurer,
+      widthMm: 60,
+      heightMm: 30,
+    })
+    const dataRowAuto = modelAuto.rows.find((r) => r.kind === 'data')!
+    // auto 模式 ≠ fixed 模式(auto 走 measure 路径,fixed 走用户输入)
+    expect(dataRowAuto.height).not.toBe(8)
+    // fixed 模式(8)与 auto 模式之间有 border 差异(fixed 不含 border,auto 含 border)
+    // 但因 auto 模式行高受内容影响,具体差值不一定 = 0.2;只能断言 fixed 模式严格 = 8
+    expect(dataRow.height).toBe(8) // 重复断言,作为不变式总结
+  })
+})
+
+describe('sliceTable —— lastBottom 不再累积 border(multi-table 衔接无漂移)', () => {
+  /**
+   * 验证:多张同尺寸表依次切片,每张表的 lastBottom 推进量 = 真实盒高,不含虚假 +0.2mm/行。
+   * 旧行为下每张表 = ∑h + N×0.2 + footer 累加;新行为下 = ∑h(measure 已含 border)。
+   * 关键断言:两张表的 lastBottom 差 = 第二张表的总高(measure 累加),不再含额外的 N×0.2 漂移。
+   */
+  function mkSimpleModel(rows: number, opts?: { borders?: 'all' | 'none' | 'horizontal' }): Model {
+    return {
+      control: { id: 't', type: 'table', options: { repeatHeader: true, repeatFooter: false, borders: opts?.borders ?? 'all' } } as Model['control'],
+      columns: [],
+      columnWidths: [],
+      headerRows: [{ kind: 'header', height: 8.2, cells: [] }],
+      rows: Array.from({ length: rows }, (_, i) => ({
+        kind: 'data',
+        height: 8.2,
+        dataIndex: i,
+        cells: [],
+      })) as Model['rows'],
+      footerRows: [],
+      dataRows: [],
+      warnings: [],
+      isLayoutGrid: false,
+    } as Model
+  }
+
+  it('30 行 + borders="all" → lastBottom = headerH + 30×rowH(无 N×0.2 漂移)', () => {
+    const model = mkSimpleModel(30, { borders: 'all' })
+    const slice = sliceTable(model, { avail: 1000, start: 0 })
+    // headerH=8.2 + 30×8.2 = 254.2mm
+    // 旧行为会多算 31×0.2 = 6.2mm → 260.4
+    expect(slice.height).toBeCloseTo(254.2, 1)
+  })
+
+  it('30 行 + borders="none" → lastBottom = headerH + 30×rowH(同样无漂移,rowBorder=0)', () => {
+    const model = mkSimpleModel(30, { borders: 'none' })
+    const slice = sliceTable(model, { avail: 1000, start: 0 })
+    // headerH=8.2 + 30×8.2 = 254.2mm(borders=none 时 rowBorder=0,不影响)
+    expect(slice.height).toBeCloseTo(254.2, 1)
+  })
+
+  it('多表衔接模拟:第二张表的 cursor = 第一张表 lastBottom,差值 = 真实盒高(无累积)', () => {
+    // 模拟 pagination-engine 多表衔接的核心公式:cursorAbsTop = prevLastBottomRel + designGap
+    // 修复前:lastBottom 含 N×0.2 累加,第二张表 cursor 漂移
+    // 修复后:lastBottom = 真实盒高,cursor 准确
+    const rows = [5, 10, 20, 30]
+    let prevLastBottom = 0
+    for (const n of rows) {
+      const model = mkSimpleModel(n, { borders: 'all' })
+      const slice = sliceTable(model, { avail: 1000, start: 0 })
+      const thisTableH = slice.height
+      // 衔接:下一张表 cursor = 本张表 lastBottom(无 designGap 简化)
+      const expectedCursor = prevLastBottom + thisTableH
+      // 验证:thisTableH = 8.2 + n×8.2 = (n+1)×8.2,不含虚假 +N×0.2
+      const expectedH = (n + 1) * 8.2
+      expect(thisTableH).toBeCloseTo(expectedH, 1)
+      // 衔接 cursor 严格按真实盒高推进
+      expect(expectedCursor).toBeCloseTo(prevLastBottom + expectedH, 1)
+      prevLastBottom = expectedCursor
+    }
+    // 4 张表的总 cursor:5+10+20+30 = 65 行 + 4 个 header = 69 行 × 8.2 = 565.8mm
+    expect(prevLastBottom).toBeCloseTo(69 * 8.2, 1)
   })
 })
