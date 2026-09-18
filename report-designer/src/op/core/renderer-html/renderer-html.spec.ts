@@ -211,9 +211,12 @@ describe('renderer-html —— HTML 输出', () => {
       const css = renderStyle(layoutResult, { screen: false })
 
       // 关键：CSS 里必须出现"blank 行最后 td 的 border-right 兜底规则"
-      expect(css).toMatch(/\.op-table\.b-all\s+tr\.is-blank\s+td:last-child[^}]*border-right/)
-      // 兜底：即使其他规则被清掉,base 的 :last-child 规则也得在
-      expect(css).toMatch(/\.op-table\.b-all\s+td:last-child[^}]*border-right/)
+      // ★ A3:inset-shadow 方案后,断言改为匹配 box-shadow 右侧线
+      expect(css).toMatch(/\.op-table\.b-all\s+tr\.is-blank\s+td:last-child[^}]*box-shadow[^}]*inset\s+-0\.2mm\s+0/)
+      // 兜底：base 规则 .b-all td 必须画右线(-0.2mm inset),让末列所有 td 都有右边界
+      //   (A3 后不再需要单独的 .b-all td:last-child —— tr:last-child td 已覆盖末行;
+      //    但「所有 td 都画右线」这个 base 兜底语义仍要保留,所以断言改为 .b-all td)
+      expect(css).toMatch(/\.op-table\.b-all\s+td\s*\{[^}]*box-shadow[^}]*inset\s+-0\.2mm\s+0/)
       // 不应再把 padding:0 写进 blank td（避免塌陷）
       expect(css).not.toMatch(/tr\.is-blank\s+td\s*\{[^}]*padding:\s*0/)
       // HTML 部分: 5 个 td 都有 br（确保行高）

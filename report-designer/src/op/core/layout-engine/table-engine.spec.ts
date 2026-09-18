@@ -372,6 +372,78 @@ describe('sliceTable —— 分页切片（含空尾片回归）', () => {
   })
 })
 
+/* ----------------------- A3:inset-shadow 边框,slice.height 不再累加 rowBorder ----------------------- */
+/**
+ * 修复「多表衔接累积误差」:表 1 行数越多,表 2 起点越往下偏(N × 0.2mm)。
+ *
+ * 根因(2026-09-18 用户反馈):measureRowHeight 不算 border;sliceTable 内部累加 rowBorder(0.2mm/行)
+ *   作预算保护,但**也累加进对外输出的 slice.height**,被 multi-flow cursor 用作表 2 起点 →
+ *   误差 = N × 0.2mm(N = 表 1 行数)。
+ *
+ * 修复:CSS 边框改 box-shadow: inset(画在盒内、不进入 box model),sliceTable 拆 usedBudget(预算)
+ *   和 usedRender(对外输出),slice.height = headerH + usedRender + sumRowHeights(footerRows)。
+ *
+ * 验证策略:
+ * - 期望 slice.height 严格 = 行高之和(无 rowBorder 累加)
+ * - 同时验证预算保护仍生效(usedBudget 仍按 height+rowBorder 累加,所以少 1 行的回归仍在)
+ */
+describe('sliceTable —— A3 inset-shadow:slice.height 不再累加 rowBorder(multi-flow 衔接不再漂移)', () => {
+  function mkModel(rowCount: number, opts?: { borders?: 'all' | 'none' | 'horizontal' }): Model {
+    return {
+      control: {
+        id: 't',
+        type: 'table',
+        options: {
+          repeatHeader: true,
+          repeatFooter: false,
+          borders: opts?.borders ?? 'all',
+        },
+      } as Model['control'],
+      columns: [],
+      columnWidths: [],
+      headerRows: [{ kind: 'header', height: 8, cells: [] }],
+      rows: Array.from({ length: rowCount }, (_, i) => ({
+        kind: 'data',
+        height: 8,
+        dataIndex: i,
+        cells: [],
+      })) as Model['rows'],
+      footerRows: [],
+      dataRows: [],
+      warnings: [],
+      isLayoutGrid: false,
+    } as Model
+  }
+
+  it('10 行 b-all:slice.height = headerH + 10×8 = 88(无 rowBorder 累加)', () => {
+    const slice = sliceTable(mkModel(10, { borders: 'all' }), { avail: 1000, start: 0 })
+    // header 8mm + 10 行 × 8mm = 88mm
+    // 修复前会是 8 + 10×(8 + 0.2) = 90mm(累积 2mm 误差)
+    expect(slice.height).toBeCloseTo(88, 5)
+  })
+
+  it('30 行 b-all:slice.height = headerH + 30×8 = 248(无 rowBorder 累加,误差 0)', () => {
+    const slice = sliceTable(mkModel(30, { borders: 'all' }), { avail: 1000, start: 0 })
+    // 修复前会是 8 + 30×(8 + 0.2) = 254mm(累积 6mm 误差,完美匹配用户观察)
+    expect(slice.height).toBeCloseTo(248, 5)
+  })
+
+  it('b-none 对照:slice.height 与 b-all 一致(基线,证明 borders 模式不影响输出)', () => {
+    const sliceA = sliceTable(mkModel(20, { borders: 'all' }), { avail: 1000, start: 0 })
+    const sliceN = sliceTable(mkModel(20, { borders: 'none' }), { avail: 1000, start: 0 })
+    // b-none 修复前本来就不累加 rowBorder(为 0);b-all 修复后应与 b-none 输出一致
+    expect(sliceA.height).toBeCloseTo(sliceN.height, 5)
+  })
+
+  it('预算保护仍生效:avail 紧张时少放 1 行(不会因 border 累加消失而让最后一行溢出页脚)', () => {
+    // header 8 + budget(8.2/行) → avail 25 时预算 = 25 - 8 - pageFooterH(0) = 17
+    // 17 / 8.2 = 2.07 → 放 2 行(预算含 rowBorder),slice.height = 8 + 2×8 = 24
+    const slice = sliceTable(mkModel(10, { borders: 'all' }), { avail: 25, start: 0 })
+    expect(slice.rows.length).toBe(2)
+    expect(slice.height).toBeCloseTo(24, 5) // 8 + 16 = 24(无 border)
+  })
+})
+
 /* ----------------------- PR-B:cell 级别 cantSplit ----------------------- */
 
 describe('sliceTable —— PR-B:整行不可切(纯 svg/image cell 触发)', () => {

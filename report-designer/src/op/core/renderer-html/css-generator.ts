@@ -159,7 +159,7 @@ ${s}.op-table tr.is-static td { /* 占位：保持类名与设计期对齐，避
    ★ 显式补 border-right：高优先级兜底，万一 :last-child 规则因空白 td
    渲染异常没命中，blank 行视觉仍是完整的"表格一列"。 */
 ${s}.op-table tr.is-blank td { background: transparent; }
-${s}.op-table.b-all tr.is-blank td:last-child { border-right: 0.2mm solid var(--op-table-border); }
+${s}.op-table.b-all tr.is-blank td:last-child { box-shadow: inset -0.2mm 0 0 0 var(--op-table-border); }
 
 /* ---------- 表格样式预设（Excel 式快速切换；class 由渲染端挂在 table 元素上） ---------- */
 /* 默认（none）：仅表头加粗，无任何背景色（含标题行）。无需规则，class 仅作占位。 */
@@ -196,21 +196,25 @@ ${s}.op-table.ts-header-dark tr.is-header td { background: #2F54EB; color: #ffff
 /* 课表：全网格 + 表头淡底高亮（角标斜线由单元格 diagonal 控制） */
 ${s}.op-table.ts-timetable tr.is-header td { background: ${TABLE_HEADER_BG}; }
 
-/* 边框模式：每格画上/左边框，末行补下、末列补右 → 外框落在盒内、不被裁切 */
-${s}.op-table.b-all td { border-top: 0.2mm solid var(--op-table-border); border-left: 0.2mm solid var(--op-table-border); }
-${s}.op-table.b-all tr:last-child td { border-bottom: 0.2mm solid var(--op-table-border); }
-${s}.op-table.b-all td:last-child { border-right: 0.2mm solid var(--op-table-border); }
-/* Bug11 修复：vMerge 锚点（rowspan>1）不在末行，但其视觉下沿落在末行底边。
+/* 边框模式：用 box-shadow: inset 画边线。
+   关键点:inset shadow 画在盒内、不进入 box model → 渲染盒高 = measure 高度(不含 0.2mm 边)。
+   sliceTable 之前为了预算保护每行预留 0.2mm border 并累加进 lastBottom,导致 multi-flow
+   衔接 cursor 按 N×0.2mm 漂移(N = 表 1 行数)。改 inset 后 sliceTable 内部仍可累加 rowBorder
+   当 budget margin,但对外输出的 slice.height / lastBottom 不再含 border → 视觉对齐。
+   外框仍落在盒内,不被 overflow:hidden 裁切(同 separate + border-spacing:0 方案)。 */
+${s}.op-table.b-all td { box-shadow: inset 0 0.2mm 0 0 var(--op-table-border), inset 0.2mm 0 0 0 var(--op-table-border), inset -0.2mm 0 0 0 var(--op-table-border); }
+${s}.op-table.b-all tr:last-child td { box-shadow: inset 0 0.2mm 0 0 var(--op-table-border), inset 0 -0.2mm 0 0 var(--op-table-border), inset 0.2mm 0 0 0 var(--op-table-border), inset -0.2mm 0 0 0 var(--op-table-border); }
+/* Bug11 修复:vMerge 锚点(rowspan>1)不在末行,但其视觉下沿落在末行底边。
    tr:last-child td 不命中锚点 → 末行 vMerge 列无下边框。补一条专属规则 */
-${s}.op-table.b-all td[rowspan] { border-bottom: 0.2mm solid var(--op-table-border); }
-${s}.op-table.b-horizontal td { border-top: 0.2mm solid var(--op-table-border); }
-${s}.op-table.b-horizontal tr:last-child td { border-bottom: 0.2mm solid var(--op-table-border); }
-${s}.op-table.b-horizontal td[rowspan] { border-bottom: 0.2mm solid var(--op-table-border); }
-${s}.op-table.b-outline { border: 0.2mm solid var(--op-table-border); }
-${s}.op-table.b-none td { border: 0; }
-/* 三线表：顶线 + 表头底线 + 底线，无内部横线、无竖线（建模报告 / 财务报表常用） */
-${s}.op-table.b-three-line { border-top: 0.2mm solid var(--op-table-border); border-bottom: 0.2mm solid var(--op-table-border); }
-${s}.op-table.b-three-line tr.is-header:last-child td { border-bottom: 0.2mm solid var(--op-table-border); }
+${s}.op-table.b-all td[rowspan] { box-shadow: inset 0 0.2mm 0 0 var(--op-table-border), inset 0 -0.2mm 0 0 var(--op-table-border), inset 0.2mm 0 0 0 var(--op-table-border), inset -0.2mm 0 0 0 var(--op-table-border); }
+${s}.op-table.b-horizontal td { box-shadow: inset 0 0.2mm 0 0 var(--op-table-border); }
+${s}.op-table.b-horizontal tr:last-child td { box-shadow: inset 0 0.2mm 0 0 var(--op-table-border), inset 0 -0.2mm 0 0 var(--op-table-border); }
+${s}.op-table.b-horizontal td[rowspan] { box-shadow: inset 0 0.2mm 0 0 var(--op-table-border), inset 0 -0.2mm 0 0 var(--op-table-border); }
+${s}.op-table.b-outline { box-shadow: inset 0 0 0 0.2mm var(--op-table-border); }
+${s}.op-table.b-none td { border: 0; box-shadow: none; }
+/* 三线表:顶线 + 表头底线 + 底线,无内部横线、无竖线(建模报告 / 财务报表常用) */
+${s}.op-table.b-three-line { box-shadow: inset 0 0.2mm 0 0 var(--op-table-border), inset 0 -0.2mm 0 0 var(--op-table-border); }
+${s}.op-table.b-three-line tr.is-header:last-child td { box-shadow: inset 0 -0.2mm 0 0 var(--op-table-border); }
 
 /* vMerge 同值合并（设计画布视觉提示）—— 启用列加蓝色左竖条，
    让用户在画布上一眼看到「这列会去重纵向合并」；运行期 HTML 输出由

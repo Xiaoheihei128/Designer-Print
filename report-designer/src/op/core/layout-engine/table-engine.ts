@@ -1060,11 +1060,15 @@ export function sliceTable(model: TableModel, req: SliceRequest): SliceResult {
   const repeatFooter = opts.repeatFooter ?? true
 
   const headerRows = isFirst || repeatHeader ? model.headerRows : []
-  // td 0.2mm 边框（b-all / b-horizontal 的 border-top）未计入测量行高，渲染时逐行累积，
-  // 会让切片实际底部超过预算、压到页脚/页面边缘。按行预留边框：宁少排一行，不压页脚。
+  // ★ A3 修复:边框改为 inset-shadow,不进入 box model,渲染盒高 = 行高之和(不含 border)。
+  //   rowBorder 仍按 0.2mm 累计作「预算安全 margin」(避免最后一行被 pageFooter 切掉),
+  //   但**不再累加进对外输出的 slice.height / lastBottom**——
+  //   修复前会把 N × 0.2mm 误差传给 multi-flow cursor,造成「表 1 行数越多,
+  //   表 1/表 2 衔接误差越大」的累积漂移。
+  //   内部同时维护 usedBudget(含 border,预算检查用)和 usedRender(不含 border,对外输出用)。
   const borders = opts.borders ?? 'all'
   const rowBorder = borders === 'all' || borders === 'horizontal' ? 0.2 : 0
-  const headerH = sumRowHeights(headerRows) + headerRows.length * rowBorder
+  const headerH = sumRowHeights(headerRows)
   // 尾行按"是否每页都出现"拆分预算，避免非末页为总计/大写行预留留白：
   // - 每页固定：本页合计 + 静态尾行（repeatFooter 时）
   // - 仅末页：总计 + 大写金额 + 静态尾行（repeatFooter 关时）
@@ -1121,7 +1125,9 @@ export function sliceTable(model: TableModel, req: SliceRequest): SliceResult {
   }
 
   const picked: RenderRow[] = []
-  let used = 0
+  // ★ A3:used 拆两份 —— usedBudget(含 rowBorder,预算检查)/ usedRender(纯行高,对外输出)
+  let usedBudget = 0
+  let usedRender = 0
   let i = req.start
 
   while (i < model.rows.length) {
@@ -1129,7 +1135,7 @@ export function sliceTable(model: TableModel, req: SliceRequest): SliceResult {
     const rowH = row.height + rowBorder
     if (forcedRows !== null && picked.length >= forcedRows) break
 
-    if (used + rowH > budget) {
+    if (usedBudget + rowH > budget) {
       // 一行都放不下：强制放一行，避免无限循环（并告警）
       if (picked.length === 0) {
         if (row.height > req.avail) {
@@ -1140,7 +1146,8 @@ export function sliceTable(model: TableModel, req: SliceRequest): SliceResult {
           })
         }
         picked.push(row)
-        used += rowH
+        usedBudget += rowH
+        usedRender += row.height
         i++
       } else if (row.cantSplit) {
         // ★ PR-B:整行不可切(纯 svg/image cell) → 整行下推到下一页,发警告
@@ -1154,7 +1161,8 @@ export function sliceTable(model: TableModel, req: SliceRequest): SliceResult {
     }
 
     picked.push(row)
-    used += rowH
+    usedBudget += rowH
+    usedRender += row.height
     i++
   }
 
@@ -1171,9 +1179,10 @@ export function sliceTable(model: TableModel, req: SliceRequest): SliceResult {
 
     if (isLast) {
       // 末页需额外容纳总计 / 大写金额行：放不下则把数据行让给下一页
-      while (picked.length > 0 && headerH + used + pageFooterH + lastFooterH > req.avail) {
+      while (picked.length > 0 && headerH + usedBudget + pageFooterH + lastFooterH > req.avail) {
         const removed = picked.pop()!
-        used -= removed.height
+        usedBudget -= removed.height + rowBorder
+        usedRender -= removed.height
         i--
       }
       // while 弹出行后，可能出现「footer 放下了但还有行没放完」的情况：
@@ -1214,9 +1223,10 @@ export function sliceTable(model: TableModel, req: SliceRequest): SliceResult {
   }
   if (fixBottomActive) {
     // 补空可用预算 = 总可用 - 表头 - 已用数据行 - 本页表尾预留 - 离页底留白
+    // ★ A3:remainBudget 用 usedBudget(含 border)——预算检查仍要预留 border 安全 margin
     const footerSum = sumRowHeights(footerRows) + footerRows.length * rowBorder
     let remainBudget =
-      req.avail - headerH - used - pageFooterH - footerSum - (opts.fixBottomMargin ?? 0)
+      req.avail - headerH - usedBudget - pageFooterH - footerSum - (opts.fixBottomMargin ?? 0)
     // blank 行高：取「MIN_ROW_HEIGHT」与「已 picked 数据行均高」中较大者，保证视觉与数据行一致
     let blankH = Math.max(MIN_ROW_HEIGHT, avgDataRowHeight(picked))
     // { count: N }：count 模式不走让位（按用户期望"严格 N 行，超出可用则裁剪"）；
@@ -1241,14 +1251,17 @@ export function sliceTable(model: TableModel, req: SliceRequest): SliceResult {
       picked.filter((r) => r.kind === 'data').length > minDataKeep
     ) {
       const last = picked.pop()!
-      used -= last.height + rowBorder
+      // ★ A3:两边都扣 —— usedBudget 减 border 安全 margin,usedRender 减纯行高
+      usedBudget -= last.height + rowBorder
+      usedRender -= last.height
       if (fixBottomMode === 'fill') {
         // fill：就地替换为同高 blank 行，picked 长度不变、dataCount 不变、isLast 不变
         const replacement = buildBlankPlans(1, last.height, model.columnWidths)
         picked.push(...replacement)
-        // 与补空 n>0 分支一致：blank 行需把 height+border 计回 used，
+        // 与补空 n>0 分支一致：blank 行需把 height+border 计回 usedBudget，
         // 否则末尾 height 字段少算让位替换行的占用
-        used += replacement.reduce((s, r) => s + r.height + rowBorder, 0)
+        usedBudget += replacement.reduce((s, r) => s + r.height + rowBorder, 0)
+        usedRender += replacement.reduce((s, r) => s + r.height, 0)
       }
       // count 模式：minDataKeep=∞ → 此分支不会进入
       remainBudget += last.height + rowBorder
@@ -1265,7 +1278,9 @@ export function sliceTable(model: TableModel, req: SliceRequest): SliceResult {
       if (n > 0) {
         const blanks = buildBlankPlans(n, blankH, model.columnWidths)
         picked.push(...blanks)
-        used += blanks.reduce((s, r) => s + r.height + rowBorder, 0)
+        // ★ A3:两边都加 —— usedBudget 含 border,usedRender 不含
+        usedBudget += blanks.reduce((s, r) => s + r.height + rowBorder, 0)
+        usedRender += blanks.reduce((s, r) => s + r.height, 0)
       }
     }
   }
@@ -1275,7 +1290,11 @@ export function sliceTable(model: TableModel, req: SliceRequest): SliceResult {
     rows: picked,
     footerRows,
     nextStart: i,
-    height: headerH + used + sumRowHeights(footerRows) + footerRows.length * rowBorder,
+    // ★ A3:对外 height 用 usedRender(不含 rowBorder) —— 真实 CSS 渲染盒高 = 行高之和。
+    //   multi-flow cursor (pagination-engine.ts:1374) 用此值推表 2 起点,
+    //   若含 rowBorder 会按 N×0.2mm 漂移(N = 表行数),造成表 1/表 2 衔接误差累积。
+    //   footer 也用纯高(其下边框由 inset shadow 画,不影响盒高)。
+    height: headerH + usedRender + sumRowHeights(footerRows),
     isLast,
     warnings,
   }

@@ -62,10 +62,11 @@ describe('generateCss —— 动态样式生成', () => {
   it('Bug11 修复：vMerge 锚点（rowspan）有下边框 —— b-all + b-horizontal 各有专属规则', () => {
     const out = tableCss()
     // 锚点视觉下沿落在末行底边；tr:last-child td 不会命中锚点（锚点不在末行），
-    // 必须有 td[rowspan] 专属规则补上下边框
-    expect(out).toMatch(/\.op-table\.b-all\s+td\[rowspan\]\s*\{\s*border-bottom:[\s\S]*?;?\s*\}/)
-    expect(out).toMatch(/\.op-table\.b-horizontal\s+td\[rowspan\]\s*\{\s*border-bottom:[\s\S]*?;?\s*\}/)
-    // 回归保护：b-none 不能被新规则覆盖（仍是 border:0）
+    // 必须有 td[rowspan] 专属规则补下边框。
+    // ★ A3:边框改为 box-shadow: inset(A3 inset-shadow 方案),这里断言匹配 inset shadow。
+    expect(out).toMatch(/\.op-table\.b-all\s+td\[rowspan\][\s\S]*?box-shadow:[^}]*inset\s+0\s+-0\.2mm/)
+    expect(out).toMatch(/\.op-table\.b-horizontal\s+td\[rowspan\][\s\S]*?box-shadow:[^}]*inset\s+0\s+-0\.2mm/)
+    // 回归保护：b-none 不能被新规则覆盖（仍是 border:0 + box-shadow:none）
     expect(out).toContain('.op-table.b-none td { border: 0')
   })
 })
